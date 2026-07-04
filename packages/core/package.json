@@ -1,0 +1,13 @@
+{
+  "name": "@mcr/core",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": { ".": { "types": "./src/index.ts", "default": "./src/index.ts" } },
+  "scripts": { "typecheck": "tsc -p tsconfig.json" },
+  "dependencies": {
+    "pako": "^3.0.0",
+    "prismarine-nbt": "^2.8.0",
+    "buffer": "^6.0.3"
+  },
+  "devDependencies": { "@types/pako": "^2.0.4", "typescript": "^6.0.3" }
+}

@@ -1,0 +1,5 @@
+node_modules
+dist
+packages/server/data/assets
+packages/server/data/worlds
+*.log

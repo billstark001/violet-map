@@ -1,0 +1,12 @@
+{
+  "name": "mc-web-renderer",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --parallel -r run dev",
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}
