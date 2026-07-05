@@ -1,9 +1,9 @@
 /// <reference lib="webworker" />
 import {
   BlockInfo, ChunkColumn, ChunkNeighborhood, MeshBuffers, MesherResources, ModelBaker,
-  computeColumnLight, hexToRgb, meshLodChunk, meshSection, parseChunkColumn, parseNbt,
+  computeColumnLight, hexToRgb, meshLodChunk, meshSection, parseChunkColumn,
   resolveBiomeColors, type Rgb, type TintType,
-} from '@mcr/core';
+} from '@violet-map/core';
 import type { SectionMeshMsg, WorkerRequest, WorkerResponse } from './protocol';
 
 const DEFAULT_INFO: BlockInfo = { occludes: false, emit: 0, filter: 0, layer: 'cutout', tint: 'none' };
@@ -102,7 +102,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
     }
     case 'chunk': {
       try {
-        const col = parseChunkColumn(parseNbt(new Uint8Array(msg.nbt)));
+        const col = parseChunkColumn(msg.chunk);
         columns.set(msg.key, { col, hasSkyLight: msg.dimension.hasSkyLight, lit: false });
         const surfaceY = col.heightAt(8, 8);
         post({ type: 'chunkReady', key: msg.key, biome: col.getBiome(8, surfaceY, 8), surfaceY });

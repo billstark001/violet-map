@@ -42,7 +42,9 @@ void main() {
   if (tex.a < alphaTest) discard;
   float l = max(vLight.y, vLight.x * skyDarken);
   float b = ambient + (1.0 - ambient) * l;
-  vec3 c = tex.rgb * vColor * b;
+  vec3 lit = tex.rgb * vColor * b;
+  vec3 floorColor = max(tex.rgb * ambient, vec3(ambient * 0.28));
+  vec3 c = max(lit, floorColor);
   float f = smoothstep(fogNear, fogFar, vFogDepth);
   gl_FragColor = vec4(mix(c, fogColor, f), tex.a * opacity);
 }`;
@@ -50,7 +52,7 @@ void main() {
 export function createSharedUniforms(): SharedUniforms {
   return {
     skyDarken: { value: 1 },
-    ambient: { value: 0.03 },
+    ambient: { value: 0.18 },
     fogColor: { value: new THREE.Color(0xc0d8ff) },
     fogNear: { value: 100 },
     fogFar: { value: 200 },
@@ -66,8 +68,9 @@ export interface TerrainMaterials {
 }
 
 export function createMaterials(atlas: THREE.Texture, shared: SharedUniforms): TerrainMaterials {
-  const make = (opts: { alphaTest: number; transparent: boolean; opacity?: number; map?: THREE.Texture }) =>
-    new THREE.ShaderMaterial({
+  const make = (opts: { alphaTest: number; transparent?: boolean; opacity?: number; map?: THREE.Texture }) => {
+    const transparent = opts.transparent ?? false;
+    return new THREE.ShaderMaterial({
       vertexShader: VERT,
       fragmentShader: FRAG,
       uniforms: {
@@ -76,10 +79,11 @@ export function createMaterials(atlas: THREE.Texture, shared: SharedUniforms): T
         opacity: { value: opts.opacity ?? 1 },
         ...shared,
       },
-      transparent: opts.transparent,
-      depthWrite: !opts.transparent,
+      transparent,
+      depthWrite: !transparent,
       side: THREE.DoubleSide,
     });
+  };
 
   const white = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
   white.needsUpdate = true;

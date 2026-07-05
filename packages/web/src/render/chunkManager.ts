@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { DimensionDef, MeshBuffers, RenderLayer } from '@mcr/core';
+import type { DimensionDef, MeshBuffers, RenderLayer } from '@violet-map/core';
 import { fetchChunk } from '../api';
 import { chunkKey, WorkerInit, WorkerRequest, WorkerResponse } from '../worker/protocol';
 import type { TerrainMaterials } from './materials';
@@ -10,6 +10,8 @@ interface ChunkEntry {
   cx: number; cz: number;
   state: ChunkState;
   meshVersion: number;       // 已请求的版本
+  pendingFull: boolean;
+  pendingLod: boolean;
   displayed: 'none' | 'full' | 'lod';
   displayedVersion: number;
   dirty: boolean;
@@ -92,7 +94,19 @@ export class ChunkManager {
       const key = this.key(w.cx, w.cz);
       let e = this.chunks.get(key);
       if (!e) {
-        e = { cx: w.cx, cz: w.cz, state: 'fetching', meshVersion: -1, displayed: 'none', displayedVersion: -1, dirty: false, group: null, biome: 'minecraft:plains', surfaceY: 64 };
+        e = {
+          cx: w.cx, cz: w.cz,
+          state: 'fetching',
+          meshVersion: -1,
+          pendingFull: false,
+          pendingLod: false,
+          displayed: 'none',
+          displayedVersion: -1,
+          dirty: false,
+          group: null,
+          biome: 'minecraft:plains',
+          surfaceY: 64,
+        };
         this.chunks.set(key, e);
         this.startFetch(key, e);
       }
@@ -100,20 +114,29 @@ export class ChunkManager {
 
       const wantFull = w.d <= this.opts.viewDistance;
       if (wantFull) {
+        if (e.displayed === 'none' && !e.pendingLod) {
+          this.requestLod(key, e, 2);
+        }
         const ready = this.neighborsReady(w.cx, w.cz);
         const needs = e.displayed !== 'full' || e.dirty;
-        if (ready && needs && this.meshing < 4) {
+        if (ready && needs && !e.pendingFull && this.meshing < 4) {
           e.dirty = false;
+          e.pendingFull = true;
           e.meshVersion = ++this.versionCounter;
           this.meshing++;
           this.send({ type: 'mesh', key, version: e.meshVersion });
         }
-      } else if (e.displayed !== 'lod') {
-        e.meshVersion = ++this.versionCounter;
-        this.send({ type: 'lod', key, step: w.d > this.opts.viewDistance + this.opts.lodDistance / 2 ? 4 : 2, version: e.meshVersion });
+      } else if (e.displayed !== 'lod' && !e.pendingLod) {
+        this.requestLod(key, e, w.d > this.opts.viewDistance + this.opts.lodDistance / 2 ? 4 : 2);
       }
     }
     this.reportStats();
+  }
+
+  private requestLod(key: string, e: ChunkEntry, step: number) {
+    e.pendingLod = true;
+    e.meshVersion = ++this.versionCounter;
+    this.send({ type: 'lod', key, step, version: e.meshVersion });
   }
 
   private neighborsReady(cx: number, cz: number): boolean {
@@ -131,12 +154,13 @@ export class ChunkManager {
     if (this.chunks.get(key) !== e) return;
     this.fetching++;
     try {
-      const nbt = await fetchChunk(this.opts.world, this.opts.dimension, e.cx, e.cz);
+      const chunk = await fetchChunk(this.opts.world, this.opts.dimension, e.cx, e.cz);
       if (this.chunks.get(key) !== e) return;
-      if (!nbt) { e.state = 'absent'; return; }
-      this.send({ type: 'chunk', key, cx: e.cx, cz: e.cz, dimension: this.opts.dimensionDef, nbt }, [nbt]);
+      if (!chunk) { e.state = 'absent'; return; }
+      this.send({ type: 'chunk', key, cx: e.cx, cz: e.cz, dimension: this.opts.dimensionDef, chunk });
     } catch {
       e.state = 'error';
+      this.reportStats();
     } finally {
       this.fetching--;
     }
@@ -158,6 +182,7 @@ export class ChunkManager {
             if (n?.displayed === 'full') n.dirty = true;
           }
         }
+        this.reportStats();
         break;
       }
       case 'chunkError': {
@@ -169,6 +194,7 @@ export class ChunkManager {
       case 'meshResult': {
         this.meshing = Math.max(0, this.meshing - 1);
         const e = this.chunks.get(msg.key);
+        if (e) e.pendingFull = false;
         if (!e || msg.version < e.displayedVersion) return;
         this.removeMesh(e);
         const group = new THREE.Group();
@@ -188,6 +214,7 @@ export class ChunkManager {
       }
       case 'lodResult': {
         const e = this.chunks.get(msg.key);
+        if (e) e.pendingLod = false;
         if (!e || msg.version < e.displayedVersion) return;
         this.removeMesh(e);
         if (msg.mesh) {
@@ -200,6 +227,7 @@ export class ChunkManager {
         }
         e.displayed = 'lod';
         e.displayedVersion = msg.version;
+        this.reportStats();
         break;
       }
     }
@@ -226,9 +254,12 @@ export class ChunkManager {
   }
 
   private reportStats() {
-    let rendered = 0;
-    for (const e of this.chunks.values()) if (e.displayed !== 'none') rendered++;
-    this.onStats?.({ loaded: this.chunks.size, rendered });
+    let loaded = 0, rendered = 0;
+    for (const e of this.chunks.values()) {
+      if (e.state === 'stored') loaded++;
+      if (e.group) rendered++;
+    }
+    this.onStats?.({ loaded, rendered });
   }
 
   dispose() {

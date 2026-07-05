@@ -1,12 +1,14 @@
 import fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { getRegionChunk, parseNbt, decompress } from '@mcr/core';
+import { getRegionChunk } from '@violet-map/core/region';
+import { parseNbt, decompress } from '@violet-map/core/nbt';
 import { config } from './config.js';
 
-const VANILLA_DIMS: Record<string, string> = {
-  'minecraft:overworld': 'region',
-  'minecraft:the_nether': 'DIM-1/region',
-  'minecraft:the_end': 'DIM1/region',
+const VANILLA_DIMS: Record<string, string[]> = {
+  'minecraft:overworld': ['region', 'dimensions/minecraft/overworld/region'],
+  'minecraft:the_nether': ['DIM-1/region', 'dimensions/minecraft/the_nether/region'],
+  'minecraft:the_end': ['DIM1/region', 'dimensions/minecraft/the_end/region'],
 };
 const WORLD_RE = /^[A-Za-z0-9_.-]+$/;
 
@@ -17,8 +19,13 @@ const dimDirName = (dim: string) => encodeURIComponent(dim);
 
 function regionDir(world: string, dim: string): string {
   assertWorldName(world);
-  const sub = VANILLA_DIMS[dim] ?? path.join('dimensions', ...dim.split(':'), 'region');
-  return path.join(config.worldsDir, world, sub);
+  const base = path.join(config.worldsDir, world);
+  const candidates = VANILLA_DIMS[dim] ?? [path.join('dimensions', ...dim.split(':'), 'region')];
+  for (const sub of candidates) {
+    const dir = path.join(base, sub);
+    if (existsSync(dir)) return dir;
+  }
+  return path.join(base, candidates[0]);
 }
 function chunkOverrideDir(world: string, dim: string): string {
   assertWorldName(world);

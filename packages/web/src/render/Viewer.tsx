@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import type { BiomeMap, DimensionMap } from '@mcr/core';
-import { hexToRgb } from '@mcr/core';
+import type { BiomeMap, DimensionMap } from '@violet-map/core';
+import { hexToRgb } from '@violet-map/core';
 import { fetchBiomes, fetchBlockInfo, fetchBundle, fetchDimensions } from '../api';
 import { buildAtlas, collectTextureIds, loadColormap } from '../atlas';
 import { ChunkManager } from './chunkManager';
@@ -63,6 +63,13 @@ export function Viewer(props: ViewerProps) {
         const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 2000);
         const params = new URLSearchParams(location.search);
         camera.position.set(Number(params.get('x') ?? 8), Number(params.get('y') ?? 120), Number(params.get('z') ?? 8));
+        if (params.has('lookAtX') || params.has('lookAtY') || params.has('lookAtZ')) {
+          camera.lookAt(
+            Number(params.get('lookAtX') ?? camera.position.x),
+            Number(params.get('lookAtY') ?? camera.position.y),
+            Number(params.get('lookAtZ') ?? camera.position.z - 1),
+          );
+        }
 
         const texture = new THREE.CanvasTexture(atlas.canvas);
         texture.magFilter = THREE.NearestFilter;
@@ -91,7 +98,6 @@ export function Viewer(props: ViewerProps) {
 
         const skyColor = new THREE.Color();
         const clock = new THREE.Clock();
-        let statTimer = 0;
         renderer.setAnimationLoop(() => {
           const dt = Math.min(clock.getDelta(), 0.1);
           const p = propsRef.current;
@@ -110,7 +116,7 @@ export function Viewer(props: ViewerProps) {
             ? Math.min(Math.max(Math.cos(t * Math.PI * 2) * 2 + 0.5, 0), 1)
             : 0;
           e.shared.skyDarken.value = dimDef?.hasSkyLight ? 0.05 + 0.95 * dayFactor : 0;
-          e.shared.ambient.value = dimDef?.ambientLight ?? 0.03;
+          e.shared.ambient.value = dimDef?.ambientLight ?? 0.18;
           const viewBlocks = p.viewDistance * 16;
           const dense = dimDef?.sky !== 'normal';
           e.shared.fogNear.value = dense ? viewBlocks * 0.1 : viewBlocks * 0.6;
@@ -126,14 +132,6 @@ export function Viewer(props: ViewerProps) {
               .lerp(scene.background as THREE.Color, dense ? 0 : 0.5);
           }
 
-          statTimer += dt;
-          if (statTimer > 0.2) {
-            statTimer = 0;
-            p.onStats?.({
-              loaded: 0, rendered: 0,
-              pos: [camera.position.x, camera.position.y, camera.position.z],
-            });
-          }
           renderer.render(scene, camera);
         });
         setReady(true);
@@ -158,7 +156,7 @@ export function Viewer(props: ViewerProps) {
   useEffect(() => {
     const e = engineRef.current;
     if (!ready || !e || !props.world) return;
-    const dimDef = e.dimensions[props.dimension] ?? { hasSkyLight: true, ambientLight: 0.03, sky: 'normal' as const, defaultBiome: 'minecraft:plains' };
+    const dimDef = e.dimensions[props.dimension] ?? { hasSkyLight: true, ambientLight: 0.18, sky: 'normal' as const, defaultBiome: 'minecraft:plains' };
     const manager = new ChunkManager(e.scene, e.materials, e.initPayload, {
       world: props.world,
       dimension: props.dimension,

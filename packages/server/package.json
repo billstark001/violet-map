@@ -1,5 +1,5 @@
 {
-  "name": "@mcr/server",
+  "name": "@violet-map/server",
   "version": "0.1.0",
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^2.0.8",
-    "@mcr/core": "workspace:*",
+    "@violet-map/core": "workspace:*",
     "hono": "^4.12.27",
     "minecraft-data": "^3.111.0"
   },

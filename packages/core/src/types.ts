@@ -67,7 +67,7 @@ export interface AssetBundle {
 export interface BlockModelJson {
   parent?: string;
   ambientocclusion?: boolean;
-  textures?: Record<string, string>;
+  textures?: Record<string, unknown>;
   elements?: ModelElementJson[];
 }
 export interface ModelElementJson {

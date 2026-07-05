@@ -1,5 +1,5 @@
 {
-  "minecraft:overworld": { "hasSkyLight": true, "ambientLight": 0.03, "sky": "normal", "defaultBiome": "minecraft:plains" },
+  "minecraft:overworld": { "hasSkyLight": true, "ambientLight": 0.18, "sky": "normal", "defaultBiome": "minecraft:plains" },
   "minecraft:the_nether": { "hasSkyLight": false, "ambientLight": 0.25, "sky": "nether", "defaultBiome": "minecraft:nether_wastes" },
   "minecraft:the_end": { "hasSkyLight": false, "ambientLight": 0.18, "sky": "end", "defaultBiome": "minecraft:the_end" }
 }

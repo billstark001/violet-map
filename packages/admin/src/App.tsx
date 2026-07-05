@@ -146,9 +146,9 @@ function BiomesPanel() {
 
 export default function App() {
   return (
-    <Theme appearance="dark" accentColor="grass">
+    <Theme appearance="dark" accentColor="violet">
       <Container size="3" py="5">
-        <Heading mb="4">MC Renderer 管理后台</Heading>
+        <Heading mb="4">Violet Map 管理后台</Heading>
         <Tabs.Root defaultValue="worlds">
           <Tabs.List>
             <Tabs.Trigger value="worlds">世界</Tabs.Trigger>

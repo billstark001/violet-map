@@ -1,5 +1,5 @@
 {
-  "name": "mc-web-renderer",
+  "name": "violet-map",
   "private": true,
   "scripts": {
     "dev": "pnpm --parallel -r run dev",

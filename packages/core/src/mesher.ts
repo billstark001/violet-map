@@ -161,17 +161,6 @@ function emitFluid(
   const sky = view.getSkyLight(wx, wy, wz) / 15;
   const block = view.getBlockLight(wx, wy, wz) / 15;
 
-  const quad = (verts: [number, number, number][], dir: Direction) => {
-    const shade = SHADE[dir];
-    for (const v of verts) {
-      builder.vertex(
-        lx + v[0], ly + v[1], lz + v[2],
-        rect.u0 + (v[0] === lx ? 0 : 1) * 0, 0, // uv 单独算，见下
-        tint[0] * shade, tint[1] * shade, tint[2] * shade, sky, block,
-      );
-    }
-    builder.quadIndices();
-  };
   // 直接内联各面（uv 简化为整面）
   const face = (dir: Direction, verts: [number, number, number][]) => {
     const shade = SHADE[dir];
@@ -197,7 +186,6 @@ function emitFluid(
   if (shouldDraw('south')) face('south', [[0, h, 1], [1, h, 1], [1, 0, 1], [0, 0, 1]]);
   if (shouldDraw('west')) face('west', [[0, h, 0], [0, h, 1], [0, 0, 1], [0, 0, 0]]);
   if (shouldDraw('east')) face('east', [[1, h, 1], [1, h, 0], [1, 0, 0], [1, 0, 1]]);
-  void quad;
 }
 
 /** 网格化一个 16³ section。坐标相对 section 原点。 */

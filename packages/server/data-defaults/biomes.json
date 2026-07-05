@@ -51,6 +51,7 @@
   "minecraft:dripstone_caves": { "temperature": 0.8, "downfall": 0.4, "effects": { "sky_color": 7907327, "fog_color": 12638463, "water_color": 4159204 } },
   "minecraft:lush_caves": { "temperature": 0.5, "downfall": 0.5, "effects": { "sky_color": 8103167, "fog_color": 12638463, "water_color": 4159204 } },
   "minecraft:deep_dark": { "temperature": 0.8, "downfall": 0.4, "effects": { "sky_color": 7907327, "fog_color": 12638463, "water_color": 4159204 } },
+  "minecraft:pale_garden": { "temperature": 0.7, "downfall": 0.8, "effects": { "sky_color": 7972607, "fog_color": 12638463, "water_color": 4159204, "grass_color_modifier": "dark_forest" } },
   "minecraft:nether_wastes": { "temperature": 2.0, "downfall": 0.0, "effects": { "sky_color": 7254527, "fog_color": 3344392, "water_color": 4159204 } },
   "minecraft:crimson_forest": { "temperature": 2.0, "downfall": 0.0, "effects": { "sky_color": 7254527, "fog_color": 3343107, "water_color": 4159204 } },
   "minecraft:warped_forest": { "temperature": 2.0, "downfall": 0.0, "effects": { "sky_color": 7254527, "fog_color": 1705242, "water_color": 4159204 } },

@@ -1,6 +1,6 @@
 import type {
   AssetBundle, AtlasIndex, BiomeMap, BlockInfoMap, DimensionDef, MeshBuffers, RenderLayer,
-} from '@mcr/core';
+} from '@violet-map/core';
 
 export interface WorkerInit {
   type: 'init';
@@ -14,7 +14,7 @@ export interface WorkerInit {
 }
 export type WorkerRequest =
   | WorkerInit
-  | { type: 'chunk'; key: string; cx: number; cz: number; dimension: DimensionDef; nbt: ArrayBuffer }
+  | { type: 'chunk'; key: string; cx: number; cz: number; dimension: DimensionDef; chunk: unknown }
   | { type: 'mesh'; key: string; version: number }
   | { type: 'lod'; key: string; step: number; version: number }
   | { type: 'drop'; key: string };

@@ -1,0 +1,26 @@
+{
+  "name": "@violet-map/assets",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "vm-assets": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "list-versions": "tsx src/cli.ts list-versions",
+    "extract": "tsx src/cli.ts extract",
+    "extract-all": "tsx src/cli.ts extract-all",
+    "generate-biomes": "tsx src/cli.ts generate-biomes",
+    "generate-dimensions": "tsx src/cli.ts generate-dimensions",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "minecraft-data": "^3.111.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "tsx": "^4.23.0",
+    "typescript": "^6.0.3"
+  }
+}

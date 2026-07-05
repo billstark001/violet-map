@@ -1,5 +1,5 @@
 {
-  "name": "@mcr/admin",
+  "name": "@violet-map/admin",
   "version": "0.1.0",
   "type": "module",
   "scripts": {

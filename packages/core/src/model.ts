@@ -95,6 +95,15 @@ function matchCondition(cond: any, props: Record<string, string>): boolean {
   return Object.entries(cond).every(([k, v]) => String(v).split('|').includes(props[k]));
 }
 
+function textureRef(value: unknown): string | null {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') {
+    const sprite = (value as { sprite?: unknown }).sprite;
+    if (typeof sprite === 'string') return sprite;
+  }
+  return null;
+}
+
 const MISSING_CUBE_MODEL: BlockModelJson = {
   elements: [{
     from: [0, 0, 0], to: [16, 16, 16],
@@ -173,7 +182,12 @@ export class ModelBaker {
     for (let depth = 0; cur && depth < 32; depth++) {
       const m: BlockModelJson | undefined = this.bundle.models[cur] ?? this.bundle.models[normalizeId(cur)];
       if (!m) break;
-      if (m.textures) for (const [k, v] of Object.entries(m.textures)) if (!(k in textures)) textures[k] = v;
+      if (m.textures) {
+        for (const [k, v] of Object.entries(m.textures)) {
+          const ref = textureRef(v);
+          if (!(k in textures) && ref) textures[k] = ref;
+        }
+      }
       if (!elements && m.elements) elements = m.elements;
       if (ao === undefined && m.ambientocclusion !== undefined) ao = m.ambientocclusion;
       cur = m.parent ? normalizeId(m.parent) : undefined;

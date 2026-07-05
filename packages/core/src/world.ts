@@ -1,4 +1,4 @@
-import { toLongs, toBytes } from './nbt.js';
+import { toLongs, toBytes } from './binary.js';
 import { BlockStateRef, normalizeId } from './types.js';
 
 export const AIR: BlockStateRef = Object.freeze({ name: 'minecraft:air', properties: {} });

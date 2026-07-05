@@ -6,6 +6,7 @@ import { config } from './config.js';
 import { buildAssetBundle, textureFilePath } from './assets.js';
 import { buildBlockInfo, readBiomes, readDimensions, writeDataFile } from './gameData.js';
 import { getChunkNbt, listRegions, listWorlds, saveChunkNbt, saveRegionFile } from './worldStore.js';
+import { parseNbt } from '@violet-map/core/nbt';
 
 const app = new Hono();
 app.use('*', cors());
@@ -18,11 +19,8 @@ app.get('/api/worlds/:world/:dim/chunk/:cx/:cz', async (c) => {
   const cx = Number(c.req.param('cx')), cz = Number(c.req.param('cz'));
   if (!Number.isInteger(cx) || !Number.isInteger(cz)) return c.text('bad coords', 400);
   const data = await getChunkNbt(c.req.param('world'), c.req.param('dim'), cx, cz);
-  if (!data) return c.text('chunk not found', 404);
-  return c.body(data.slice().buffer as ArrayBuffer, 200, {
-    'content-type': 'application/octet-stream',
-    'cache-control': 'no-cache',
-  });
+  if (!data) return c.body(null, 204, { 'cache-control': 'no-cache' });
+  return c.json(parseNbt(data), 200, { 'cache-control': 'no-cache' });
 });
 
 app.get('/api/assets/bundle', async (c) => c.json(await buildAssetBundle()));
@@ -63,6 +61,6 @@ app.post('/api/admin/upload', async (c) => {
   }
 });
 
-console.log(`[mcr] server on :${config.port}\n  worlds: ${config.worldsDir}\n  assets: ${config.assetsDirs.join(', ')}`);
+console.log(`[violet-map] server on :${config.port}\n  worlds: ${config.worldsDir}\n  assets: ${config.assetsDirs.join(', ')}`);
 void buildAssetBundle();
 serve({ fetch: app.fetch, port: config.port });

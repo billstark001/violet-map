@@ -1,4 +1,4 @@
-import pako from 'pako';
+import * as pako from 'pako';
 
 /** 从 .mca 文件字节中提取一个区块的原始 NBT（已解压）。找不到返回 null。 */
 export function getRegionChunk(region: Uint8Array, localX: number, localZ: number): Uint8Array | null {

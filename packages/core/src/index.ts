@@ -1,5 +1,4 @@
 export * from './types.js';
-export * from './nbt.js';
 export * from './region.js';
 export * from './world.js';
 export * from './light.js';

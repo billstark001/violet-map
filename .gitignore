@@ -3,3 +3,10 @@ dist
 packages/server/data/assets
 packages/server/data/worlds
 *.log
+
+TEMP
+TEMP_*
+
+.DS_Store
+
+.vscode

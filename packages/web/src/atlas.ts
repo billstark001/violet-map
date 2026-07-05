@@ -1,4 +1,4 @@
-import type { AssetBundle, AtlasIndex, BlockInfoMap, BlockModelJson } from '@mcr/core';
+import type { AssetBundle, AtlasIndex, BlockInfoMap, BlockModelJson } from '@violet-map/core';
 import { textureUrl } from './api';
 
 export interface BuiltAtlas {
@@ -9,11 +9,45 @@ export interface BuiltAtlas {
 
 export function collectTextureIds(bundle: AssetBundle, blockInfo: BlockInfoMap): string[] {
   const ids = new Set<string>();
-  const add = (v: string) => {
-    if (!v.startsWith('#')) ids.add(v.includes(':') ? v : `minecraft:${v}`);
+  const models = new Set<string>();
+  const seenModels = new Set<string>();
+  const normalize = (id: string) => id.includes(':') ? id : `minecraft:${id}`;
+  const add = (v: unknown) => {
+    if (v && typeof v === 'object') v = (v as { sprite?: unknown }).sprite;
+    if (typeof v !== 'string') return;
+    if (!v.startsWith('#')) ids.add(normalize(v));
   };
-  for (const model of Object.values(bundle.models) as BlockModelJson[]) {
+  const addModel = (v: unknown) => {
+    if (v && typeof v === 'object') v = (v as { model?: unknown }).model;
+    if (typeof v === 'string') models.add(normalize(v));
+  };
+  const collectBlockstateModels = (bs: any) => {
+    if (bs?.variants) {
+      for (const value of Object.values<any>(bs.variants)) {
+        if (Array.isArray(value)) value.forEach(addModel);
+        else addModel(value);
+      }
+    }
+    if (bs?.multipart) {
+      for (const part of bs.multipart as any[]) {
+        const apply = part?.apply;
+        if (Array.isArray(apply)) apply.forEach(addModel);
+        else addModel(apply);
+      }
+    }
+  };
+  for (const bs of Object.values(bundle.blockstates)) collectBlockstateModels(bs);
+
+  const visitModel = (id: string) => {
+    if (seenModels.has(id)) return;
+    seenModels.add(id);
+    const model = bundle.models[id] as BlockModelJson | undefined;
+    if (!model) return;
     if (model.textures) for (const v of Object.values(model.textures)) add(v);
+    if (model.parent) visitModel(normalize(model.parent));
+  };
+  for (const id of models) {
+    visitModel(id);
   }
   for (const info of Object.values(blockInfo)) if (info.fluid) add(info.fluid.texture);
   return [...ids];

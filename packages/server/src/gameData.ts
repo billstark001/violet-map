@@ -2,17 +2,25 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import minecraftData from 'minecraft-data';
-import { BiomeMap, BlockInfo, BlockInfoMap, DimensionMap } from '@mcr/core';
+import { BiomeMap, BlockInfo, BlockInfoMap, DimensionMap } from '@violet-map/core';
 import { config } from './config.js';
 
 const defaultsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../data-defaults');
+const FALLBACK_MC_DATA_VERSION = '1.20.4';
 
 async function readDataFile<T>(name: string): Promise<T> {
-  try {
-    return JSON.parse(await fs.readFile(path.join(config.dataDir, name), 'utf8')) as T;
-  } catch {
-    return JSON.parse(await fs.readFile(path.join(defaultsDir, name), 'utf8')) as T;
+  const candidates = [
+    path.join(config.dataDir, 'versions', config.mcVersion, name),
+    path.join(config.dataDir, name),
+    path.join(defaultsDir, 'versions', config.mcVersion, name),
+    path.join(defaultsDir, name),
+  ];
+  for (const file of candidates) {
+    try {
+      return JSON.parse(await fs.readFile(file, 'utf8')) as T;
+    } catch { /* try next */ }
   }
+  throw new Error(`missing data file: ${name}`);
 }
 export async function writeDataFile(name: string, value: unknown): Promise<void> {
   await fs.mkdir(config.dataDir, { recursive: true });
@@ -24,10 +32,20 @@ export const readDimensions = () => readDataFile<DimensionMap>('dimensions.json'
 
 let blockInfoCache: BlockInfoMap | null = null;
 
+function loadMinecraftData() {
+  try {
+    return minecraftData(config.mcDataVersion);
+  } catch (e) {
+    if (config.mcDataVersion === FALLBACK_MC_DATA_VERSION) throw e;
+    console.warn(`[violet-map] minecraft-data does not support ${config.mcDataVersion}; falling back to ${FALLBACK_MC_DATA_VERSION}`);
+    return minecraftData(FALLBACK_MC_DATA_VERSION);
+  }
+}
+
 /** 用 minecraft-data 生成方块物理/渲染属性，再套用可编辑的覆盖文件（支持 * 通配）。 */
 export async function buildBlockInfo(): Promise<BlockInfoMap> {
   if (blockInfoCache) return blockInfoCache;
-  const d = minecraftData(config.mcVersion);
+  const d = loadMinecraftData();
   const map: BlockInfoMap = {};
   for (const b of d.blocksArray) {
     const transparent = b.transparent === true;

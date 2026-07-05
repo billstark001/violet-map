@@ -1,8 +1,12 @@
 {
-  "name": "@mcr/core",
+  "name": "@violet-map/core",
   "version": "0.1.0",
   "type": "module",
-  "exports": { ".": { "types": "./src/index.ts", "default": "./src/index.ts" } },
+  "exports": {
+    ".": { "types": "./src/index.ts", "default": "./src/index.ts" },
+    "./nbt": { "types": "./src/nbt.ts", "default": "./src/nbt.ts" },
+    "./region": { "types": "./src/region.ts", "default": "./src/region.ts" }
+  },
   "scripts": { "typecheck": "tsc -p tsconfig.json" },
   "dependencies": {
     "pako": "^3.0.0",
