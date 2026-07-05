@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
+import { useTranslation } from 'react-i18next';
 import type { BiomeMap, DimensionMap } from '@violet-map/core';
 import { hexToRgb } from '@violet-map/core';
-import { fetchBiomes, fetchBlockInfo, fetchBundle, fetchDimensions } from '../api';
+import { fetchBiomes, fetchBlockInfo, fetchBundle, fetchDimensions, textureUrl } from '../api';
 import { buildAtlas, collectTextureIds, loadColormap } from '../atlas';
 import { ChunkManager } from './chunkManager';
 import { FlyControls, type FlyView } from './controls';
@@ -10,6 +11,8 @@ import { createMaterials, createSharedUniforms, SharedUniforms, TerrainMaterials
 import type { WorkerInit } from '../worker/protocol';
 
 const VIEW_STORAGE_KEY = 'violet-map:view';
+const SKY_PLANE_FORWARD = new THREE.Vector3(0, 0, 1);
+const celestialFacing = new THREE.Vector3();
 
 export interface CameraPositionRequest {
   x: number;
@@ -37,6 +40,7 @@ interface Engine {
   materials: TerrainMaterials;
   shared: SharedUniforms;
   sky: SkyObjects;
+  renderKey: string;
   initPayload: Omit<WorkerInit, 'type'>;
   biomes: BiomeMap;
   dimensions: DimensionMap;
@@ -44,8 +48,10 @@ interface Engine {
 
 interface SkyObjects {
   group: THREE.Group;
-  sun: THREE.Sprite;
-  moon: THREE.Sprite;
+  dome: THREE.Mesh;
+  domeMaterial: THREE.ShaderMaterial;
+  sun: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+  moon: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   stars: THREE.Points;
   dispose(): void;
 }
@@ -111,31 +117,188 @@ function persistView(view: FlyView, updateUrl: boolean) {
   history.replaceState(null, '', `${location.pathname}?${params.toString()}${location.hash}`);
 }
 
-function makeDiscTexture(inner: string, outer: string): THREE.CanvasTexture {
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 96;
-  const ctx = canvas.getContext('2d')!;
-  const g = ctx.createRadialGradient(48, 48, 10, 48, 48, 48);
-  g.addColorStop(0, inner);
-  g.addColorStop(0.42, inner);
-  g.addColorStop(1, outer);
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 96, 96);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.minFilter = THREE.LinearFilter;
-  texture.magFilter = THREE.LinearFilter;
-  texture.needsUpdate = true;
+function hashString(input: string, seed = 2166136261): number {
+  let h = seed;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function hashBytes(bytes: Uint8Array | null, seed = 2166136261): number {
+  let h = seed;
+  if (!bytes) return h >>> 0;
+  for (const byte of bytes) {
+    h ^= byte;
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function stableStringify(value: unknown): string {
+  if (!value || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(',')}}`;
+}
+
+function buildRenderKey(atlasKey: string, bundle: unknown, blockInfo: unknown, grassMap: Uint8Array | null, foliageMap: Uint8Array | null): string {
+  let h = hashString(atlasKey);
+  h = hashString(stableStringify(bundle), h);
+  h = hashString(stableStringify(blockInfo), h);
+  h = hashBytes(grassMap, h);
+  h = hashBytes(foliageMap, h);
+  return `${atlasKey}:${h.toString(36)}`;
+}
+
+function configurePixelTexture(texture: THREE.Texture): THREE.Texture {
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.colorSpace = THREE.NoColorSpace;
   return texture;
+}
+
+function makeCelestialFallback(kind: 'sun' | 'moon'): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = 32;
+  canvas.height = 32;
+  const ctx = canvas.getContext('2d')!;
+  ctx.clearRect(0, 0, 32, 32);
+  ctx.imageSmoothingEnabled = false;
+  if (kind === 'sun') {
+    ctx.fillStyle = '#fff7b2';
+    ctx.fillRect(4, 4, 24, 24);
+    ctx.fillStyle = '#ffd96a';
+    ctx.fillRect(7, 7, 18, 18);
+  } else {
+    ctx.fillStyle = '#d8dce8';
+    ctx.fillRect(6, 6, 20, 20);
+    ctx.fillStyle = '#aeb5c5';
+    ctx.fillRect(9, 9, 4, 4);
+    ctx.fillRect(18, 14, 4, 4);
+    ctx.fillRect(13, 21, 3, 3);
+  }
+  return canvas;
+}
+
+function loadCanvasBackedTexture(
+  fallback: HTMLCanvasElement,
+  candidates: { id: string; cropMoonSheet?: boolean }[],
+): THREE.Texture {
+  const texture = configurePixelTexture(new THREE.CanvasTexture(fallback));
+  const tryLoad = (index: number) => {
+    const candidate = candidates[index];
+    if (!candidate) return;
+    const img = new Image();
+    img.onload = () => {
+      if (candidate.cropMoonSheet && img.width > img.height) {
+        const frameW = Math.floor(img.width / 4);
+        const frameH = Math.floor(img.height / 2);
+        const canvas = document.createElement('canvas');
+        canvas.width = frameW;
+        canvas.height = frameH;
+        const ctx = canvas.getContext('2d')!;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(img, 0, 0, frameW, frameH, 0, 0, frameW, frameH);
+        texture.image = canvas;
+      } else {
+        texture.image = img;
+      }
+      texture.needsUpdate = true;
+    };
+    img.onerror = () => tryLoad(index + 1);
+    img.src = textureUrl(candidate.id);
+  };
+  tryLoad(0);
+  return texture;
+}
+
+function createCelestialMaterial(texture: THREE.Texture): THREE.MeshBasicMaterial {
+  return new THREE.MeshBasicMaterial({
+    map: texture,
+    color: 0xffffff,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    depthTest: true,
+    side: THREE.DoubleSide,
+    fog: false,
+    toneMapped: false,
+  });
+}
+
+function createSkyDomeMaterial(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      topColor: { value: new THREE.Color(0x78a7ff) },
+      horizonColor: { value: new THREE.Color(0xb9d4ff) },
+      sunDir: { value: new THREE.Vector3(0, 1, 0) },
+      sunsetAmount: { value: 0 },
+      nightAmount: { value: 0 },
+    },
+    vertexShader: `
+      varying vec3 vDir;
+      void main() {
+        vDir = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 topColor;
+      uniform vec3 horizonColor;
+      uniform vec3 sunDir;
+      uniform float sunsetAmount;
+      uniform float nightAmount;
+      varying vec3 vDir;
+      void main() {
+        vec3 dir = normalize(vDir);
+        float vertical = smoothstep(-0.08, 0.58, dir.y);
+        vec3 color = mix(horizonColor, topColor, vertical);
+        float sunDot = max(dot(normalize(sunDir), dir), 0.0);
+        float diskGlow = pow(sunDot, 18.0) * sunsetAmount;
+        float horizonGlow = (1.0 - vertical) * smoothstep(-0.12, 0.24, dir.y) * sunsetAmount;
+        vec3 warm = vec3(1.0, 0.48, 0.16);
+        color = mix(color, warm, clamp(diskGlow * 0.75 + horizonGlow * 0.38, 0.0, 0.78));
+        color = mix(color, vec3(0.012, 0.016, 0.035), nightAmount * 0.86);
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `,
+    side: THREE.BackSide,
+    depthWrite: false,
+    depthTest: false,
+    fog: false,
+  });
 }
 
 function createSkyObjects(scene: THREE.Scene): SkyObjects {
   const group = new THREE.Group();
-  const sunTexture = makeDiscTexture('rgba(255,245,190,1)', 'rgba(255,210,120,0)');
-  const moonTexture = makeDiscTexture('rgba(210,225,255,0.95)', 'rgba(120,150,220,0)');
-  const sun = new THREE.Sprite(new THREE.SpriteMaterial({ map: sunTexture, transparent: true, depthWrite: false }));
-  const moon = new THREE.Sprite(new THREE.SpriteMaterial({ map: moonTexture, transparent: true, depthWrite: false }));
-  sun.scale.set(90, 90, 1);
-  moon.scale.set(70, 70, 1);
+  const domeMaterial = createSkyDomeMaterial();
+  const domeGeometry = new THREE.SphereGeometry(1200, 32, 16);
+  const dome = new THREE.Mesh(domeGeometry, domeMaterial);
+  dome.frustumCulled = false;
+  dome.renderOrder = -1000;
+  group.add(dome);
+
+  const sunTexture = loadCanvasBackedTexture(makeCelestialFallback('sun'), [
+    { id: 'minecraft:environment/celestial/sun' },
+    { id: 'minecraft:environment/sun' },
+  ]);
+  const moonTexture = loadCanvasBackedTexture(makeCelestialFallback('moon'), [
+    { id: 'minecraft:environment/celestial/moon/full_moon' },
+    { id: 'minecraft:environment/moon_phases', cropMoonSheet: true },
+  ]);
+  const celestialGeometry = new THREE.PlaneGeometry(1, 1);
+  const sun = new THREE.Mesh(celestialGeometry, createCelestialMaterial(sunTexture));
+  const moon = new THREE.Mesh(celestialGeometry, createCelestialMaterial(moonTexture));
+  sun.frustumCulled = false;
+  moon.frustumCulled = false;
+  sun.renderOrder = -900;
+  moon.renderOrder = -900;
+  sun.scale.set(180, 180, 1);
+  moon.scale.set(120, 120, 1);
   group.add(sun, moon);
 
   const starsCount = 900;
@@ -147,11 +310,11 @@ function createSkyObjects(scene: THREE.Scene): SkyObjects {
     return ((seed ^= seed >>> 16) >>> 0) / 0xffffffff;
   };
   for (let i = 0; i < starsCount; i++) {
-    const z = rand() * 2 - 1;
+    const y = 0.16 + rand() * 0.84;
     const a = rand() * Math.PI * 2;
-    const r = Math.sqrt(Math.max(0, 1 - z * z));
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
     positions[i * 3] = Math.cos(a) * r * 900;
-    positions[i * 3 + 1] = Math.max(0.08, z) * 900;
+    positions[i * 3 + 1] = y * 900;
     positions[i * 3 + 2] = Math.sin(a) * r * 900;
   }
   const starGeometry = new THREE.BufferGeometry();
@@ -169,11 +332,16 @@ function createSkyObjects(scene: THREE.Scene): SkyObjects {
 
   return {
     group,
+    dome,
+    domeMaterial,
     sun,
     moon,
     stars,
     dispose() {
       scene.remove(group);
+      domeGeometry.dispose();
+      domeMaterial.dispose();
+      celestialGeometry.dispose();
       sunTexture.dispose();
       moonTexture.dispose();
       sun.material.dispose();
@@ -184,22 +352,39 @@ function createSkyObjects(scene: THREE.Scene): SkyObjects {
   };
 }
 
-function updateSkyObjects(sky: SkyObjects, camera: THREE.Camera, timeOfDay: number, dayFactor: number, visible: boolean) {
+function updateSkyObjects(
+  sky: SkyObjects,
+  camera: THREE.Camera,
+  timeOfDay: number,
+  dayFactor: number,
+  visible: boolean,
+  topColor: THREE.Color,
+  horizonColor: THREE.Color,
+) {
   sky.group.position.copy(camera.position);
   sky.group.visible = visible;
   if (!visible) return;
   const angle = timeOfDay * Math.PI * 2;
   const sunDir = new THREE.Vector3(Math.sin(angle), Math.cos(angle), -0.25).normalize();
   const moonDir = sunDir.clone().multiplyScalar(-1);
-  sky.sun.position.copy(sunDir.multiplyScalar(850));
+  sky.sun.position.copy(sunDir).multiplyScalar(850);
   sky.moon.position.copy(moonDir.multiplyScalar(850));
+  sky.sun.quaternion.setFromUnitVectors(SKY_PLANE_FORWARD, celestialFacing.copy(sunDir).negate());
+  sky.moon.quaternion.setFromUnitVectors(SKY_PLANE_FORWARD, celestialFacing.copy(moonDir).negate().normalize());
   const night = Math.min(1, Math.max(0, (0.55 - dayFactor) / 0.55));
-  (sky.sun.material as THREE.SpriteMaterial).opacity = Math.min(1, Math.max(0, dayFactor * 1.2));
-  (sky.moon.material as THREE.SpriteMaterial).opacity = night * 0.8;
+  const sunset = Math.max(0, 1 - Math.abs(sunDir.y) / 0.34) * Math.min(1, dayFactor * 1.6);
+  sky.domeMaterial.uniforms.topColor.value.copy(topColor);
+  sky.domeMaterial.uniforms.horizonColor.value.copy(horizonColor);
+  sky.domeMaterial.uniforms.sunDir.value.copy(sunDir);
+  sky.domeMaterial.uniforms.sunsetAmount.value = sunset;
+  sky.domeMaterial.uniforms.nightAmount.value = night;
+  sky.sun.material.opacity = Math.min(1, Math.max(0, dayFactor * 1.2));
+  sky.moon.material.opacity = night * 0.8;
   (sky.stars.material as THREE.PointsMaterial).opacity = night * 0.85;
 }
 
 export function Viewer(props: ViewerProps) {
+  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<Engine | null>(null);
   const managerRef = useRef<ChunkManager | null>(null);
@@ -223,6 +408,7 @@ export function Viewer(props: ViewerProps) {
         ]);
         const atlas = await buildAtlas(collectTextureIds(bundle, blockInfo));
         if (disposed) return;
+        const renderKey = buildRenderKey(atlas.cacheKey, bundle, blockInfo, grassMap, foliageMap);
 
         const renderer = new THREE.WebGLRenderer({ antialias: false });
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -265,6 +451,7 @@ export function Viewer(props: ViewerProps) {
 
         engineRef.current = {
           renderer, scene, camera, controls, materials, shared, sky: skyObjects, biomes, dimensions,
+          renderKey,
           initPayload: {
             bundle, blockInfo, biomes,
             atlasIndex: atlas.index, avgColors: atlas.avgColors,
@@ -281,6 +468,7 @@ export function Viewer(props: ViewerProps) {
         window.addEventListener('resize', onResize);
 
         const skyColor = new THREE.Color();
+        const horizonColor = new THREE.Color();
         const clock = new THREE.Clock();
         let lastStatsReport = 0;
         let lastPersist = 0;
@@ -323,11 +511,13 @@ export function Viewer(props: ViewerProps) {
             skyColor.setRGB(sky[0] * bright * skyDim, sky[1] * bright * skyDim, sky[2] * bright * skyDim);
             (scene.background as THREE.Color).lerp(skyColor, 0.05);
             const fogBright = dimensionSky === 'normal' ? bright : 1;
-            e.shared.fogColor.value.setRGB(fog[0] * fogBright, fog[1] * fogBright, fog[2] * fogBright)
+            horizonColor.setRGB(fog[0] * fogBright, fog[1] * fogBright, fog[2] * fogBright)
+              .lerp(skyColor, dimensionSky === 'normal' ? 0.3 : 0.1);
+            e.shared.fogColor.value.copy(horizonColor)
               .lerp(scene.background as THREE.Color, dense ? 0.15 : 0.45);
             e.shared.envFogColor.value.copy(e.shared.fogColor.value).lerp(scene.background as THREE.Color, dimensionSky === 'normal' ? 0.35 : 0.1);
             e.shared.envFogDensity.value = dimensionSky === 'normal' ? 0.0016 : dimensionSky === 'nether' ? 0.009 : 0.0035;
-            updateSkyObjects(e.sky, camera, t, dayFactor, dimensionSky === 'normal');
+            updateSkyObjects(e.sky, camera, t, dayFactor, dimensionSky === 'normal', skyColor, horizonColor);
           }
 
           if (now - lastStatsReport > 250) {
@@ -372,6 +562,7 @@ export function Viewer(props: ViewerProps) {
     const manager = new ChunkManager(e.scene, e.materials, e.initPayload, {
       world: props.world,
       dimension: props.dimension,
+      renderKey: e.renderKey,
       dimensionDef: dimDef,
       viewDistance: props.viewDistance,
       lodDistance: props.lodDistance,
@@ -409,12 +600,12 @@ export function Viewer(props: ViewerProps) {
     persistView(e.controls.getView(), true);
     const s = latestStatsRef.current;
     propsRef.current.onStats?.({ ...s, pos: [e.camera.position.x, e.camera.position.y, e.camera.position.z] });
-    managerRef.current?.update(e.camera.position, performance.now());
+    managerRef.current?.update(e.camera.position, performance.now(), true);
   }, [ready, props.cameraTarget?.seq]);
 
   return (
     <div ref={containerRef} style={{ position: 'absolute', inset: 0 }}>
-      {error && <div style={{ position: 'absolute', top: 8, left: 8, color: '#f66' }}>Initialization failed: {error}</div>}
+      {error && <div style={{ position: 'absolute', top: 8, left: 8, color: '#f66' }}>{t('initFailed', { message: error })}</div>}
     </div>
   );
 }

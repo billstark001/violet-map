@@ -13,8 +13,19 @@ export const fetchBlockInfo = () => json<BlockInfoMap>('/api/data/blocks');
 export const fetchBiomes = () => json<BiomeMap>('/api/data/biomes');
 export const fetchDimensions = () => json<DimensionMap>('/api/data/dimensions');
 
-export interface ChunkPayload { cx: number; cz: number; data?: Uint8Array; missing?: boolean }
+export interface ChunkPayload extends ChunkHashPayload { data?: Uint8Array }
+export interface ChunkHashPayload {
+  cx: number;
+  cz: number;
+  hash?: string;
+  fileHash?: string;
+  nbtHash?: string;
+  source?: 'region' | 'chunk';
+  region?: { x: number; z: number };
+  missing?: boolean;
+}
 export interface ServerAtlasManifest {
+  cacheKey: string;
   image: string;
   width: number;
   height: number;
@@ -33,6 +44,23 @@ export async function fetchChunk(world: string, dim: string, cx: number, cz: num
   if (!res.ok) throw new Error(`chunk fetch failed: ${res.status}`);
   const payload = decode(new Uint8Array(await res.arrayBuffer())) as ChunkPayload;
   return payload.data ? bytesToArrayBuffer(payload.data) : null;
+}
+
+export async function fetchChunkHashes(
+  world: string,
+  dim: string,
+  chunks: { cx: number; cz: number }[],
+): Promise<ChunkHashPayload[]> {
+  if (!chunks.length) return [];
+  const body = encode({ chunks });
+  const res = await fetch(`/api/worlds/${world}/${dim}/chunk-hashes`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/msgpack', accept: 'application/msgpack' },
+    body,
+  });
+  if (!res.ok) throw new Error(`chunk hash fetch failed: ${res.status}`);
+  const payload = decode(new Uint8Array(await res.arrayBuffer())) as { chunks?: ChunkHashPayload[] };
+  return payload.chunks ?? [];
 }
 
 export async function fetchChunks(

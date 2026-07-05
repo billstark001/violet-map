@@ -2,6 +2,7 @@ import type { AssetBundle, AtlasIndex, BlockInfoMap, BlockModelJson, TextureAlph
 import { fetchTextureAtlas, textureUrl } from './api';
 
 export interface BuiltAtlas {
+  cacheKey: string;
   canvas: HTMLCanvasElement;
   index: AtlasIndex;
   avgColors: Record<string, [number, number, number]>;
@@ -63,6 +64,15 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
+function simpleHash(input: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+
 /** 构建 16px 网格图集。动画贴图（竖长条）只取第一帧。 */
 export async function buildAtlas(ids: string[]): Promise<BuiltAtlas> {
   try {
@@ -75,6 +85,7 @@ export async function buildAtlas(ids: string[]): Promise<BuiltAtlas> {
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(img, 0, 0);
     return {
+      cacheKey: manifest.cacheKey ?? manifest.image.split('/').pop() ?? 'server-atlas',
       canvas,
       index: manifest.index,
       avgColors: manifest.avgColors,
@@ -135,7 +146,7 @@ export async function buildAtlas(ids: string[]): Promise<BuiltAtlas> {
     avgColors[e.id] = n ? [r / n / 255, g / n / 255, b / n / 255] : [1, 0, 1];
     hasAlpha[e.id] = alpha;
   });
-  const ret: BuiltAtlas = { canvas, index, avgColors, hasAlpha };
+  const ret: BuiltAtlas = { cacheKey: `client:${simpleHash(ids.slice().sort().join('\n'))}`, canvas, index, avgColors, hasAlpha };
   return ret;
 }
 

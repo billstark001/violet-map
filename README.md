@@ -76,8 +76,16 @@ The viewer URL supports camera parameters such as `?x=&y=&z=&yaw=&pitch=`.
 | `WORLDS_DIR` | `data/worlds` | Directory containing Minecraft world folders. |
 | `ASSETS_DIRS` | `data/assets` | Comma-separated asset directories; later entries override earlier entries. |
 | `DATA_DIR` | `data` | Runtime data directory for editable defaults. |
-| `MC_VERSION` | `1.20.4` | Preferred Minecraft version for generated data. |
+| `MC_VERSION` | `1.21.4` | Preferred Minecraft version for generated data and generated `level.dat`. |
 | `MC_DATA_VERSION` | `MC_VERSION` | Optional `minecraft-data` version override. |
+| `WORLD_STORAGE` | `osfs` | World storage driver. Use `osfs`, `s3`, or `s3-compatible`. |
+| `S3_BUCKET` | | Bucket for S3-compatible world storage. |
+| `S3_ENDPOINT` | | Optional S3-compatible endpoint. |
+| `S3_REGION` | `auto` | S3 region. |
+| `S3_PREFIX` | | Optional object key prefix for worlds. |
+| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | | S3 credentials when not supplied by the environment. |
+| `S3_FORCE_PATH_STYLE` | `true` | Set to `false` for virtual-hosted-style buckets. |
+| `ADMIN_TOKENS` | `dev-admin-token:admin,dev-ci-token:ci` | Comma-separated hardcoded tokens and roles. Roles are `admin`, `ci`, and `viewer`; `admin` includes `ci`. |
 
 When running from the repository root with the bundled sample layout, use absolute paths or paths relative to the server package working directory. For example:
 
@@ -104,9 +112,28 @@ pnpm --filter @violet-map/assets dev --help
 
 ## Runtime APIs
 
-- Chunk payloads are served as MessagePack. The single-chunk endpoint is available at `/api/worlds/:world/:dim/chunk/:cx/:cz`, and the viewer uses the batch endpoint `/api/worlds/:world/:dim/chunks`.
+- Chunk payloads are served as MessagePack. The single-chunk endpoint is available at `/api/worlds/:world/:dim/chunk/:cx/:cz`, and the viewer uses `/api/worlds/:world/:dim/chunk-hashes` before incrementally requesting changed or evicted chunks from `/api/worlds/:world/:dim/chunks`.
+- Chunk responses include the source file hash (`hash`/`fileHash`), source type (`region` or `chunk`), and chunk NBT hash (`nbtHash`). For chunks inside `.mca` files, the source hash is the whole region file hash.
 - Texture loading supports both individual PNG requests and a generated atlas mode. The viewer first requests `/api/assets/atlas` and falls back to individual textures if atlas generation fails.
 - The worker receives transferable binary chunk buffers and builds typed-array mesh buffers for return to the main thread.
+
+## Admin and CI APIs
+
+Write APIs require `Authorization: Bearer <token>` or `x-violet-admin-token`. The default development token is `dev-admin-token`.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/admin/worlds` | Create an empty world and generate a minimal modern `level.dat`. |
+| `GET /api/admin/worlds/:world/manifest` | Return all files in a world with size, mtime/etag, and sha256 hash. |
+| `POST /api/admin/worlds/:world/diff` | Compare a client manifest and return `upload`, `same`, and `remoteExtra` paths for incremental sync. |
+| `PUT /api/admin/worlds/:world/files/*` | Upload or replace one world file by relative path. |
+| `POST /api/admin/worlds/:world/files` | Multipart file upload with `file` and `path` fields. |
+| `POST /api/admin/upload` | Compatibility upload for `.mca` region files or single chunk NBT. |
+| `DELETE /api/admin/worlds/:world/:dim/chunks` | Delete chunk overrides and clear chunk entries from region headers. |
+| `DELETE /api/admin/worlds/:world/:dim/regions/:rx/:rz` | Delete a region file. |
+| `DELETE /api/admin/worlds/:world` | Delete a whole world. |
+
+Uploaded worlds do not need to include `level.dat`; the server generates a minimal Java 1.21-style file when the world is first created or written.
 
 ## Current Limits
 

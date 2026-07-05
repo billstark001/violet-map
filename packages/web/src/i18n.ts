@@ -1,0 +1,131 @@
+import i18n from 'i18next';
+import { initReactI18next } from 'react-i18next';
+
+const resources = {
+  en: {
+    translation: {
+      world: 'World',
+      dimension: 'Dimension',
+      selectWorld: 'Select world',
+      renderDistance: 'Render distance: {{view}} chunks (LOD +{{lod}})',
+      fastMove: 'Fast move multiplier: {{value}}x',
+      timeOfDay: 'Time of day: {{value}}',
+      language: 'Language',
+      current: 'Current',
+      go: 'Go',
+      loaded: 'Loaded {{value}}',
+      rendered: 'Rendered {{value}}',
+      tabView: 'View',
+      tabSettings: 'Settings',
+      meshCache: 'Mesh cache',
+      cacheEntries: '{{value}} entries',
+      cacheSize: '{{value}}',
+      refreshCache: 'Refresh',
+      clearCache: 'Clear cache',
+      collapsePanel: 'Collapse panel',
+      expandPanel: 'Expand panel',
+      initFailed: 'Initialization failed: {{message}}',
+    },
+  },
+  'zh-CN': {
+    translation: {
+      world: '世界',
+      dimension: '维度',
+      selectWorld: '选择世界',
+      renderDistance: '渲染距离：{{view}} 区块（LOD +{{lod}}）',
+      fastMove: '快速移动倍率：{{value}}x',
+      timeOfDay: '时间：{{value}}',
+      language: '语言',
+      current: '当前位置',
+      go: '前往',
+      loaded: '已载入 {{value}}',
+      rendered: '已渲染 {{value}}',
+      tabView: '视图',
+      tabSettings: '设置',
+      meshCache: '网格缓存',
+      cacheEntries: '{{value}} 条',
+      cacheSize: '{{value}}',
+      refreshCache: '刷新',
+      clearCache: '清理缓存',
+      collapsePanel: '折叠面板',
+      expandPanel: '展开面板',
+      initFailed: '初始化失败：{{message}}',
+    },
+  },
+  'zh-TW': {
+    translation: {
+      world: '世界',
+      dimension: '維度',
+      selectWorld: '選擇世界',
+      renderDistance: '渲染距離：{{view}} 區塊（LOD +{{lod}}）',
+      fastMove: '快速移動倍率：{{value}}x',
+      timeOfDay: '時間：{{value}}',
+      language: '語言',
+      current: '目前位置',
+      go: '前往',
+      loaded: '已載入 {{value}}',
+      rendered: '已渲染 {{value}}',
+      tabView: '檢視',
+      tabSettings: '設定',
+      meshCache: '網格快取',
+      cacheEntries: '{{value}} 筆',
+      cacheSize: '{{value}}',
+      refreshCache: '重新整理',
+      clearCache: '清理快取',
+      collapsePanel: '收合面板',
+      expandPanel: '展開面板',
+      initFailed: '初始化失敗：{{message}}',
+    },
+  },
+  ja: {
+    translation: {
+      world: 'ワールド',
+      dimension: 'ディメンション',
+      selectWorld: 'ワールドを選択',
+      renderDistance: '描画距離: {{view}} チャンク (LOD +{{lod}})',
+      fastMove: '高速移動倍率: {{value}}x',
+      timeOfDay: '時刻: {{value}}',
+      language: '言語',
+      current: '現在地',
+      go: '移動',
+      loaded: '読み込み {{value}}',
+      rendered: '描画 {{value}}',
+      tabView: 'ビュー',
+      tabSettings: '設定',
+      meshCache: 'メッシュキャッシュ',
+      cacheEntries: '{{value}} 件',
+      cacheSize: '{{value}}',
+      refreshCache: '更新',
+      clearCache: 'キャッシュ削除',
+      collapsePanel: 'パネルを折りたたむ',
+      expandPanel: 'パネルを開く',
+      initFailed: '初期化に失敗しました: {{message}}',
+    },
+  },
+} as const;
+
+function initialLanguage(): string {
+  const saved = localStorage.getItem('violet-map:language');
+  if (saved && resources[saved as keyof typeof resources]) return saved;
+  const lang = navigator.language;
+  if (lang.startsWith('zh-TW') || lang.startsWith('zh-HK') || lang.startsWith('zh-MO')) return 'zh-TW';
+  if (lang.startsWith('zh')) return 'zh-CN';
+  if (lang.startsWith('ja')) return 'ja';
+  return 'en';
+}
+
+void i18n.use(initReactI18next).init({
+  resources,
+  lng: initialLanguage(),
+  fallbackLng: 'en',
+  interpolation: { escapeValue: false },
+});
+
+export const languageOptions = [
+  { value: 'en', label: 'English' },
+  { value: 'zh-CN', label: '简体中文' },
+  { value: 'zh-TW', label: '繁體中文' },
+  { value: 'ja', label: '日本語' },
+];
+
+export default i18n;

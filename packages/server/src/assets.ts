@@ -78,6 +78,7 @@ export async function textureFilePath(id: string): Promise<string | null> {
 }
 
 export interface TextureAtlasManifest {
+  cacheKey: string;
   image: string;
   width: number;
   height: number;
@@ -163,7 +164,10 @@ function tileStats(tileData: Uint8Array): { avg: [number, number, number]; alpha
 
 export async function buildTextureAtlas(ids: string[]): Promise<{ key: string; manifest: TextureAtlasManifest; png: Uint8Array }> {
   const normalized = ['__missing__', ...Array.from(new Set(ids.map(normalizeId)))];
-  const key = createHash('sha1').update(JSON.stringify(normalized)).digest('hex').slice(0, 20);
+  const tiles = await Promise.all(normalized.map((id) => id === '__missing__' ? missingTile(16) : readTextureTile(id, 16)));
+  const hash = createHash('sha1').update(JSON.stringify(normalized));
+  for (const tileData of tiles) hash.update(tileData);
+  const key = hash.digest('hex').slice(0, 20);
   const hit = atlasCache.get(key);
   if (hit) return { key, ...hit };
 
@@ -179,8 +183,8 @@ export async function buildTextureAtlas(ids: string[]): Promise<{ key: string; m
   const avgColors: Record<string, [number, number, number]> = {};
   const hasAlpha: TextureAlphaMap = {};
 
-  await Promise.all(normalized.map(async (id, i) => {
-    const tileData = id === '__missing__' ? missingTile(tile) : await readTextureTile(id, tile);
+  normalized.forEach((id, i) => {
+    const tileData = tiles[i];
     const x = (i % cols) * stride;
     const y = Math.floor(i / cols) * stride;
     const tx = x + pad;
@@ -190,10 +194,11 @@ export async function buildTextureAtlas(ids: string[]): Promise<{ key: string; m
     const stats = tileStats(tileData);
     avgColors[id] = stats.avg;
     hasAlpha[id] = stats.alpha;
-  }));
+  });
 
   const bytes = PNG.sync.write(png);
   const manifest: TextureAtlasManifest = {
+    cacheKey: key,
     image: `/api/assets/atlas/${key}`,
     width: size,
     height: size,

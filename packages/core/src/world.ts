@@ -53,6 +53,7 @@ export class ChunkColumn {
   minSectionY = 0;
   maxSectionY = -1;
   heightmap: BitArray | null = null;
+  heightmapOffset = 0;
   hasStoredLight = false;
   hasStoredBlockLight = false;
   hasStoredSkyLight = false;
@@ -84,12 +85,16 @@ export class ChunkColumn {
     return s.skyLight[((y & 15) << 8) | ((z & 15) << 4) | (x & 15)];
   }
   /** 最高非空气方块上方一格的 y（无方块返回 minY）。 */
-  heightAt(x: number, z: number): number {
-    if (this.heightmap) return this.heightmap.get((z << 4) | x) + this.minY;
+  scanHeightAt(x: number, z: number): number {
     for (let y = this.maxY - 1; y >= this.minY; y--) {
       if (!AIR_NAMES.has(this.getBlock(x, y, z).name)) return y + 1;
     }
     return this.minY;
+  }
+  /** 最高非空气方块上方一格的 y（无方块返回 minY）。 */
+  heightAt(x: number, z: number): number {
+    if (this.heightmap) return this.heightmap.get((z << 4) | x) + this.heightmapOffset;
+    return this.scanHeightAt(x, z);
   }
   /** 保证 [minSectionY, maxSectionY] 范围内每个 section 存在（光照引擎需要空气 section 承载亮度）。 */
   ensureSection(sy: number): ChunkSection {
@@ -113,6 +118,26 @@ function hasAnyLight(a: Uint8Array | null): boolean {
   if (!a) return false;
   for (const v of a) if (v > 0) return true;
   return false;
+}
+
+function calibrateHeightmap(col: ChunkColumn) {
+  if (!col.heightmap) return;
+  const offsets = Array.from(new Set([0, 1, col.minY, col.minY + 1]));
+  const samples: [number, number][] = [[0, 0], [4, 4], [8, 8], [12, 12], [15, 15], [0, 15], [15, 0], [8, 3], [3, 8]];
+  let bestOffset = 0;
+  let bestScore = Infinity;
+  for (const offset of offsets) {
+    let score = 0;
+    for (const [x, z] of samples) {
+      const raw = col.heightmap.get((z << 4) | x);
+      score += Math.min(64, Math.abs(raw + offset - col.scanHeightAt(x, z)));
+    }
+    if (score < bestScore) {
+      bestScore = score;
+      bestOffset = offset;
+    }
+  }
+  col.heightmapOffset = bestOffset;
 }
 
 /** 解析 1.18+ 区块 NBT（simplify 后的对象）。 */
@@ -149,7 +174,10 @@ export function parseChunkColumn(root: any): ChunkColumn {
   const hm = r.Heightmaps?.WORLD_SURFACE;
   if (hm) {
     const height = col.maxY - col.minY;
-    if (height > 0) col.heightmap = new BitArray(Math.ceil(Math.log2(height + 1)), toLongs(hm));
+    if (height > 0) {
+      col.heightmap = new BitArray(Math.ceil(Math.log2(height + 1)), toLongs(hm));
+      calibrateHeightmap(col);
+    }
   }
   return col;
 }

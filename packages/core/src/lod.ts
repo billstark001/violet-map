@@ -1,5 +1,5 @@
 import { ChunkColumn, AIR_NAMES } from './world.js';
-import { MeshBuffers } from './types.js';
+import { BlockStateRef, MeshBuffers } from './types.js';
 import type { Rgb } from './colors.js';
 import { Float32Writer, Uint32Writer } from './meshBufferBuilder.js';
 
@@ -51,7 +51,7 @@ function sampleCell(
   z0: number,
   x1: number,
   z1: number,
-  colorOf: (blockName: string, biome: string) => Rgb,
+  colorOf: (state: BlockStateRef, biome: string) => Rgb,
 ): LodCell | null {
   let height = col.minY;
   let r = 0, g = 0, b = 0, n = 0;
@@ -62,7 +62,7 @@ function sampleCell(
       height = Math.max(height, h);
       let top = col.getBlock(x, h - 1, z);
       if (AIR_NAMES.has(top.name)) top = col.getBlock(x, Math.max(h - 2, col.minY), z);
-      const c = colorOf(top.name, col.getBiome(x, h, z));
+      const c = colorOf(top, col.getBiome(x, h, z));
       r += c[0]; g += c[1]; b += c[2]; n++;
     }
   }
@@ -77,7 +77,7 @@ function sampleCell(
 export function meshLodChunk(
   col: ChunkColumn,
   step: number,
-  colorOf: (blockName: string, biome: string) => Rgb,
+  colorOf: (state: BlockStateRef, biome: string) => Rgb,
   hasSkyLight = true,
 ): MeshBuffers | null {
   const s = Math.max(1, Math.floor(step));
@@ -98,7 +98,7 @@ export function meshLodChunk(
   const at = (gx: number, gz: number) => (gx < 0 || gx >= n || gz < 0 || gz >= n) ? null : cells[gx + gz * n];
   const neighborHeight = (gx: number, gz: number): number | null => {
     if (gx < 0 || gx >= n || gz < 0 || gz >= n) return null;
-    return at(gx, gz)?.height ?? baseY;
+    return at(gx, gz)?.height ?? null;
   };
 
   for (let gz = 0; gz < n; gz++) {

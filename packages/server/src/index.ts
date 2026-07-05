@@ -4,16 +4,42 @@ import { cors } from 'hono/cors';
 import fs from 'node:fs/promises';
 import { decode, encode } from '@msgpack/msgpack';
 import { config } from './config.js';
+import { requireRole } from './auth.js';
 import { buildAssetBundle, buildTextureAtlas, clearTextureAtlasCache, getTextureAtlasPng, textureFilePath } from './assets.js';
 import { buildBlockInfo, readBiomes, readDimensions, writeDataFile } from './gameData.js';
-import { getChunkNbt, listRegions, listWorlds, saveChunkNbt, saveRegionFile } from './worldStore.js';
+import {
+  createWorld,
+  deleteChunks,
+  deleteRegion,
+  deleteWorld,
+  diffWorldManifest,
+  getChunkMetadata,
+  getChunkNbtWithMeta,
+  listRegions,
+  listWorlds,
+  saveChunkNbt,
+  saveRegionFile,
+  saveWorldFile,
+  worldManifest,
+} from './worldStore.js';
 
 const app = new Hono();
 app.use('*', cors());
+app.use('/api/admin/*', requireRole('ci'));
 
 function msgpackBody(value: unknown): ArrayBuffer {
   const bytes = encode(value);
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+function publicChunkMeta<T extends { sourcePath?: string }>(value: T): Omit<T, 'sourcePath'> {
+  const { sourcePath: _sourcePath, ...rest } = value;
+  return rest;
+}
+
+function requestedChunks(raw: unknown): { cx: number; cz: number }[] {
+  const body = raw as { chunks?: { cx: number; cz: number }[] };
+  return Array.isArray(body?.chunks) ? body.chunks.slice(0, 256) : [];
 }
 
 app.get('/api/worlds', async (c) => c.json(await listWorlds()));
@@ -23,21 +49,33 @@ app.get('/api/worlds/:world/:dim/regions', async (c) =>
 app.get('/api/worlds/:world/:dim/chunk/:cx/:cz', async (c) => {
   const cx = Number(c.req.param('cx')), cz = Number(c.req.param('cz'));
   if (!Number.isInteger(cx) || !Number.isInteger(cz)) return c.text('bad coords', 400);
-  const data = await getChunkNbt(c.req.param('world'), c.req.param('dim'), cx, cz);
-  if (!data) return c.body(null, 204, { 'cache-control': 'private, max-age=15' });
-  return c.body(msgpackBody({ cx, cz, data }), 200, {
+  const chunk = await getChunkNbtWithMeta(c.req.param('world'), c.req.param('dim'), cx, cz);
+  if (!chunk) return c.body(null, 204, { 'cache-control': 'private, max-age=15' });
+  return c.body(msgpackBody(publicChunkMeta(chunk)), 200, {
+    'cache-control': 'private, max-age=15',
+    'content-type': 'application/msgpack',
+  });
+});
+
+app.post('/api/worlds/:world/:dim/chunk-hashes', async (c) => {
+  const body = decode(new Uint8Array(await c.req.arrayBuffer()));
+  const metas = await Promise.all(requestedChunks(body).map(async ({ cx, cz }) => {
+    if (!Number.isInteger(cx) || !Number.isInteger(cz)) return null;
+    return publicChunkMeta(await getChunkMetadata(c.req.param('world'), c.req.param('dim'), cx, cz));
+  }));
+  return c.body(msgpackBody({ chunks: metas.filter(Boolean) }), 200, {
     'cache-control': 'private, max-age=15',
     'content-type': 'application/msgpack',
   });
 });
 
 app.post('/api/worlds/:world/:dim/chunks', async (c) => {
-  const body = decode(new Uint8Array(await c.req.arrayBuffer())) as { chunks?: { cx: number; cz: number }[] };
-  const requested = Array.isArray(body?.chunks) ? body.chunks.slice(0, 128) : [];
+  const body = decode(new Uint8Array(await c.req.arrayBuffer()));
+  const requested = requestedChunks(body).slice(0, 128);
   const chunks = await Promise.all(requested.map(async ({ cx, cz }) => {
     if (!Number.isInteger(cx) || !Number.isInteger(cz)) return null;
-    const data = await getChunkNbt(c.req.param('world'), c.req.param('dim'), cx, cz);
-    return data ? { cx, cz, data } : { cx, cz, missing: true };
+    const chunk = await getChunkNbtWithMeta(c.req.param('world'), c.req.param('dim'), cx, cz);
+    return chunk ? publicChunkMeta(chunk) : { cx, cz, missing: true };
   }));
   return c.body(msgpackBody({ chunks: chunks.filter(Boolean) }), 200, {
     'cache-control': 'private, max-age=15',
@@ -46,7 +84,7 @@ app.post('/api/worlds/:world/:dim/chunks', async (c) => {
 });
 
 app.get('/api/assets/bundle', async (c) => c.json(await buildAssetBundle()));
-app.post('/api/assets/reload', async (c) => { await buildAssetBundle(true); clearTextureAtlasCache(); return c.json({ ok: true }); });
+app.post('/api/assets/reload', requireRole('admin'), async (c) => { await buildAssetBundle(true); clearTextureAtlasCache(); return c.json({ ok: true }); });
 
 app.post('/api/assets/atlas', async (c) => {
   const body = await c.req.json<{ ids?: string[] }>();
@@ -79,8 +117,58 @@ app.get('/api/assets/texture/*', async (c) => {
 
 app.get('/api/data/blocks', async (c) => c.json(await buildBlockInfo()));
 app.get('/api/data/biomes', async (c) => c.json(await readBiomes()));
-app.put('/api/data/biomes', async (c) => { await writeDataFile('biomes.json', await c.req.json()); return c.json({ ok: true }); });
+app.put('/api/data/biomes', requireRole('admin'), async (c) => { await writeDataFile('biomes.json', await c.req.json()); return c.json({ ok: true }); });
 app.get('/api/data/dimensions', async (c) => c.json(await readDimensions()));
+
+app.get('/api/admin/worlds/:world/manifest', async (c) => c.json({
+  world: c.req.param('world'),
+  files: await worldManifest(c.req.param('world')),
+}));
+
+app.post('/api/admin/worlds/:world/diff', async (c) => {
+  const body = await c.req.json<{ files?: { path: string; hash?: string; size?: number }[] }>();
+  return c.json(await diffWorldManifest(c.req.param('world'), Array.isArray(body.files) ? body.files : []));
+});
+
+app.post('/api/admin/worlds', async (c) => {
+  const body = await c.req.json<{ world?: string; levelName?: string; dimensions?: string[] }>();
+  if (!body.world) return c.json({ error: 'missing world' }, 400);
+  return c.json(await createWorld(body.world, body.dimensions, body.levelName));
+});
+
+app.post('/api/admin/worlds/:world/create', async (c) => {
+  const body: { levelName?: string; dimensions?: string[] } = await c.req.json<{ levelName?: string; dimensions?: string[] }>().catch(() => ({}));
+  return c.json(await createWorld(c.req.param('world'), body.dimensions, body.levelName));
+});
+
+app.put('/api/admin/worlds/:world/files/*', async (c) => {
+  const world = c.req.param('world');
+  const prefix = `/api/admin/worlds/${world}/files/`;
+  const relativePath = decodeURIComponent(c.req.path.slice(prefix.length));
+  const bytes = new Uint8Array(await c.req.arrayBuffer());
+  return c.json(await saveWorldFile(world, relativePath, bytes));
+});
+
+app.post('/api/admin/worlds/:world/files', async (c) => {
+  const body = await c.req.parseBody();
+  const file = body.file;
+  const relativePath = String(body.path || (file instanceof File ? file.name : ''));
+  if (!(file instanceof File)) return c.json({ error: 'missing file' }, 400);
+  return c.json(await saveWorldFile(c.req.param('world'), relativePath, new Uint8Array(await file.arrayBuffer())));
+});
+
+app.delete('/api/admin/worlds/:world', async (c) => c.json(await deleteWorld(c.req.param('world'))));
+
+app.delete('/api/admin/worlds/:world/:dim/regions/:rx/:rz', async (c) => {
+  const rx = Number(c.req.param('rx')), rz = Number(c.req.param('rz'));
+  if (!Number.isInteger(rx) || !Number.isInteger(rz)) return c.json({ error: 'bad region coords' }, 400);
+  return c.json(await deleteRegion(c.req.param('world'), c.req.param('dim'), rx, rz));
+});
+
+app.delete('/api/admin/worlds/:world/:dim/chunks', async (c) => {
+  const body = await c.req.json<{ chunks?: { cx: number; cz: number }[] }>();
+  return c.json(await deleteChunks(c.req.param('world'), c.req.param('dim'), Array.isArray(body.chunks) ? body.chunks : []));
+});
 
 app.post('/api/admin/upload', async (c) => {
   const body = await c.req.parseBody();
