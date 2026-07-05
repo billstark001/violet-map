@@ -1,10 +1,11 @@
 import { ModelBaker, BakedQuad, MISSING_TEXTURE } from './model.js';
 import { AIR, AIR_NAMES, ChunkColumn } from './world.js';
 import {
-  AtlasIndex, BlockInfo, BlockStateRef, Direction, DIR_VEC, MeshBuffers, RenderLayer,
+  AtlasIndex, AtlasRect, BlockInfo, BlockStateRef, Direction, DIR_VEC, MeshBuffers, RenderLayer,
   SectionMeshes, TextureAlphaMap, TintType,
 } from './types.js';
 import type { Rgb } from './colors.js';
+import { Float32Writer, Uint32Writer } from './meshBufferBuilder.js';
 
 export interface WorldView {
   getBlock(x: number, y: number, z: number): BlockStateRef;
@@ -48,6 +49,7 @@ const TANGENTS: Record<Direction, [number, number]> = {
 };
 const WHITE: Rgb = [1, 1, 1];
 const UV_EPS = 1e-4;
+const HEIGHT_EPS = 1e-3;
 
 /** 原版风格的坐标散列，用于随机变体选择。 */
 export function hash3(x: number, y: number, z: number): number {
@@ -57,24 +59,40 @@ export function hash3(x: number, y: number, z: number): number {
 }
 
 class MeshBuilder {
-  pos: number[] = []; uv: number[] = []; col: number[] = []; light: number[] = []; idx: number[] = [];
+  pos = new Float32Writer(4096 * 3);
+  uv = new Float32Writer(4096 * 2);
+  col = new Float32Writer(4096 * 3);
+  light = new Float32Writer(4096 * 2);
+  idx = new Uint32Writer(4096 * 6);
   verts = 0;
   get empty() { return this.verts === 0; }
   vertex(x: number, y: number, z: number, u: number, v: number, r: number, g: number, b: number, sky: number, block: number) {
-    this.pos.push(x, y, z); this.uv.push(u, v); this.col.push(r, g, b); this.light.push(sky, block);
+    this.pos.push3(x, y, z);
+    this.uv.push2(u, v);
+    this.col.push3(r, g, b);
+    this.light.push2(sky, block);
     this.verts++;
   }
   quadIndices() {
     const b = this.verts - 4;
-    this.idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
+    this.idx.push6(b, b + 2, b + 1, b, b + 3, b + 2);
   }
   build(): MeshBuffers {
     return {
-      positions: new Float32Array(this.pos), uvs: new Float32Array(this.uv),
-      colors: new Float32Array(this.col), lights: new Float32Array(this.light),
-      indices: new Uint32Array(this.idx),
+      positions: this.pos.toArray(), uvs: this.uv.toArray(),
+      colors: this.col.toArray(), lights: this.light.toArray(),
+      indices: this.idx.toArray(),
     };
   }
+}
+
+function atlasUv(rect: AtlasRect, u: number, v: number): [number, number] {
+  const tu = Math.min(16 - UV_EPS, Math.max(UV_EPS, u));
+  const tv = Math.min(16 - UV_EPS, Math.max(UV_EPS, v));
+  return [
+    rect.u0 + (tu / 16) * (rect.u1 - rect.u0),
+    rect.v0 + (tv / 16) * (rect.v1 - rect.v0),
+  ];
 }
 
 function smoothVertexLight(
@@ -126,6 +144,10 @@ function emitQuad(
   if (!smooth || !outside) {
     flatSky = view.getSkyLight(bx, by, bz) / 15;
     flatBlock = view.getBlockLight(bx, by, bz) / 15;
+    if (!outside) {
+      flatSky = Math.max(flatSky, view.getSkyLight(wx + d[0], wy + d[1], wz + d[2]) / 15);
+      flatBlock = Math.max(flatBlock, view.getBlockLight(wx + d[0], wy + d[1], wz + d[2]) / 15);
+    }
   }
   for (let i = 0; i < 4; i++) {
     let sky = flatSky, block = flatBlock, ao = 1;
@@ -134,12 +156,10 @@ function emitQuad(
       sky = s.sky; block = s.block; ao = s.ao;
     }
     const m = shade * ao;
-    const tu = Math.min(16 - UV_EPS, Math.max(UV_EPS, q.uvs[i * 2]));
-    const tv = Math.min(16 - UV_EPS, Math.max(UV_EPS, q.uvs[i * 2 + 1]));
+    const [u, v] = atlasUv(rect, q.uvs[i * 2], q.uvs[i * 2 + 1]);
     builder.vertex(
       lx + q.positions[i * 3], ly + q.positions[i * 3 + 1], lz + q.positions[i * 3 + 2],
-      rect.u0 + (tu / 16) * (rect.u1 - rect.u0),
-      rect.v0 + (tv / 16) * (rect.v1 - rect.v0),
+      u, v,
       tint[0] * m, tint[1] * m, tint[2] * m, sky, block,
     );
   }
@@ -154,25 +174,66 @@ function isSameFluid(res: MesherResources, texture: string, state: BlockStateRef
 
 function emitFluid(
   res: MesherResources, view: WorldView, builders: Record<RenderLayer, MeshBuilder>,
-  fluid: NonNullable<BlockInfo['fluid']>,
+  fluid: NonNullable<BlockInfo['fluid']>, state: BlockStateRef,
   lx: number, ly: number, lz: number, wx: number, wy: number, wz: number,
 ) {
   const builder = builders[fluid.layer ?? 'translucent'];
   const rect = res.atlas[fluid.texture] ?? res.atlas[MISSING_TEXTURE];
   const tint = res.tint(fluid.tint, undefined, view.getBiome(wx, wy, wz));
-  const aboveSame = isSameFluid(res, fluid.texture, view.getBlock(wx, wy + 1, wz));
-  const h = aboveSame ? 1 : 14 / 16;
+  const above = view.getBlock(wx, wy + 1, wz);
+  const aboveSame = isSameFluid(res, fluid.texture, above);
+  const aboveOccludes = res.info(above.name).occludes;
   const sky = view.getSkyLight(wx, wy, wz) / 15;
   const block = view.getBlockLight(wx, wy, wz) / 15;
 
-  // 直接内联各面（uv 简化为整面）
+  const fluidLevelHeight = (s: BlockStateRef): number => {
+    const level = Number(s.properties.level ?? '0');
+    if (!Number.isFinite(level) || level <= 0 || level >= 8) return 14 / 16;
+    return Math.max(1 / 16, (8 - level) / 9);
+  };
+  const surfaceHeightAt = (x: number, z: number): number => {
+    const s = x === wx && z === wz ? state : view.getBlock(x, wy, z);
+    if (!isSameFluid(res, fluid.texture, s)) return 0;
+    const a = view.getBlock(x, wy + 1, z);
+    if (isSameFluid(res, fluid.texture, a) || res.info(a.name).occludes) return 1;
+    return fluidLevelHeight(s);
+  };
+  const cornerHeight = (x: number, z: number, dx: -1 | 1, dz: -1 | 1): number => {
+    if (surfaceHeightAt(x, z) >= 1) return 1;
+    const samples = [
+      surfaceHeightAt(x, z),
+      surfaceHeightAt(x + dx, z),
+      surfaceHeightAt(x, z + dz),
+      surfaceHeightAt(x + dx, z + dz),
+    ].filter((h) => h > 0);
+    if (!samples.length) return surfaceHeightAt(x, z);
+    return samples.reduce((a, b) => a + b, 0) / samples.length;
+  };
+  const hNW = cornerHeight(wx, wz, -1, -1);
+  const hNE = cornerHeight(wx, wz, 1, -1);
+  const hSE = cornerHeight(wx, wz, 1, 1);
+  const hSW = cornerHeight(wx, wz, -1, 1);
+
+  const faceUv = (dir: Direction, v: [number, number, number]): [number, number] => {
+    switch (dir) {
+      case 'down': return [v[0] * 16, 16 - v[2] * 16];
+      case 'up': return [v[0] * 16, v[2] * 16];
+      case 'north': return [16 - v[0] * 16, 16 - v[1] * 16];
+      case 'south': return [v[0] * 16, 16 - v[1] * 16];
+      case 'west': return [v[2] * 16, 16 - v[1] * 16];
+      case 'east': return [16 - v[2] * 16, 16 - v[1] * 16];
+    }
+  };
+
   const face = (dir: Direction, verts: [number, number, number][]) => {
     const shade = SHADE[dir];
-    const uvs: [number, number][] = [[rect.u0, rect.v0], [rect.u1, rect.v0], [rect.u1, rect.v1], [rect.u0, rect.v1]];
-    verts.forEach((v, i) => builder.vertex(
-      lx + v[0], ly + v[1], lz + v[2], uvs[i][0], uvs[i][1],
-      tint[0] * shade, tint[1] * shade, tint[2] * shade, sky, block,
-    ));
+    verts.forEach((v) => {
+      const [u, vv] = atlasUv(rect, ...faceUv(dir, v));
+      builder.vertex(
+        lx + v[0], ly + v[1], lz + v[2], u, vv,
+        tint[0] * shade, tint[1] * shade, tint[2] * shade, sky, block,
+      );
+    });
     builder.quadIndices();
   };
   const neighbor = (dir: Direction) => {
@@ -184,12 +245,44 @@ function emitFluid(
     if (isSameFluid(res, fluid.texture, n)) return false;
     return !res.info(n.name).occludes;
   };
-  if (!aboveSame) face('up', [[0, h, 0], [1, h, 0], [1, h, 1], [0, h, 1]]);
+  const side = (
+    dir: Direction,
+    top: [[number, number, number], [number, number, number]],
+    bottomWhenAir: [[number, number, number], [number, number, number]],
+    neighborBottom: () => [[number, number, number], [number, number, number]],
+  ) => {
+    const n = neighbor(dir);
+    if (isSameFluid(res, fluid.texture, n)) {
+      const bottom = neighborBottom();
+      const visible = top[0][1] > bottom[0][1] + HEIGHT_EPS || top[1][1] > bottom[1][1] + HEIGHT_EPS;
+      if (visible) face(dir, [top[0], top[1], bottom[1], bottom[0]]);
+    } else if (!res.info(n.name).occludes) {
+      face(dir, [top[0], top[1], bottomWhenAir[1], bottomWhenAir[0]]);
+    }
+  };
+
+  if (!aboveSame && !aboveOccludes) face('up', [[0, hNW, 0], [1, hNE, 0], [1, hSE, 1], [0, hSW, 1]]);
   if (shouldDraw('down')) face('down', [[0, 0, 1], [1, 0, 1], [1, 0, 0], [0, 0, 0]]);
-  if (shouldDraw('north')) face('north', [[1, h, 0], [0, h, 0], [0, 0, 0], [1, 0, 0]]);
-  if (shouldDraw('south')) face('south', [[0, h, 1], [1, h, 1], [1, 0, 1], [0, 0, 1]]);
-  if (shouldDraw('west')) face('west', [[0, h, 0], [0, h, 1], [0, 0, 1], [0, 0, 0]]);
-  if (shouldDraw('east')) face('east', [[1, h, 1], [1, h, 0], [1, 0, 0], [1, 0, 1]]);
+  side('north',
+    [[1, hNE, 0], [0, hNW, 0]],
+    [[1, 0, 0], [0, 0, 0]],
+    () => [[1, cornerHeight(wx, wz - 1, 1, 1), 0], [0, cornerHeight(wx, wz - 1, -1, 1), 0]],
+  );
+  side('south',
+    [[0, hSW, 1], [1, hSE, 1]],
+    [[0, 0, 1], [1, 0, 1]],
+    () => [[0, cornerHeight(wx, wz + 1, -1, -1), 1], [1, cornerHeight(wx, wz + 1, 1, -1), 1]],
+  );
+  side('west',
+    [[0, hNW, 0], [0, hSW, 1]],
+    [[0, 0, 0], [0, 0, 1]],
+    () => [[0, cornerHeight(wx - 1, wz, 1, -1), 0], [0, cornerHeight(wx - 1, wz, 1, 1), 1]],
+  );
+  side('east',
+    [[1, hSE, 1], [1, hNE, 0]],
+    [[1, 0, 1], [1, 0, 0]],
+    () => [[1, cornerHeight(wx + 1, wz, -1, 1), 1], [1, cornerHeight(wx + 1, wz, -1, -1), 0]],
+  );
 }
 
 /** 网格化一个 16³ section。坐标相对 section 原点。 */
@@ -212,12 +305,12 @@ export function meshSection(
 
         const waterlogged = state.properties.waterlogged === 'true' || !!bi.waterlogged;
         if (bi.fluid) {
-          emitFluid(res, view, builders, bi.fluid, x, y, z, wx, wy, wz);
+          emitFluid(res, view, builders, bi.fluid, state, x, y, z, wx, wy, wz);
           continue;
         }
         if (waterlogged) {
           const water = res.info('minecraft:water').fluid;
-          if (water) emitFluid(res, view, builders, water, x, y, z, wx, wy, wz);
+          if (water) emitFluid(res, view, builders, water, { name: 'minecraft:water', properties: { level: '0' } }, x, y, z, wx, wy, wz);
         }
 
         const quads = res.baker.getQuads(state, hash3(wx, wy, wz));
@@ -227,7 +320,7 @@ export function meshSection(
             const n = view.getBlock(wx + d[0], wy + d[1], wz + d[2]);
             const ni = res.info(n.name);
             if (ni.occludes) continue;
-            if (bi.layer !== 'opaque' && n.name === state.name) continue;
+            if (bi.layer === 'translucent' && n.name === state.name) continue;
           }
           const tint = q.tintIndex >= 0
             ? res.tint(bi.tint, bi.fixedTint, view.getBiome(wx, wy, wz))

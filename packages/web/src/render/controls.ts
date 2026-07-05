@@ -19,6 +19,8 @@ export class FlyControls {
   private keys = new Set<string>();
   private yaw = 0;
   private pitch = 0;
+  private baseSpeed = 12;
+  private fastMultiplier = 4;
   private onMouseMove = (e: MouseEvent) => {
     if (document.pointerLockElement !== this.dom) return;
     this.yaw -= e.movementX * 0.0025;
@@ -43,7 +45,7 @@ export class FlyControls {
 
   update(dt: number) {
     this.camera.rotation.set(this.pitch, this.yaw, 0);
-    const speed = (this.keys.has('ControlLeft') ? 48 : 12) * dt;
+    const speed = this.baseSpeed * (this.keys.has('ControlLeft') ? this.fastMultiplier : 1) * dt;
     const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     const right = new THREE.Vector3(-forward.z, 0, forward.x);
     const move = new THREE.Vector3();
@@ -64,6 +66,10 @@ export class FlyControls {
 
   setPosition(x: number, y: number, z: number) {
     this.camera.position.set(x, y, z);
+  }
+
+  setFastMultiplier(value: number) {
+    this.fastMultiplier = Math.max(1, Math.min(16, Number.isFinite(value) ? value : 4));
   }
 
   syncFromCamera() {

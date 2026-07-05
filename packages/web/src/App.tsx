@@ -18,6 +18,7 @@ export default function App() {
   const [dimension, setDimension] = useState('minecraft:overworld');
   const [viewDistance, setViewDistance] = useState(8);
   const [lodDistance, setLodDistance] = useState(8);
+  const [fastMoveMultiplier, setFastMoveMultiplier] = useState(4);
   const [timeOfDay, setTimeOfDay] = useState(0);
   const [stats, setStats] = useState({ loaded: 0, rendered: 0, pos: [0, 0, 0] as [number, number, number] });
   const [coordDirty, setCoordDirty] = useState(false);
@@ -67,6 +68,7 @@ export default function App() {
           <Viewer
             world={world} dimension={dimension}
             viewDistance={viewDistance} lodDistance={lodDistance}
+            fastMoveMultiplier={fastMoveMultiplier}
             timeOfDay={timeOfDay} cameraTarget={cameraTarget} onStats={handleStats}
           />
         )}
@@ -79,16 +81,16 @@ export default function App() {
         <Card style={{ position: 'absolute', top: 12, left: 12, width: 320, opacity: 0.92 }}>
           <Flex direction="column" gap="3">
             <Flex gap="2" align="center">
-              <Text size="1" style={{ width: 48 }}>世界</Text>
+              <Text size="1" style={{ width: 64 }}>World</Text>
               <Select.Root value={world} onValueChange={setWorld}>
-                <Select.Trigger style={{ flex: 1 }} placeholder="选择世界" />
+                <Select.Trigger style={{ flex: 1 }} placeholder="Select world" />
                 <Select.Content>
                   {worlds.map((w) => <Select.Item key={w.id} value={w.id}>{w.id}</Select.Item>)}
                 </Select.Content>
               </Select.Root>
             </Flex>
             <Flex gap="2" align="center">
-              <Text size="1" style={{ width: 48 }}>维度</Text>
+              <Text size="1" style={{ width: 64 }}>Dimension</Text>
               <Select.Root value={dimension} onValueChange={setDimension}>
                 <Select.Trigger style={{ flex: 1 }} />
                 <Select.Content>
@@ -97,18 +99,22 @@ export default function App() {
               </Select.Root>
             </Flex>
             <Box>
-              <Text size="1">渲染距离：{viewDistance} 区块（LOD +{lodDistance}）</Text>
+              <Text size="1">Render distance: {viewDistance} chunks (LOD +{lodDistance})</Text>
               <Slider value={[viewDistance]} min={2} max={16} onValueChange={([v]) => setViewDistance(v)} />
               <Slider mt="2" value={[lodDistance]} min={0} max={24} onValueChange={([v]) => setLodDistance(v)} />
             </Box>
             <Box>
-              <Text size="1">时间（0=正午 0.5=午夜）：{timeOfDay.toFixed(2)}</Text>
+              <Text size="1">Fast move multiplier: {fastMoveMultiplier.toFixed(1)}x</Text>
+              <Slider value={[fastMoveMultiplier]} min={1} max={16} step={0.5} onValueChange={([v]) => setFastMoveMultiplier(v)} />
+            </Box>
+            <Box>
+              <Text size="1">Time of day (0=noon, 0.5=midnight): {timeOfDay.toFixed(2)}</Text>
               <Slider value={[timeOfDay]} min={0} max={1} step={0.01} onValueChange={([v]) => setTimeOfDay(v)} />
             </Box>
             <Flex gap="2" wrap="wrap">
               <Badge>XYZ {stats.pos.map((v) => v.toFixed(0)).join(' / ')}</Badge>
-              <Badge color="blue">已加载 {stats.loaded}</Badge>
-              <Badge color="green">已渲染 {stats.rendered}</Badge>
+              <Badge color="blue">Loaded {stats.loaded}</Badge>
+              <Badge color="green">Rendered {stats.rendered}</Badge>
             </Flex>
             <Flex gap="2" align="end">
               {(['x', 'y', 'z'] as Axis[]).map((axis) => (
@@ -125,10 +131,10 @@ export default function App() {
                   />
                 </Box>
               ))}
-              <Button size="1" variant="soft" onClick={useCurrentPosition}>当前</Button>
-              <Button size="1" disabled={!draftValid} onClick={applyPosition}>前往</Button>
+              <Button size="1" variant="soft" onClick={useCurrentPosition}>Current</Button>
+              <Button size="1" disabled={!draftValid} onClick={applyPosition}>Go</Button>
             </Flex>
-            <Text size="1" color="gray">点击画面锁定鼠标 · WASD 移动 · 空格/Shift 升降 · Ctrl 加速</Text>
+            <Text size="1" color="gray">Click viewport to lock pointer · WASD move · Space/Shift rise/fall · Ctrl fast move</Text>
           </Flex>
         </Card>
       </Box>

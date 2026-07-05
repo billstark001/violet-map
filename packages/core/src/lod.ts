@@ -1,6 +1,7 @@
 import { ChunkColumn, AIR_NAMES } from './world.js';
 import { MeshBuffers } from './types.js';
 import type { Rgb } from './colors.js';
+import { Float32Writer, Uint32Writer } from './meshBufferBuilder.js';
 
 interface LodCell {
   x0: number;
@@ -12,34 +13,34 @@ interface LodCell {
 }
 
 class LodBuilder {
-  pos: number[] = [];
-  uv: number[] = [];
-  col: number[] = [];
-  light: number[] = [];
-  idx: number[] = [];
+  pos = new Float32Writer(1024 * 3);
+  uv = new Float32Writer(1024 * 2);
+  col = new Float32Writer(1024 * 3);
+  light = new Float32Writer(1024 * 2);
+  idx = new Uint32Writer(1024 * 6);
   verts = 0;
 
   vertex(x: number, y: number, z: number, color: Rgb, light: [number, number], shade: number) {
-    this.pos.push(x, y, z);
-    this.uv.push(0, 0);
-    this.col.push(color[0] * shade, color[1] * shade, color[2] * shade);
-    this.light.push(light[0], light[1]);
+    this.pos.push3(x, y, z);
+    this.uv.push2(0, 0);
+    this.col.push3(color[0] * shade, color[1] * shade, color[2] * shade);
+    this.light.push2(light[0], light[1]);
     this.verts++;
   }
 
   quad(verts: [number, number, number][], color: Rgb, light: [number, number], shade: number) {
     for (const v of verts) this.vertex(v[0], v[1], v[2], color, light, shade);
     const b = this.verts - 4;
-    this.idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
+    this.idx.push6(b, b + 2, b + 1, b, b + 3, b + 2);
   }
 
   build(): MeshBuffers {
     return {
-      positions: new Float32Array(this.pos),
-      uvs: new Float32Array(this.uv),
-      colors: new Float32Array(this.col),
-      lights: new Float32Array(this.light),
-      indices: new Uint32Array(this.idx),
+      positions: this.pos.toArray(),
+      uvs: this.uv.toArray(),
+      colors: this.col.toArray(),
+      lights: this.light.toArray(),
+      indices: this.idx.toArray(),
     };
   }
 }

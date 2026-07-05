@@ -23,6 +23,7 @@ export interface ViewerProps {
   dimension: string;
   viewDistance: number;
   lodDistance: number;
+  fastMoveMultiplier: number;
   timeOfDay: number; // 0=正午, 0.5=午夜
   cameraTarget?: CameraPositionRequest;
   onStats?: (s: { loaded: number; rendered: number; pos: [number, number, number] }) => void;
@@ -35,9 +36,18 @@ interface Engine {
   controls: FlyControls;
   materials: TerrainMaterials;
   shared: SharedUniforms;
+  sky: SkyObjects;
   initPayload: Omit<WorkerInit, 'type'>;
   biomes: BiomeMap;
   dimensions: DimensionMap;
+}
+
+interface SkyObjects {
+  group: THREE.Group;
+  sun: THREE.Sprite;
+  moon: THREE.Sprite;
+  stars: THREE.Points;
+  dispose(): void;
 }
 
 function finiteParam(params: URLSearchParams, key: string, fallback: number): number {
@@ -101,6 +111,94 @@ function persistView(view: FlyView, updateUrl: boolean) {
   history.replaceState(null, '', `${location.pathname}?${params.toString()}${location.hash}`);
 }
 
+function makeDiscTexture(inner: string, outer: string): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 96;
+  const ctx = canvas.getContext('2d')!;
+  const g = ctx.createRadialGradient(48, 48, 10, 48, 48, 48);
+  g.addColorStop(0, inner);
+  g.addColorStop(0.42, inner);
+  g.addColorStop(1, outer);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 96, 96);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function createSkyObjects(scene: THREE.Scene): SkyObjects {
+  const group = new THREE.Group();
+  const sunTexture = makeDiscTexture('rgba(255,245,190,1)', 'rgba(255,210,120,0)');
+  const moonTexture = makeDiscTexture('rgba(210,225,255,0.95)', 'rgba(120,150,220,0)');
+  const sun = new THREE.Sprite(new THREE.SpriteMaterial({ map: sunTexture, transparent: true, depthWrite: false }));
+  const moon = new THREE.Sprite(new THREE.SpriteMaterial({ map: moonTexture, transparent: true, depthWrite: false }));
+  sun.scale.set(90, 90, 1);
+  moon.scale.set(70, 70, 1);
+  group.add(sun, moon);
+
+  const starsCount = 900;
+  const positions = new Float32Array(starsCount * 3);
+  let seed = 1337;
+  const rand = () => {
+    seed = Math.imul(seed ^ (seed >>> 15), 2246822507);
+    seed = Math.imul(seed ^ (seed >>> 13), 3266489909);
+    return ((seed ^= seed >>> 16) >>> 0) / 0xffffffff;
+  };
+  for (let i = 0; i < starsCount; i++) {
+    const z = rand() * 2 - 1;
+    const a = rand() * Math.PI * 2;
+    const r = Math.sqrt(Math.max(0, 1 - z * z));
+    positions[i * 3] = Math.cos(a) * r * 900;
+    positions[i * 3 + 1] = Math.max(0.08, z) * 900;
+    positions[i * 3 + 2] = Math.sin(a) * r * 900;
+  }
+  const starGeometry = new THREE.BufferGeometry();
+  starGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const starMaterial = new THREE.PointsMaterial({
+    color: 0xdde6ff,
+    size: 2,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+  });
+  const stars = new THREE.Points(starGeometry, starMaterial);
+  group.add(stars);
+  scene.add(group);
+
+  return {
+    group,
+    sun,
+    moon,
+    stars,
+    dispose() {
+      scene.remove(group);
+      sunTexture.dispose();
+      moonTexture.dispose();
+      sun.material.dispose();
+      moon.material.dispose();
+      starGeometry.dispose();
+      starMaterial.dispose();
+    },
+  };
+}
+
+function updateSkyObjects(sky: SkyObjects, camera: THREE.Camera, timeOfDay: number, dayFactor: number, visible: boolean) {
+  sky.group.position.copy(camera.position);
+  sky.group.visible = visible;
+  if (!visible) return;
+  const angle = timeOfDay * Math.PI * 2;
+  const sunDir = new THREE.Vector3(Math.sin(angle), Math.cos(angle), -0.25).normalize();
+  const moonDir = sunDir.clone().multiplyScalar(-1);
+  sky.sun.position.copy(sunDir.multiplyScalar(850));
+  sky.moon.position.copy(moonDir.multiplyScalar(850));
+  const night = Math.min(1, Math.max(0, (0.55 - dayFactor) / 0.55));
+  (sky.sun.material as THREE.SpriteMaterial).opacity = Math.min(1, Math.max(0, dayFactor * 1.2));
+  (sky.moon.material as THREE.SpriteMaterial).opacity = night * 0.8;
+  (sky.stars.material as THREE.PointsMaterial).opacity = night * 0.85;
+}
+
 export function Viewer(props: ViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<Engine | null>(null);
@@ -133,6 +231,7 @@ export function Viewer(props: ViewerProps) {
 
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x78a7ff);
+        const skyObjects = createSkyObjects(scene);
         const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 2000);
         const initialView = readInitialView();
         const params = new URLSearchParams(location.search);
@@ -149,8 +248,9 @@ export function Viewer(props: ViewerProps) {
         const texture = new THREE.CanvasTexture(atlas.canvas);
         texture.flipY = false;
         texture.magFilter = THREE.NearestFilter;
-        texture.minFilter = THREE.NearestFilter;
-        texture.generateMipmaps = false;
+        texture.minFilter = THREE.LinearMipmapLinearFilter;
+        texture.generateMipmaps = true;
+        texture.anisotropy = Math.min(16, renderer.capabilities.getMaxAnisotropy());
         texture.wrapS = THREE.ClampToEdgeWrapping;
         texture.wrapT = THREE.ClampToEdgeWrapping;
         texture.needsUpdate = true;
@@ -164,7 +264,7 @@ export function Viewer(props: ViewerProps) {
         );
 
         engineRef.current = {
-          renderer, scene, camera, controls, materials, shared, biomes, dimensions,
+          renderer, scene, camera, controls, materials, shared, sky: skyObjects, biomes, dimensions,
           initPayload: {
             bundle, blockInfo, biomes,
             atlasIndex: atlas.index, avgColors: atlas.avgColors,
@@ -211,13 +311,23 @@ export function Viewer(props: ViewerProps) {
           e.shared.fogFar.value = (p.viewDistance + p.lodDistance) * 16 * (dense ? 0.6 : 0.95);
           if (biome) {
             const fog = hexToRgb(biome.effects.fog_color);
-            const skyHex = dimDef?.sky === 'normal' ? biome.effects.sky_color : biome.effects.fog_color;
+            const dimensionSky = dimDef?.sky ?? 'normal';
+            const skyHex = dimensionSky === 'normal'
+              ? biome.effects.sky_color
+              : dimensionSky === 'end'
+                ? 0x05010a
+                : biome.effects.fog_color;
             const sky = hexToRgb(skyHex);
             const bright = 0.15 + 0.85 * (dimDef?.hasSkyLight ? dayFactor : 1);
-            skyColor.setRGB(sky[0] * bright, sky[1] * bright, sky[2] * bright);
+            const skyDim = dimensionSky === 'nether' ? 0.45 : dimensionSky === 'end' ? 0.8 : 1;
+            skyColor.setRGB(sky[0] * bright * skyDim, sky[1] * bright * skyDim, sky[2] * bright * skyDim);
             (scene.background as THREE.Color).lerp(skyColor, 0.05);
-            e.shared.fogColor.value.setRGB(fog[0] * bright, fog[1] * bright, fog[2] * bright)
-              .lerp(scene.background as THREE.Color, dense ? 0 : 0.5);
+            const fogBright = dimensionSky === 'normal' ? bright : 1;
+            e.shared.fogColor.value.setRGB(fog[0] * fogBright, fog[1] * fogBright, fog[2] * fogBright)
+              .lerp(scene.background as THREE.Color, dense ? 0.15 : 0.45);
+            e.shared.envFogColor.value.copy(e.shared.fogColor.value).lerp(scene.background as THREE.Color, dimensionSky === 'normal' ? 0.35 : 0.1);
+            e.shared.envFogDensity.value = dimensionSky === 'normal' ? 0.0016 : dimensionSky === 'nether' ? 0.009 : 0.0035;
+            updateSkyObjects(e.sky, camera, t, dayFactor, dimensionSky === 'normal');
           }
 
           if (now - lastStatsReport > 250) {
@@ -246,6 +356,7 @@ export function Viewer(props: ViewerProps) {
       if (e) {
         e.renderer.setAnimationLoop(null);
         e.controls.dispose();
+        e.sky.dispose();
         e.renderer.dispose();
         e.renderer.domElement.remove();
         engineRef.current = null;
@@ -285,6 +396,10 @@ export function Viewer(props: ViewerProps) {
     }
   }, [props.viewDistance, props.lodDistance]);
 
+  useEffect(() => {
+    engineRef.current?.controls.setFastMultiplier(props.fastMoveMultiplier);
+  }, [props.fastMoveMultiplier]);
+
   // 外部手动设置坐标
   useEffect(() => {
     const e = engineRef.current;
@@ -299,7 +414,7 @@ export function Viewer(props: ViewerProps) {
 
   return (
     <div ref={containerRef} style={{ position: 'absolute', inset: 0 }}>
-      {error && <div style={{ position: 'absolute', top: 8, left: 8, color: '#f66' }}>初始化失败：{error}</div>}
+      {error && <div style={{ position: 'absolute', top: 8, left: 8, color: '#f66' }}>Initialization failed: {error}</div>}
     </div>
   );
 }

@@ -28,15 +28,15 @@ function WorldsPanel() {
   return (
     <Card>
       <Flex justify="between" align="center" mb="3">
-        <Heading size="4">世界列表</Heading>
-        <Button variant="soft" onClick={refresh}>刷新</Button>
+        <Heading size="4">Worlds</Heading>
+        <Button variant="soft" onClick={refresh}>Refresh</Button>
       </Flex>
       <Table.Root>
         <Table.Header>
           <Table.Row>
-            <Table.ColumnHeaderCell>世界</Table.ColumnHeaderCell>
-            <Table.ColumnHeaderCell>维度</Table.ColumnHeaderCell>
-            <Table.ColumnHeaderCell>区域文件数</Table.ColumnHeaderCell>
+            <Table.ColumnHeaderCell>World</Table.ColumnHeaderCell>
+            <Table.ColumnHeaderCell>Dimension</Table.ColumnHeaderCell>
+            <Table.ColumnHeaderCell>Region files</Table.ColumnHeaderCell>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -48,7 +48,7 @@ function WorldsPanel() {
             </Table.Row>
           )))}
           {!worlds.length && (
-            <Table.Row><Table.Cell colSpan={3}><Text color="gray">暂无世界，请上传数据。</Text></Table.Cell></Table.Row>
+            <Table.Row><Table.Cell colSpan={3}><Text color="gray">No worlds found. Upload data to get started.</Text></Table.Cell></Table.Row>
           )}
         </Table.Body>
       </Table.Root>
@@ -75,8 +75,8 @@ function UploadPanel() {
       const res = await fetch('/api/admin/upload', { method: 'POST', body: form });
       const data = await res.json();
       setMessage(res.ok
-        ? { ok: true, text: data.type === 'region' ? `已保存区域文件 ${data.name}` : `已保存区块 (${data.x}, ${data.z})` }
-        : { ok: false, text: data.error ?? '上传失败' });
+        ? { ok: true, text: data.type === 'region' ? `Saved region file ${data.name}` : `Saved chunk (${data.x}, ${data.z})` }
+        : { ok: false, text: data.error ?? 'Upload failed' });
     } catch (e) {
       setMessage({ ok: false, text: (e as Error).message });
     } finally {
@@ -86,16 +86,16 @@ function UploadPanel() {
 
   return (
     <Card>
-      <Heading size="4" mb="3">上传区块数据</Heading>
-      <Text size="2" color="gray">支持标准 .mca 区域文件（文件名须为 r.X.Z.mca），或单区块 NBT（gzip/zlib/未压缩均可，须含 xPos/zPos）。</Text>
+      <Heading size="4" mb="3">Upload Chunk Data</Heading>
+      <Text size="2" color="gray">Supports standard .mca region files named r.X.Z.mca, or individual chunk NBT files using gzip, zlib, or raw NBT with xPos/zPos.</Text>
       <Flex direction="column" gap="3" mt="3" style={{ maxWidth: 420 }}>
-        <TextField.Root placeholder="世界名（如 demo）" value={world} onChange={(e) => setWorld(e.target.value)} />
+        <TextField.Root placeholder="World name, for example demo" value={world} onChange={(e) => setWorld(e.target.value)} />
         <Select.Root value={dim} onValueChange={setDim}>
           <Select.Trigger />
           <Select.Content>{DIMS.map((d) => <Select.Item key={d} value={d}>{d}</Select.Item>)}</Select.Content>
         </Select.Root>
         <input type="file" accept=".mca,.nbt,.dat" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-        <Button onClick={upload} disabled={!file || !world || busy}>{busy ? '上传中…' : '上传'}</Button>
+        <Button onClick={upload} disabled={!file || !world || busy}>{busy ? 'Uploading...' : 'Upload'}</Button>
         {message && (
           <Callout.Root color={message.ok ? 'green' : 'red'}>
             <Callout.Text>{message.text}</Callout.Text>
@@ -122,17 +122,17 @@ function BiomesPanel() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(parsed),
       });
-      setMessage(res.ok ? { ok: true, text: '已保存（前端重新加载后生效）' } : { ok: false, text: `保存失败：${res.status}` });
+      setMessage(res.ok ? { ok: true, text: 'Saved. Reload the viewer to apply changes.' } : { ok: false, text: `Save failed: ${res.status}` });
     } catch (e) {
-      setMessage({ ok: false, text: `JSON 无效：${(e as Error).message}` });
+      setMessage({ ok: false, text: `Invalid JSON: ${(e as Error).message}` });
     }
   };
 
   return (
     <Card>
       <Flex justify="between" align="center" mb="3">
-        <Heading size="4">群系颜色数据（temperature / downfall / sky·fog·water·grass·foliage color）</Heading>
-        <Button onClick={save}>保存</Button>
+        <Heading size="4">Biome Color Data (temperature / downfall / sky / fog / water / grass / foliage)</Heading>
+        <Button onClick={save}>Save</Button>
       </Flex>
       <TextArea value={text} onChange={(e) => setText(e.target.value)} rows={24} style={{ fontFamily: 'monospace' }} />
       {message && (
@@ -148,12 +148,12 @@ export default function App() {
   return (
     <Theme appearance="dark" accentColor="violet">
       <Container size="3" py="5">
-        <Heading mb="4">Violet Map 管理后台</Heading>
+        <Heading mb="4">Violet Map Admin</Heading>
         <Tabs.Root defaultValue="worlds">
           <Tabs.List>
-            <Tabs.Trigger value="worlds">世界</Tabs.Trigger>
-            <Tabs.Trigger value="upload">上传</Tabs.Trigger>
-            <Tabs.Trigger value="biomes">群系数据</Tabs.Trigger>
+            <Tabs.Trigger value="worlds">Worlds</Tabs.Trigger>
+            <Tabs.Trigger value="upload">Upload</Tabs.Trigger>
+            <Tabs.Trigger value="biomes">Biomes</Tabs.Trigger>
           </Tabs.List>
           <Box mt="4">
             <Tabs.Content value="worlds"><WorldsPanel /></Tabs.Content>

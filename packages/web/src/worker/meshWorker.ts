@@ -4,6 +4,7 @@ import {
   computeColumnLight, hexToRgb, meshLodChunk, meshSection, parseChunkColumn,
   resolveBiomeColors, type Rgb, type TintType,
 } from '@violet-map/core';
+import { parseNbt } from '@violet-map/core/nbt';
 import type { SectionMeshMsg, WorkerRequest, WorkerResponse } from './protocol';
 
 const DEFAULT_INFO: BlockInfo = { occludes: false, emit: 0, filter: 0, layer: 'cutout', tint: 'none' };
@@ -88,6 +89,10 @@ function transfersOf(buffers: (MeshBuffers | null | undefined)[]): Transferable[
   return t;
 }
 
+function parseChunkPayload(chunk: ArrayBuffer): ChunkColumn {
+  return parseChunkColumn(parseNbt(new Uint8Array(chunk)));
+}
+
 const post = (msg: WorkerResponse, transfer: Transferable[] = []) =>
   (self as unknown as DedicatedWorkerGlobalScope).postMessage(msg, transfer);
 
@@ -105,7 +110,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
     }
     case 'chunk': {
       try {
-        const col = parseChunkColumn(msg.chunk);
+        const col = parseChunkPayload(msg.chunk);
         columns.set(msg.key, {
           col,
           hasSkyLight: msg.dimension.hasSkyLight,
@@ -142,7 +147,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       const entry = columns.get(msg.key);
       if (!entry) break;
       const mesh = meshLodChunk(entry.col, msg.step, topColorOf, entry.hasSkyLight);
-      post({ type: 'lodResult', key: msg.key, version: msg.version, mesh }, transfersOf([mesh]));
+      post({ type: 'lodResult', key: msg.key, version: msg.version, step: msg.step, mesh }, transfersOf([mesh]));
       break;
     }
     case 'drop':

@@ -4,6 +4,8 @@ export interface SharedUniforms {
   skyDarken: { value: number };
   ambient: { value: number };
   fogColor: { value: THREE.Color };
+  envFogColor: { value: THREE.Color };
+  envFogDensity: { value: number };
   fogNear: { value: number };
   fogFar: { value: number };
 }
@@ -14,13 +16,14 @@ attribute vec2 lightData;
 varying vec2 vUv;
 varying vec3 vColor;
 varying vec2 vLight;
-varying float vFogDepth;
+varying vec3 vWorldPos;
 void main() {
   vUv = uv;
   vColor = tintColor;
   vLight = lightData;
+  vec4 world = modelMatrix * vec4(position, 1.0);
+  vWorldPos = world.xyz;
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
-  vFogDepth = -mv.z;
   gl_Position = projectionMatrix * mv;
 }`;
 
@@ -29,6 +32,8 @@ uniform sampler2D map;
 uniform float skyDarken;
 uniform float ambient;
 uniform vec3 fogColor;
+uniform vec3 envFogColor;
+uniform float envFogDensity;
 uniform float fogNear;
 uniform float fogFar;
 uniform float alphaTest;
@@ -36,17 +41,19 @@ uniform float opacity;
 varying vec2 vUv;
 varying vec3 vColor;
 varying vec2 vLight;
-varying float vFogDepth;
+varying vec3 vWorldPos;
 void main() {
   vec4 tex = texture2D(map, vUv);
   if (tex.a <= alphaTest) discard;
   float l = max(vLight.y, vLight.x * skyDarken);
   float b = ambient + (1.0 - ambient) * l;
-  vec3 lit = tex.rgb * vColor * b;
-  vec3 floorColor = max(tex.rgb * ambient, vec3(ambient * 0.28));
-  vec3 c = max(lit, floorColor);
-  float f = smoothstep(fogNear, fogFar, vFogDepth);
-  gl_FragColor = vec4(mix(c, fogColor, f), tex.a * opacity);
+  vec3 c = tex.rgb * vColor * b;
+  vec3 rel = vWorldPos - cameraPosition;
+  float renderDistanceFog = smoothstep(fogNear, fogFar, length(rel.xz));
+  float environmentalFog = 1.0 - exp(-max(envFogDensity, 0.0) * length(rel));
+  float f = clamp(max(renderDistanceFog, environmentalFog), 0.0, 1.0);
+  vec3 fc = mix(envFogColor, fogColor, renderDistanceFog);
+  gl_FragColor = vec4(mix(c, fc, f), tex.a * opacity);
 }`;
 
 export function createSharedUniforms(): SharedUniforms {
@@ -54,6 +61,8 @@ export function createSharedUniforms(): SharedUniforms {
     skyDarken: { value: 1 },
     ambient: { value: 0.18 },
     fogColor: { value: new THREE.Color(0xc0d8ff) },
+    envFogColor: { value: new THREE.Color(0xc0d8ff) },
+    envFogDensity: { value: 0.0018 },
     fogNear: { value: 100 },
     fogFar: { value: 200 },
   };
@@ -81,7 +90,7 @@ export function createMaterials(atlas: THREE.Texture, shared: SharedUniforms): T
       },
       transparent,
       depthWrite: !transparent,
-      side: THREE.DoubleSide,
+      side: THREE.FrontSide,
     });
   };
 

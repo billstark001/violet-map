@@ -1,5 +1,5 @@
 import type { AssetBundle, AtlasIndex, BlockInfoMap, BlockModelJson, TextureAlphaMap } from '@violet-map/core';
-import { textureUrl } from './api';
+import { fetchTextureAtlas, textureUrl } from './api';
 
 export interface BuiltAtlas {
   canvas: HTMLCanvasElement;
@@ -65,8 +65,27 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 
 /** 构建 16px 网格图集。动画贴图（竖长条）只取第一帧。 */
 export async function buildAtlas(ids: string[]): Promise<BuiltAtlas> {
+  try {
+    const manifest = await fetchTextureAtlas(ids);
+    const img = await loadImage(manifest.image);
+    const canvas = document.createElement('canvas');
+    canvas.width = manifest.width;
+    canvas.height = manifest.height;
+    const ctx = canvas.getContext('2d')!;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, 0, 0);
+    return {
+      canvas,
+      index: manifest.index,
+      avgColors: manifest.avgColors,
+      hasAlpha: manifest.hasAlpha,
+    };
+  } catch (e) {
+    console.warn('batched texture atlas failed; falling back to individual textures', e);
+  }
+
   const TILE = 16;
-  const PAD = 1;
+  const PAD = 8;
   const STRIDE = TILE + PAD * 2;
   const results = await Promise.allSettled(ids.map((id) => loadImage(textureUrl(id))));
   const entries: { id: string; img: HTMLImageElement | null }[] = [{ id: '__missing__', img: null }];

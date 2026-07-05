@@ -15,7 +15,7 @@ export interface WorkerInit {
 }
 export type WorkerRequest =
   | WorkerInit
-  | { type: 'chunk'; key: string; cx: number; cz: number; dimension: DimensionDef; chunk: unknown }
+  | { type: 'chunk'; key: string; cx: number; cz: number; dimension: DimensionDef; chunk: ArrayBuffer }
   | { type: 'mesh'; key: string; version: number }
   | { type: 'lod'; key: string; step: number; version: number }
   | { type: 'drop'; key: string };
@@ -25,6 +25,6 @@ export type WorkerResponse =
   | { type: 'chunkReady'; key: string; biome: string; surfaceY: number }
   | { type: 'chunkError'; key: string; error: string }
   | { type: 'meshResult'; key: string; version: number; sections: SectionMeshMsg[] }
-  | { type: 'lodResult'; key: string; version: number; mesh: MeshBuffers | null };
+  | { type: 'lodResult'; key: string; version: number; step: number; mesh: MeshBuffers | null };
 
 export const chunkKey = (world: string, dim: string, cx: number, cz: number) => `${world}|${dim}|${cx},${cz}`;

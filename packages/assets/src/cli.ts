@@ -1,20 +1,19 @@
 #!/usr/bin/env node
 /**
- * @violet-map/assets — Mojang 官方资源提取 CLI
+ * @violet-map/assets - Mojang asset extraction CLI
  *
- * 用法:
+ * Usage:
  *   pnpm vm-assets extract [--version 1.21.4] [--dir ./assets]
  *   pnpm vm-assets extract-all [--min-version 1.18] [--output ./assets]
  *   pnpm vm-assets list-versions
  *   pnpm vm-assets generate-biomes [--version 1.21.4] [--output ./biomes.json]
  *   pnpm vm-assets generate-dimensions [--version 1.21.4] [--output ./dimensions.json]
  *
- * 提取流程:
- *   1. 从 Mojang version manifest (https://piston-meta.mojang.com/mc/game/version_manifest_v2.json)
- *      获取版本列表。
- *   2. 根据 manifest 中的 client jar URL 下载 jar。
- *   3. 解压 jar 中的 assets/ 目录（blockstates、models、textures）。
- *   4. 使用 minecraft-data 生成 biomes.json / dimensions.json。
+ * Flow:
+ *   1. Read the Mojang version manifest.
+ *   2. Download the selected client jar.
+ *   3. Extract assets/ content for blockstates, models, and textures.
+ *   4. Generate biomes.json / dimensions.json with minecraft-data.
  */
 
 import { createHash } from 'node:crypto';
@@ -66,25 +65,25 @@ async function downloadFile(url: string, dest: string, expectedSha1?: string, dr
   await mkdir(dirname(dest), { recursive: true });
   if (existsSync(dest)) {
     if (!expectedSha1 || await sha1File(dest) === expectedSha1) {
-      console.log(`  跳过 (缓存命中): ${dest}`);
+      console.log(`  Skip (cache hit): ${dest}`);
       return;
     }
-    console.warn(`  缓存 sha1 不匹配，重新下载: ${dest}`);
+    console.warn(`  Cache sha1 mismatch; redownloading: ${dest}`);
     if (!dryRun) await rm(dest, { force: true });
   }
   if (dryRun) {
-    console.log(`  [dry-run] 下载: ${url} -> ${dest}`);
+    console.log(`  [dry-run] Download: ${url} -> ${dest}`);
     return;
   }
-  console.log(`  下载: ${url}`);
+  console.log(`  Download: ${url}`);
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`);
-  if (!res.body) throw new Error(`响应体为空: ${url}`);
+  if (!res.body) throw new Error(`Empty response body: ${url}`);
   const fileStream = createWriteStream(dest);
   await pipeline(Readable.fromWeb(res.body as any), fileStream);
   if (expectedSha1) {
     const actual = await sha1File(dest);
-    if (actual !== expectedSha1) throw new Error(`sha1 校验失败: ${dest} expected=${expectedSha1} actual=${actual}`);
+    if (actual !== expectedSha1) throw new Error(`sha1 verification failed: ${dest} expected=${expectedSha1} actual=${actual}`);
   }
 }
 
@@ -93,7 +92,7 @@ async function getManifest(): Promise<VersionManifest> {
   try {
     return JSON.parse(await readFile(cacheFile, 'utf8'));
   } catch {
-    console.log('获取 version manifest...');
+    console.log('Fetching version manifest...');
     const m = await fetchJson<VersionManifest>(MANIFEST_URL);
     await mkdir(CACHE_DIR, { recursive: true });
     await writeFile(cacheFile, JSON.stringify(m));
@@ -104,12 +103,12 @@ async function getManifest(): Promise<VersionManifest> {
 async function getVersionInfo(versionId: string): Promise<VersionInfo> {
   const manifest = await getManifest();
   const entry = manifest.versions.find((v) => v.id === versionId);
-  if (!entry) throw new Error(`未知版本: ${versionId}。使用 list-versions 查看可用版本。`);
+  if (!entry) throw new Error(`Unknown version: ${versionId}. Use list-versions to inspect available versions.`);
   const cacheFile = join(CACHE_DIR, `${versionId}.json`);
   try {
     return JSON.parse(await readFile(cacheFile, 'utf8'));
   } catch {
-    console.log(`获取版本信息: ${versionId}`);
+    console.log(`Fetching version metadata: ${versionId}`);
     const info = await fetchJson<VersionInfo>(entry.url);
     await writeFile(cacheFile, JSON.stringify(info));
     return info;
@@ -120,12 +119,12 @@ async function getVersionInfo(versionId: string): Promise<VersionInfo> {
 async function listVersions(includeSnapshots: boolean) {
   const manifest = await getManifest();
   const versions = includeSnapshots ? manifest.versions : manifest.versions.filter((v) => v.type === 'release');
-  console.log(`可用版本 (${includeSnapshots ? 'release + snapshot' : 'release only'}):`);
+  console.log(`Available versions (${includeSnapshots ? 'release + snapshot' : 'release only'}):`);
   for (const v of versions) {
     console.log(`  ${v.id} (${v.time.substring(0, 10)})`);
   }
-  console.log(`\n共 ${versions.length} 个版本。`);
-  if (!includeSnapshots) console.log(`\nsnapshot 版本可用 --include-snapshots 查看。`);
+  console.log(`\n${versions.length} versions total.`);
+  if (!includeSnapshots) console.log('\nUse --include-snapshots to include snapshot versions.');
 }
 
 async function extractAssets(versionId: string, outputDir: string, dryRun = false) {
@@ -137,12 +136,12 @@ async function extractAssets(versionId: string, outputDir: string, dryRun = fals
 
   await downloadFile(jarUrl, jarPath, info.downloads.client.sha1, dryRun);
   if (dryRun) {
-    console.log(`  [dry-run] 提取 assets/minecraft/* -> ${assetsOutput}/minecraft`);
+    console.log(`  [dry-run] Extract assets/minecraft/* -> ${assetsOutput}/minecraft`);
     return;
   }
 
   // 使用 unzip 命令仅提取 assets/ 目录
-  console.log(`提取 assets/ 从 ${jarPath}...`);
+  console.log(`Extracting assets/ from ${jarPath}...`);
   await mkdir(assetsOutput, { recursive: true });
   await rm(tmpOutput, { recursive: true, force: true });
   await mkdir(tmpOutput, { recursive: true });
@@ -150,18 +149,18 @@ async function extractAssets(versionId: string, outputDir: string, dryRun = fals
   try {
     await execFile('unzip', ['-oq', jarPath, 'assets/minecraft/*', '-d', tmpOutput], { maxBuffer: 50 * 1024 * 1024 });
   } catch (e: any) {
-    throw new Error(`unzip 失败: ${e.message?.slice(0, 300) ?? e}`);
+    throw new Error(`unzip failed: ${e.message?.slice(0, 300) ?? e}`);
   }
 
   const srcDir = join(tmpOutput, 'assets', 'minecraft');
-  if (!existsSync(srcDir)) throw new Error(`jar 中没有 assets/minecraft: ${jarPath}`);
+  if (!existsSync(srcDir)) throw new Error(`assets/minecraft was not found in jar: ${jarPath}`);
   await rm(join(assetsOutput, 'minecraft'), { recursive: true, force: true });
   await copy(srcDir, join(assetsOutput, 'minecraft'), { recursive: true, force: true });
   await rm(tmpOutput, { recursive: true, force: true });
 
-  console.log(`\n✅ 资源已提取到: ${assetsOutput}`);
-  console.log(`   结构: ${assetsOutput}/minecraft/{blockstates,models,textures}`);
-  console.log(`   可设置环境变量: ASSETS_DIRS=${assetsOutput}`);
+  console.log(`\nAssets extracted to: ${assetsOutput}`);
+  console.log(`   Layout: ${assetsOutput}/minecraft/{blockstates,models,textures}`);
+  console.log(`   Environment example: ASSETS_DIRS=${assetsOutput}`);
 }
 
 async function extractAllAssets(minVersion: string, outputDir: string, includeSnapshots: boolean, dryRun = false) {
@@ -172,16 +171,16 @@ async function extractAllAssets(minVersion: string, outputDir: string, includeSn
     return compareVersions(v.id, minVersion) >= 0;
   });
 
-  console.log(`将提取 ${versions.length} 个版本 (>= ${minVersion})`);
+  console.log(`Extracting ${versions.length} versions (>= ${minVersion})`);
   for (const v of versions) {
     console.log(`\n--- ${v.id} ---`);
     try {
       await extractAssets(v.id, join(outputDir, `minecraft-${v.id}`), dryRun);
     } catch (e) {
-      console.error(`  失败: ${(e as Error).message}`);
+      console.error(`  Failed: ${(e as Error).message}`);
     }
   }
-  console.log('\n✅ 全部完成');
+  console.log('\nDone.');
 }
 
 function compareVersions(a: string, b: string): number {
@@ -227,7 +226,7 @@ async function generateBiomes(versionId: string, outputFile: string) {
 
   await mkdir(dirname(outputFile), { recursive: true });
   await writeFile(outputFile, JSON.stringify(biomeMap, null, 2));
-  console.log(`✅ biomes.json 已生成: ${outputFile} (${Object.keys(biomeMap).length} 个群系)`);
+  console.log(`Generated biomes.json: ${outputFile} (${Object.keys(biomeMap).length} biomes)`);
 }
 
 async function generateDimensions(versionId: string, outputFile: string) {
@@ -258,7 +257,7 @@ async function generateDimensions(versionId: string, outputFile: string) {
 
   await mkdir(dirname(outputFile), { recursive: true });
   await writeFile(outputFile, JSON.stringify(dimensions, null, 2));
-  console.log(`✅ dimensions.json 已生成: ${outputFile}`);
+  console.log(`Generated dimensions.json: ${outputFile}`);
 }
 
 async function importMinecraftData(versionId: string): Promise<any> {
@@ -266,7 +265,7 @@ async function importMinecraftData(versionId: string): Promise<any> {
     const mcDataModule = await import('minecraft-data');
     return mcDataModule.default(versionId);
   } catch {
-    console.error(`minecraft-data 不支持版本 ${versionId}，请尝试较新版本。`);
+    console.error(`minecraft-data does not support ${versionId}; try a newer supported version.`);
     return { biomesArray: [], dimensions: [] };
   }
 }
@@ -287,34 +286,34 @@ async function main() {
   const hasFlag = (name: string): boolean => args.includes(name);
 
   if (!command || command === 'help' || command === '--help' || command === '-h') {
-    console.log(`Violet Map 资源提取工具
+    console.log(`Violet Map Asset CLI
 
-用法:
+Usage:
   pnpm vm-assets list-versions
-    列出所有可用的 release 版本。
+    List all available release versions.
 
   pnpm vm-assets extract [--version <id>] [--dir <dir>] [--dry-run]
-    从 Mojang 官方源下载指定版本的 client.jar 并提取资源文件。
-    --version: MC 版本号（默认: 1.21.4）
-    --dir:     输出目录（默认: ./assets；--output 也可用）
+    Download the selected Mojang client jar and extract assets.
+    --version: Minecraft version (default: 1.21.4)
+    --dir:     Output directory (default: ./assets; --output is also accepted)
 
   pnpm vm-assets extract-all [--min-version <id>] [--dir <dir>] [--include-snapshots] [--dry-run]
-    提取所有 >= 指定版本号的 release 版本资源。
-    --min-version: 最低版本号（默认: 1.18）
+    Extract assets for every release version >= the selected version.
+    --min-version: Minimum version (default: 1.18)
 
   pnpm vm-assets generate-biomes [--version <id>] [--output <file>]
-    使用 minecraft-data 生成 biomes.json（群系颜色数据）。
-    --output: 输出文件（默认: ./biomes.json）
+    Generate biomes.json with biome color data from minecraft-data.
+    --output: Output file (default: ./biomes.json)
 
   pnpm vm-assets generate-dimensions [--version <id>] [--output <file>]
-    生成 dimensions.json（维度定义文件）。
-    --output: 输出文件（默认: ./dimensions.json）
+    Generate dimensions.json.
+    --output: Output file (default: ./dimensions.json)
 
-示例:
-  # 提取 1.21.4 的资源到 server 的 assets 目录
+Examples:
+  # Extract 1.21.4 assets into the server assets directory
   pnpm vm-assets extract --version 1.21.4 --dir ../server/data/assets
 
-  # 生成群系数据
+  # Generate biome data
   pnpm vm-assets generate-biomes --version 1.21.4 --output ../server/data-defaults/versions/1.21.4/biomes.json
 `);
     return;
@@ -349,12 +348,12 @@ async function main() {
       break;
     }
     default:
-      console.error(`未知命令: ${command}。使用 --help 查看帮助。`);
+      console.error(`Unknown command: ${command}. Use --help for usage.`);
       process.exit(1);
   }
 }
 
 main().catch((e) => {
-  console.error('错误:', e.message);
+  console.error('Error:', e.message);
   process.exit(1);
 });
