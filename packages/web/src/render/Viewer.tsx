@@ -147,11 +147,13 @@ export function Viewer(props: ViewerProps) {
         }
 
         const texture = new THREE.CanvasTexture(atlas.canvas);
+        texture.flipY = false;
         texture.magFilter = THREE.NearestFilter;
         texture.minFilter = THREE.NearestFilter;
         texture.generateMipmaps = false;
         texture.wrapS = THREE.ClampToEdgeWrapping;
         texture.wrapT = THREE.ClampToEdgeWrapping;
+        texture.needsUpdate = true;
 
         const shared = createSharedUniforms();
         const materials = createMaterials(texture, shared);

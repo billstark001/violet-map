@@ -116,7 +116,8 @@ export async function buildAtlas(ids: string[]): Promise<BuiltAtlas> {
     avgColors[e.id] = n ? [r / n / 255, g / n / 255, b / n / 255] : [1, 0, 1];
     hasAlpha[e.id] = alpha;
   });
-  return { canvas, index, avgColors, hasAlpha };
+  const ret: BuiltAtlas = { canvas, index, avgColors, hasAlpha };
+  return ret;
 }
 
 /** 载入原版 colormap（256×256 RGBA）。 */
