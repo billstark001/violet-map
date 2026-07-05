@@ -1,5 +1,5 @@
 import {
-  AssetBundle, BlockModelJson, BlockStateRef, Direction, ModelElementJson, normalizeId,
+  AssetBundle, BlockModelJson, BlockStateRef, BlockStateVariantJson, Direction, ModelElementJson, normalizeId,
 } from './types.js';
 
 export interface BakedQuad {
@@ -48,6 +48,18 @@ function rotateDir(dir: Direction, xSteps: number, ySteps: number): Direction {
 }
 function rotXStep(v: Vec3): Vec3 { return [v[0], v[2], 16 - v[1]]; }
 function rotYStep(v: Vec3): Vec3 { return [16 - v[2], v[1], v[0]]; }
+
+function boundsOf(verts: Vec3[]): { f: Vec3; t: Vec3 } {
+  const f: Vec3 = [Infinity, Infinity, Infinity];
+  const t: Vec3 = [-Infinity, -Infinity, -Infinity];
+  for (const v of verts) {
+    for (let i = 0; i < 3; i++) {
+      f[i] = Math.min(f[i], v[i]);
+      t[i] = Math.max(t[i], v[i]);
+    }
+  }
+  return { f, t };
+}
 
 function rotateElementVertex(v: Vec3, rot: NonNullable<ModelElementJson['rotation']>): Vec3 {
   const rad = (rot.angle * Math.PI) / 180;
@@ -155,8 +167,8 @@ export class ModelBaker {
       const quads: BakedQuad[] = [];
       for (const part of bs.multipart as any[]) {
         if (!part.when || matchCondition(part.when, state.properties)) {
-          const v = Array.isArray(part.apply) ? part.apply[0] : part.apply;
-          quads.push(...this.bakeVariant(v));
+          const list = Array.isArray(part.apply) ? part.apply : [part.apply];
+          for (const v of list) quads.push(...this.bakeVariant(v));
         }
       }
       return [{ weight: 1, quads }];
@@ -164,11 +176,11 @@ export class ModelBaker {
     return [{ weight: 1, quads: [] }];
   }
 
-  private bakeVariant(variant: { model: string; x?: number; y?: number }): BakedQuad[] {
-    const key = `${variant.model}|${variant.x ?? 0}|${variant.y ?? 0}`;
+  private bakeVariant(variant: BlockStateVariantJson): BakedQuad[] {
+    const key = `${variant.model}|${variant.x ?? 0}|${variant.y ?? 0}|${variant.uvlock ? 1 : 0}`;
     let baked = this.variantCache.get(key);
     if (!baked) {
-      baked = this.bake(variant.model, ((variant.x ?? 0) / 90) & 3, ((variant.y ?? 0) / 90) & 3);
+      baked = this.bake(variant.model, ((variant.x ?? 0) / 90) & 3, ((variant.y ?? 0) / 90) & 3, !!variant.uvlock);
       this.variantCache.set(key, baked);
     }
     return baked;
@@ -197,13 +209,13 @@ export class ModelBaker {
   }
 
   private resolveTexture(ref: string, textures: Record<string, string>): string {
-    let r = ref;
+    let r = !ref.startsWith('#') && textures[ref] ? `#${ref}` : ref;
     for (let i = 0; i < 16 && r.startsWith('#'); i++) r = textures[r.slice(1)] ?? MISSING_TEXTURE;
     if (r.startsWith('#')) return MISSING_TEXTURE;
     return r === MISSING_TEXTURE ? r : normalizeId(r);
   }
 
-  private bake(modelName: string, rotX: number, rotY: number): BakedQuad[] {
+  private bake(modelName: string, rotX: number, rotY: number, uvlock: boolean): BakedQuad[] {
     const isMissing = modelName === MISSING_TEXTURE;
     const { textures, elements, ao } = isMissing
       ? { textures: {}, elements: MISSING_CUBE_MODEL.elements!, ao: true }
@@ -215,13 +227,20 @@ export class ModelBaker {
         if (!face) continue;
         const dir = dirStr as Direction;
         let verts = FACE_CORNERS[dir](f, t);
-        const uv = face.uv ?? DEFAULT_UV[dir](f, t);
+        let uv = face.uv ?? DEFAULT_UV[dir](f, t);
         let uvCorners: [number, number][] = [[uv[0], uv[1]], [uv[2], uv[1]], [uv[2], uv[3]], [uv[0], uv[3]]];
         const steps = (((face.rotation ?? 0) / 90) & 3);
         if (steps) uvCorners = uvCorners.map((_, i) => uvCorners[(i + steps) % 4]);
         if (el.rotation) verts = verts.map((v) => rotateElementVertex(v, el.rotation!));
         for (let i = 0; i < rotX; i++) verts = verts.map(rotXStep);
         for (let i = 0; i < rotY; i++) verts = verts.map(rotYStep);
+        const bakedFace = normalDir(verts);
+        if (uvlock && (rotX || rotY)) {
+          const b = boundsOf(verts);
+          uv = DEFAULT_UV[bakedFace](b.f, b.t);
+          uvCorners = [[uv[0], uv[1]], [uv[2], uv[1]], [uv[2], uv[3]], [uv[0], uv[3]]];
+          if (steps) uvCorners = uvCorners.map((_, i) => uvCorners[(i + steps) % 4]);
+        }
         const positions = new Float32Array(12);
         for (let i = 0; i < 4; i++) {
           positions[i * 3] = verts[i][0] / 16;
@@ -234,7 +253,7 @@ export class ModelBaker {
           positions, uvs,
           texture: this.resolveTexture(face.texture, textures),
           cullFace: face.cullface ? rotateDir(face.cullface, rotX, rotY) : null,
-          face: normalDir(verts),
+          face: bakedFace,
           tintIndex: face.tintindex ?? -1,
           shade: el.shade ?? true,
           ao,

@@ -39,7 +39,7 @@ varying vec2 vLight;
 varying float vFogDepth;
 void main() {
   vec4 tex = texture2D(map, vUv);
-  if (tex.a < alphaTest) discard;
+  if (tex.a <= alphaTest) discard;
   float l = max(vLight.y, vLight.x * skyDarken);
   float b = ambient + (1.0 - ambient) * l;
   vec3 lit = tex.rgb * vColor * b;
@@ -86,10 +86,14 @@ export function createMaterials(atlas: THREE.Texture, shared: SharedUniforms): T
   };
 
   const white = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+  white.magFilter = THREE.NearestFilter;
+  white.minFilter = THREE.NearestFilter;
+  white.wrapS = THREE.ClampToEdgeWrapping;
+  white.wrapT = THREE.ClampToEdgeWrapping;
   white.needsUpdate = true;
 
   const materials = {
-    opaque: make({ alphaTest: 0 }),
+    opaque: make({ alphaTest: 0.001 }),
     cutout: make({ alphaTest: 0.5 }),
     translucent: make({ alphaTest: 0.01, transparent: true }),
     lod: make({ alphaTest: 0, map: white }),

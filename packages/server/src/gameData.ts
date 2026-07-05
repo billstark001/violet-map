@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 import minecraftData from 'minecraft-data';
 import { BiomeMap, BlockInfo, BlockInfoMap, DimensionMap } from '@violet-map/core';
 import { config } from './config.js';
+import { buildAssetBundle } from './assets.js';
 
 const defaultsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../data-defaults');
-const FALLBACK_MC_DATA_VERSION = '1.20.4';
 
 async function readDataFile<T>(name: string): Promise<T> {
   const candidates = [
@@ -32,20 +32,41 @@ export const readDimensions = () => readDataFile<DimensionMap>('dimensions.json'
 
 let blockInfoCache: BlockInfoMap | null = null;
 
-function loadMinecraftData() {
+function latestSupportedMcDataVersion(): string {
+  const versions = (minecraftData as any).supportedVersions?.pc as string[] | undefined;
+  return versions?.[versions.length - 1] ?? '1.21.11';
+}
+
+function loadMinecraftData(version = config.mcDataVersion) {
   try {
-    return minecraftData(config.mcDataVersion);
+    const data = minecraftData(version);
+    if (!data) throw new Error(`minecraft-data returned no data for ${version}`);
+    return data;
   } catch (e) {
-    if (config.mcDataVersion === FALLBACK_MC_DATA_VERSION) throw e;
-    console.warn(`[violet-map] minecraft-data does not support ${config.mcDataVersion}; falling back to ${FALLBACK_MC_DATA_VERSION}`);
-    return minecraftData(FALLBACK_MC_DATA_VERSION);
+    const fallback = latestSupportedMcDataVersion();
+    if (version === fallback) throw e;
+    console.warn(`[violet-map] minecraft-data does not support ${version}; falling back to ${fallback}`);
+    const data = minecraftData(fallback);
+    if (!data) throw e;
+    return data;
   }
 }
 
 /** 用 minecraft-data 生成方块物理/渲染属性，再套用可编辑的覆盖文件（支持 * 通配）。 */
 export async function buildBlockInfo(): Promise<BlockInfoMap> {
   if (blockInfoCache) return blockInfoCache;
-  const d = loadMinecraftData();
+  let d = loadMinecraftData();
+  try {
+    const bundle = await buildAssetBundle();
+    const latest = latestSupportedMcDataVersion();
+    const latestData = loadMinecraftData(latest);
+    if (Object.keys(bundle.blockstates).length > d.blocksArray.length && latestData.blocksArray.length > d.blocksArray.length) {
+      console.warn(`[violet-map] assets look newer than minecraft-data ${d.version.minecraftVersion}; using ${latest}`);
+      d = latestData;
+    }
+  } catch {
+    // Asset bundle is only used to pick a closer minecraft-data version.
+  }
   const map: BlockInfoMap = {};
   for (const b of d.blocksArray) {
     const transparent = b.transparent === true;

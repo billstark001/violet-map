@@ -15,7 +15,7 @@ let baker: ModelBaker;
 let blockInfo: Record<string, BlockInfo> = {};
 let biomeColors: ReturnType<typeof resolveBiomeColors> = {};
 
-const columns = new Map<string, { col: ChunkColumn; hasSkyLight: boolean; lit: boolean }>();
+const columns = new Map<string, { col: ChunkColumn; hasSkyLight: boolean; litSky: boolean; litBlock: boolean }>();
 const topColorCache = new Map<string, Rgb>();
 
 function infoOf(name: string): BlockInfo {
@@ -55,10 +55,13 @@ function topColorOf(name: string, biome: string): Rgb {
   return color;
 }
 
-function ensureLight(entry: { col: ChunkColumn; hasSkyLight: boolean; lit: boolean }) {
-  if (entry.lit || entry.col.hasStoredLight) { entry.lit = true; return; }
-  computeColumnLight(entry.col, (n) => infoOf(n), entry.hasSkyLight);
-  entry.lit = true;
+function ensureLight(entry: { col: ChunkColumn; hasSkyLight: boolean; litSky: boolean; litBlock: boolean }) {
+  const needSky = entry.hasSkyLight && !entry.litSky;
+  const needBlock = !entry.litBlock;
+  if (!needSky && !needBlock) return;
+  computeColumnLight(entry.col, (n) => infoOf(n), entry.hasSkyLight, { writeSky: needSky, writeBlock: needBlock });
+  entry.litSky = entry.litSky || needSky || !entry.hasSkyLight || entry.col.hasStoredSkyLight;
+  entry.litBlock = entry.litBlock || needBlock || entry.col.hasStoredBlockLight;
 }
 
 function neighborhoodOf(key: string): ChunkNeighborhood | null {
@@ -96,14 +99,19 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       blockInfo = msg.blockInfo;
       avgColors = msg.avgColors;
       biomeColors = resolveBiomeColors(msg.biomes, msg.grassColormap, msg.foliageColormap);
-      res = { baker, info: infoOf, tint: tintOf, atlas: msg.atlasIndex };
+      res = { baker, info: infoOf, tint: tintOf, atlas: msg.atlasIndex, textureHasAlpha: msg.textureHasAlpha };
       topColorCache.clear();
       break;
     }
     case 'chunk': {
       try {
         const col = parseChunkColumn(msg.chunk);
-        columns.set(msg.key, { col, hasSkyLight: msg.dimension.hasSkyLight, lit: false });
+        columns.set(msg.key, {
+          col,
+          hasSkyLight: msg.dimension.hasSkyLight,
+          litSky: !msg.dimension.hasSkyLight || col.hasStoredSkyLight,
+          litBlock: col.hasStoredBlockLight,
+        });
         const surfaceY = col.heightAt(8, 8);
         post({ type: 'chunkReady', key: msg.key, biome: col.getBiome(8, surfaceY, 8), surfaceY });
       } catch (e) {
@@ -133,7 +141,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
     case 'lod': {
       const entry = columns.get(msg.key);
       if (!entry) break;
-      const mesh = meshLodChunk(entry.col, msg.step, topColorOf);
+      const mesh = meshLodChunk(entry.col, msg.step, topColorOf, entry.hasSkyLight);
       post({ type: 'lodResult', key: msg.key, version: msg.version, mesh }, transfersOf([mesh]));
       break;
     }

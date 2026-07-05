@@ -1,5 +1,5 @@
 import type {
-  AssetBundle, AtlasIndex, BiomeMap, BlockInfoMap, DimensionDef, MeshBuffers, RenderLayer,
+  AssetBundle, AtlasIndex, BiomeMap, BlockInfoMap, DimensionDef, MeshBuffers, RenderLayer, TextureAlphaMap,
 } from '@violet-map/core';
 
 export interface WorkerInit {
@@ -9,6 +9,7 @@ export interface WorkerInit {
   biomes: BiomeMap;
   atlasIndex: AtlasIndex;
   avgColors: Record<string, [number, number, number]>;
+  textureHasAlpha: TextureAlphaMap;
   grassColormap: Uint8Array | null;
   foliageColormap: Uint8Array | null;
 }

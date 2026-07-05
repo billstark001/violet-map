@@ -54,6 +54,8 @@ export class ChunkColumn {
   maxSectionY = -1;
   heightmap: BitArray | null = null;
   hasStoredLight = false;
+  hasStoredBlockLight = false;
+  hasStoredSkyLight = false;
   constructor(readonly x: number, readonly z: number) {}
 
   get minY() { return this.minSectionY * 16; }
@@ -107,6 +109,12 @@ function parseProps(p: unknown): Record<string, string> {
   return out;
 }
 
+function hasAnyLight(a: Uint8Array | null): boolean {
+  if (!a) return false;
+  for (const v of a) if (v > 0) return true;
+  return false;
+}
+
 /** 解析 1.18+ 区块 NBT（simplify 后的对象）。 */
 export function parseChunkColumn(root: any): ChunkColumn {
   const r = root.Level ?? root;
@@ -131,6 +139,8 @@ export function parseChunkColumn(root: any): ChunkColumn {
     const blockLight = s.BlockLight ? unpackNibbles(toBytes(s.BlockLight)) : null;
     const skyLight = s.SkyLight ? unpackNibbles(toBytes(s.SkyLight)) : null;
     if (blockLight || skyLight) col.hasStoredLight = true;
+    if (hasAnyLight(blockLight)) col.hasStoredBlockLight = true;
+    if (hasAnyLight(skyLight)) col.hasStoredSkyLight = true;
 
     col.sections.set(sy, new ChunkSection(sy, palette, states, biomePalette, biomeStates, blockLight, skyLight));
     if (first) { col.minSectionY = sy; col.maxSectionY = sy; first = false; }

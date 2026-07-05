@@ -1,6 +1,10 @@
 import { ChunkColumn } from './world.js';
 
 export interface LightBlockInfo { filter: number; emit: number }
+export interface ComputeLightOptions {
+  writeSky?: boolean;
+  writeBlock?: boolean;
+}
 
 /**
  * 单列烘焙光照（天光 + 方块光 BFS）。存档缺失光照数据时的回退方案。
@@ -10,9 +14,12 @@ export function computeColumnLight(
   col: ChunkColumn,
   infoOf: (name: string) => LightBlockInfo,
   hasSkyLight: boolean,
+  opts: ComputeLightOptions = {},
 ): void {
   const H = col.maxY - col.minY;
   if (H <= 0) return;
+  const writeSky = opts.writeSky ?? true;
+  const writeBlock = opts.writeBlock ?? true;
   const size = 256 * H;
   const filter = new Uint8Array(size);
   const sky = new Uint8Array(size);
@@ -35,7 +42,7 @@ export function computeColumnLight(
           if (!info) continue;
           const i = idxOf(lx, y, lz);
           filter[i] = info.filter;
-          if (info.emit > 0) { block[i] = info.emit; emitters.push(i); }
+          if (writeBlock && info.emit > 0) { block[i] = info.emit; emitters.push(i); }
         }
       }
     }
@@ -69,7 +76,7 @@ export function computeColumnLight(
     queue.length = 0;
   };
 
-  if (hasSkyLight) {
+  if (writeSky && hasSkyLight) {
     for (let z = 0; z < 16; z++) {
       for (let x = 0; x < 16; x++) {
         for (let y = H - 1; y >= 0; y--) {
@@ -83,8 +90,10 @@ export function computeColumnLight(
     propagate(sky, true);
   }
 
-  for (const i of emitters) push(i);
-  propagate(block, false);
+  if (writeBlock) {
+    for (const i of emitters) push(i);
+    propagate(block, false);
+  }
 
   // 写回各 section（缺失的补空气 section）
   for (let sy = col.minSectionY; sy <= col.maxSectionY; sy++) {
@@ -102,7 +111,10 @@ export function computeColumnLight(
         }
       }
     }
-    s.blockLight = bl;
-    s.skyLight = sl;
+    if (writeBlock) s.blockLight = bl;
+    if (writeSky && hasSkyLight) s.skyLight = sl;
   }
+  if (writeBlock) col.hasStoredBlockLight = true;
+  if (writeSky && hasSkyLight) col.hasStoredSkyLight = true;
+  if (writeBlock || (writeSky && hasSkyLight)) col.hasStoredLight = true;
 }

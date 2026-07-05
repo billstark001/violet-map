@@ -58,6 +58,7 @@ export interface MeshBuffers {
   indices: Uint32Array;
 }
 export type SectionMeshes = Partial<Record<RenderLayer, MeshBuffers>>;
+export type TextureAlphaMap = Record<string, boolean>;
 
 export interface AssetBundle {
   blockstates: Record<string, unknown>;
@@ -83,6 +84,14 @@ export interface ModelFaceJson {
   cullface?: Direction;
   rotation?: number;
   tintindex?: number;
+}
+
+export interface BlockStateVariantJson {
+  model: string;
+  x?: number;
+  y?: number;
+  uvlock?: boolean;
+  weight?: number;
 }
 
 export const DIRECTIONS: Direction[] = ['down', 'up', 'north', 'south', 'west', 'east'];

@@ -1,10 +1,11 @@
-import type { AssetBundle, AtlasIndex, BlockInfoMap, BlockModelJson } from '@violet-map/core';
+import type { AssetBundle, AtlasIndex, BlockInfoMap, BlockModelJson, TextureAlphaMap } from '@violet-map/core';
 import { textureUrl } from './api';
 
 export interface BuiltAtlas {
   canvas: HTMLCanvasElement;
   index: AtlasIndex;
   avgColors: Record<string, [number, number, number]>;
+  hasAlpha: TextureAlphaMap;
 }
 
 export function collectTextureIds(bundle: AssetBundle, blockInfo: BlockInfoMap): string[] {
@@ -65,13 +66,15 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 /** 构建 16px 网格图集。动画贴图（竖长条）只取第一帧。 */
 export async function buildAtlas(ids: string[]): Promise<BuiltAtlas> {
   const TILE = 16;
+  const PAD = 1;
+  const STRIDE = TILE + PAD * 2;
   const results = await Promise.allSettled(ids.map((id) => loadImage(textureUrl(id))));
   const entries: { id: string; img: HTMLImageElement | null }[] = [{ id: '__missing__', img: null }];
   results.forEach((r, i) => entries.push({ id: ids[i], img: r.status === 'fulfilled' ? r.value : null }));
 
   const cols = Math.ceil(Math.sqrt(entries.length));
   let size = 1;
-  while (size < cols * TILE) size *= 2;
+  while (size < cols * STRIDE) size *= 2;
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = size;
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
@@ -79,28 +82,41 @@ export async function buildAtlas(ids: string[]): Promise<BuiltAtlas> {
 
   const index: AtlasIndex = {};
   const avgColors: Record<string, [number, number, number]> = {};
-  const inset = 0.25 / size; // 防渗色的四分之一像素内缩
+  const hasAlpha: TextureAlphaMap = {};
 
   entries.forEach((e, i) => {
-    const x = (i % cols) * TILE;
-    const y = Math.floor(i / cols) * TILE;
+    const x = (i % cols) * STRIDE;
+    const y = Math.floor(i / cols) * STRIDE;
+    const tx = x + PAD;
+    const ty = y + PAD;
     if (e.img) {
       const w = e.img.width;
-      ctx.drawImage(e.img, 0, 0, w, w, x, y, TILE, TILE);
+      ctx.drawImage(e.img, 0, 0, w, w, tx, ty, TILE, TILE);
     } else {
-      ctx.fillStyle = '#f800f8'; ctx.fillRect(x, y, TILE, TILE);
-      ctx.fillStyle = '#000000'; ctx.fillRect(x, y, 8, 8); ctx.fillRect(x + 8, y + 8, 8, 8);
+      ctx.fillStyle = '#f800f8'; ctx.fillRect(tx, ty, TILE, TILE);
+      ctx.fillStyle = '#000000'; ctx.fillRect(tx, ty, 8, 8); ctx.fillRect(tx + 8, ty + 8, 8, 8);
     }
-    index[e.id] = { u0: x / size + inset, v0: y / size + inset, u1: (x + TILE) / size - inset, v1: (y + TILE) / size - inset };
-    const data = ctx.getImageData(x, y, TILE, TILE).data;
+    ctx.drawImage(canvas, tx, ty, TILE, 1, tx, y, TILE, PAD);
+    ctx.drawImage(canvas, tx, ty + TILE - 1, TILE, 1, tx, ty + TILE, TILE, PAD);
+    ctx.drawImage(canvas, tx, ty, 1, TILE, x, ty, PAD, TILE);
+    ctx.drawImage(canvas, tx + TILE - 1, ty, 1, TILE, tx + TILE, ty, PAD, TILE);
+    ctx.drawImage(canvas, tx, ty, 1, 1, x, y, PAD, PAD);
+    ctx.drawImage(canvas, tx + TILE - 1, ty, 1, 1, tx + TILE, y, PAD, PAD);
+    ctx.drawImage(canvas, tx, ty + TILE - 1, 1, 1, x, ty + TILE, PAD, PAD);
+    ctx.drawImage(canvas, tx + TILE - 1, ty + TILE - 1, 1, 1, tx + TILE, ty + TILE, PAD, PAD);
+    index[e.id] = { u0: tx / size, v0: ty / size, u1: (tx + TILE) / size, v1: (ty + TILE) / size };
+    const data = ctx.getImageData(tx, ty, TILE, TILE).data;
     let r = 0, g = 0, b = 0, n = 0;
+    let alpha = false;
     for (let p = 0; p < data.length; p += 4) {
+      if (data[p + 3] < 250) alpha = true;
       if (data[p + 3] < 32) continue;
       r += data[p]; g += data[p + 1]; b += data[p + 2]; n++;
     }
     avgColors[e.id] = n ? [r / n / 255, g / n / 255, b / n / 255] : [1, 0, 1];
+    hasAlpha[e.id] = alpha;
   });
-  return { canvas, index, avgColors };
+  return { canvas, index, avgColors, hasAlpha };
 }
 
 /** 载入原版 colormap（256×256 RGBA）。 */

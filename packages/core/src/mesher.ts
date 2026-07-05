@@ -2,7 +2,7 @@ import { ModelBaker, BakedQuad, MISSING_TEXTURE } from './model.js';
 import { AIR, AIR_NAMES, ChunkColumn } from './world.js';
 import {
   AtlasIndex, BlockInfo, BlockStateRef, Direction, DIR_VEC, MeshBuffers, RenderLayer,
-  SectionMeshes, TintType,
+  SectionMeshes, TextureAlphaMap, TintType,
 } from './types.js';
 import type { Rgb } from './colors.js';
 
@@ -37,6 +37,7 @@ export interface MesherResources {
   info(name: string): BlockInfo;
   tint(type: TintType, fixed: number | undefined, biome: string): Rgb;
   atlas: AtlasIndex;
+  textureHasAlpha?: TextureAlphaMap;
 }
 
 const SHADE: Record<Direction, number> = { up: 1, down: 0.5, north: 0.8, south: 0.8, west: 0.6, east: 0.6 };
@@ -46,6 +47,7 @@ const TANGENTS: Record<Direction, [number, number]> = {
   up: [0, 2], down: [0, 2], north: [0, 1], south: [0, 1], west: [1, 2], east: [1, 2],
 };
 const WHITE: Rgb = [1, 1, 1];
+const UV_EPS = 1e-4;
 
 /** 原版风格的坐标散列，用于随机变体选择。 */
 export function hash3(x: number, y: number, z: number): number {
@@ -132,10 +134,12 @@ function emitQuad(
       sky = s.sky; block = s.block; ao = s.ao;
     }
     const m = shade * ao;
+    const tu = Math.min(16 - UV_EPS, Math.max(UV_EPS, q.uvs[i * 2]));
+    const tv = Math.min(16 - UV_EPS, Math.max(UV_EPS, q.uvs[i * 2 + 1]));
     builder.vertex(
       lx + q.positions[i * 3], ly + q.positions[i * 3 + 1], lz + q.positions[i * 3 + 2],
-      rect.u0 + (q.uvs[i * 2] / 16) * (rect.u1 - rect.u0),
-      rect.v0 + (q.uvs[i * 2 + 1] / 16) * (rect.v1 - rect.v0),
+      rect.u0 + (tu / 16) * (rect.u1 - rect.u0),
+      rect.v0 + (tv / 16) * (rect.v1 - rect.v0),
       tint[0] * m, tint[1] * m, tint[2] * m, sky, block,
     );
   }
@@ -228,7 +232,8 @@ export function meshSection(
           const tint = q.tintIndex >= 0
             ? res.tint(bi.tint, bi.fixedTint, view.getBiome(wx, wy, wz))
             : WHITE;
-          emitQuad(res, view, builders[bi.layer], q, x, y, z, wx, wy, wz, tint, smoothLighting);
+          const layer = bi.layer === 'opaque' && res.textureHasAlpha?.[q.texture] ? 'cutout' : bi.layer;
+          emitQuad(res, view, builders[layer], q, x, y, z, wx, wy, wz, tint, smoothLighting);
         }
       }
     }
