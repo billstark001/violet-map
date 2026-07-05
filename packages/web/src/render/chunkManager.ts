@@ -2,11 +2,17 @@ import * as THREE from 'three';
 import type { DimensionDef, MeshBuffers, RenderLayer } from '@violet-map/core';
 import { fetchChunkHashes, fetchChunks, type ChunkHashPayload, type ChunkPayload } from '../api';
 import { chunkKey, type SectionMeshMsg, WorkerInit, WorkerRequest, WorkerResponse } from '../worker/protocol';
-import { getCachedFull, getCachedLod, putCachedFull, putCachedLod } from '../meshCache';
+import { getCachedFull, getCachedLod, putCachedFull, putCachedLod, type MeshCacheKeyParts } from '../meshCache';
 import type { TerrainMaterials } from './materials';
 
 type ChunkState = 'checking' | 'hashed' | 'fetching' | 'stored' | 'absent' | 'error';
 const UPDATE_INTERVAL_MS = 100;
+type MeshCacheBaseParts = Omit<MeshCacheKeyParts, 'mode' | 'step'>;
+
+interface CachePartsResult {
+  parts: MeshCacheBaseParts;
+  stable: boolean;
+}
 
 interface ChunkEntry {
   cx: number; cz: number;
@@ -16,10 +22,15 @@ interface ChunkEntry {
   pendingFull: boolean;
   pendingLod: boolean;
   pendingLodStep: number;
+  pendingFullCacheParts: MeshCacheBaseParts | null;
+  pendingLodCacheParts: MeshCacheBaseParts | null;
+  pendingFullDirtyToken: number;
+  pendingLodDirtyToken: number;
   displayed: 'none' | 'full' | 'lod';
   displayedVersion: number;
   displayedLodStep: number;
   dirty: boolean;
+  dirtyToken: number;
   group: THREE.Group | null;
   biome: string;
   surfaceY: number;
@@ -124,10 +135,15 @@ export class ChunkManager {
           pendingFull: false,
           pendingLod: false,
           pendingLodStep: 0,
+          pendingFullCacheParts: null,
+          pendingLodCacheParts: null,
+          pendingFullDirtyToken: 0,
+          pendingLodDirtyToken: 0,
           displayed: 'none',
           displayedVersion: -1,
           displayedLodStep: 0,
           dirty: false,
+          dirtyToken: 0,
           group: null,
           biome: 'minecraft:plains',
           surfaceY: 64,
@@ -149,7 +165,7 @@ export class ChunkManager {
         if (needs && !e.pendingFull && this.meshing < 4) this.requestFull(key, e);
       } else {
         const step = this.lodStepForDistance(w.d);
-        if ((e.displayed !== 'lod' || e.displayedLodStep !== step) && !(e.pendingLod && e.pendingLodStep === step)) {
+        if ((e.displayed !== 'lod' || e.displayedLodStep !== step || e.dirty) && !(e.pendingLod && e.pendingLodStep === step)) {
           this.requestLod(key, e, step);
         }
       }
@@ -169,7 +185,7 @@ export class ChunkManager {
     return 8;
   }
 
-  private cacheParts(e: ChunkEntry) {
+  private cacheParts(e: ChunkEntry): MeshCacheBaseParts {
     return {
       world: this.opts.world,
       dimension: this.opts.dimension,
@@ -180,58 +196,90 @@ export class ChunkManager {
     };
   }
 
-  private fullCacheParts(e: ChunkEntry) {
+  private markDirty(e: ChunkEntry) {
+    e.dirty = true;
+    e.dirtyToken++;
+  }
+
+  private clearDirtyIfUnchanged(e: ChunkEntry, dirtyToken: number) {
+    if (e.dirtyToken === dirtyToken) e.dirty = false;
+  }
+
+  private neighborhoodCacheParts(e: ChunkEntry): CachePartsResult | null {
     if (!e.sourceHash) return null;
     const parts: string[] = [];
+    let stable = true;
     for (let dz = -1; dz <= 1; dz++) {
       for (let dx = -1; dx <= 1; dx++) {
         const n = this.chunks.get(this.key(e.cx + dx, e.cz + dz));
-        if (!n) parts.push('unknown');
+        if (!n) {
+          parts.push('unknown');
+          stable = false;
+        }
         else if (n.state === 'absent' || n.state === 'error') parts.push('missing');
-        else if (n.sourceHash) parts.push(n.sourceHash);
-        else parts.push('unknown');
+        else if (n.state === 'stored' && n.sourceHash) parts.push(n.sourceHash);
+        else {
+          parts.push('unknown');
+          stable = false;
+        }
       }
     }
-    return { ...this.cacheParts(e), sourceHash: parts.join('.') };
+    return { parts: { ...this.cacheParts(e), sourceHash: parts.join('.') }, stable };
   }
 
   private requestFull(key: string, e: ChunkEntry) {
-    const cacheParts = this.fullCacheParts(e);
-    if (!cacheParts) {
+    const cache = this.neighborhoodCacheParts(e);
+    if (!cache) {
       this.enqueueHash(key);
       return;
     }
     e.pendingFull = true;
+    e.pendingFullCacheParts = cache.stable ? cache.parts : null;
+    e.pendingFullDirtyToken = e.dirtyToken;
     e.pendingFullVersion = ++this.versionCounter;
     const version = e.pendingFullVersion;
-    void getCachedFull(cacheParts).then((hit) => {
+    if (!cache.stable) {
+      this.startFullMeshing(key, e, version);
+      return;
+    }
+    void getCachedFull(cache.parts).then((hit) => {
       if (this.disposed) return;
       const current = this.chunks.get(key);
       if (!current || current.pendingFullVersion !== version) return;
       if (hit) {
         current.pendingFull = false;
-        current.dirty = false;
+        current.pendingFullCacheParts = null;
         if (version < current.displayedVersion) return;
         this.displayFull(current, hit, version);
+        this.clearDirtyIfUnchanged(current, current.pendingFullDirtyToken);
         return;
       }
-      current.pendingFull = false;
-      if (current.state !== 'stored') {
-        this.enqueueFetch(key);
-        return;
-      }
-      if (this.meshing >= 4) return;
-      current.dirty = false;
-      current.pendingFull = true;
-      this.meshing++;
-      this.send({ type: 'mesh', key, version });
+      this.startFullMeshing(key, current, version);
     }).catch(() => {
       const current = this.chunks.get(key);
       if (current?.pendingFullVersion === version) {
         current.pendingFull = false;
+        current.pendingFullCacheParts = null;
         if (current.state !== 'stored') this.enqueueFetch(key);
       }
     });
+  }
+
+  private startFullMeshing(key: string, current: ChunkEntry, version: number) {
+    if (current.state !== 'stored') {
+      current.pendingFull = false;
+      current.pendingFullCacheParts = null;
+      this.enqueueFetch(key);
+      return;
+    }
+    if (this.meshing >= 4) {
+      current.pendingFull = false;
+      current.pendingFullCacheParts = null;
+      return;
+    }
+    current.pendingFull = true;
+    this.meshing++;
+    this.send({ type: 'mesh', key, version });
   }
 
   private requestLod(key: string, e: ChunkEntry, step: number) {
@@ -239,24 +287,42 @@ export class ChunkManager {
       this.enqueueHash(key);
       return;
     }
+    if (e.state !== 'stored') {
+      this.enqueueFetch(key);
+      return;
+    }
+    const cache = this.neighborhoodCacheParts(e);
+    if (!cache) {
+      this.enqueueHash(key);
+      return;
+    }
     e.pendingLod = true;
     e.pendingLodStep = step;
+    e.pendingLodCacheParts = cache.stable ? cache.parts : null;
+    e.pendingLodDirtyToken = e.dirtyToken;
     e.pendingLodVersion = ++this.versionCounter;
     const version = e.pendingLodVersion;
-    void getCachedLod({ ...this.cacheParts(e), step }).then((hit) => {
+    if (!cache.stable) {
+      this.send({ type: 'lod', key, step, version });
+      return;
+    }
+    void getCachedLod({ ...cache.parts, step }).then((hit) => {
       if (this.disposed) return;
       const current = this.chunks.get(key);
       if (!current || current.pendingLodVersion !== version || current.pendingLodStep !== step) return;
       if (hit !== undefined) {
         current.pendingLod = false;
         current.pendingLodStep = 0;
+        current.pendingLodCacheParts = null;
         if (version < current.displayedVersion) return;
         this.displayLod(current, hit, version, step);
+        this.clearDirtyIfUnchanged(current, current.pendingLodDirtyToken);
         return;
       }
-      current.pendingLod = false;
-      current.pendingLodStep = 0;
       if (current.state !== 'stored') {
+        current.pendingLod = false;
+        current.pendingLodStep = 0;
+        current.pendingLodCacheParts = null;
         this.enqueueFetch(key);
         return;
       }
@@ -268,6 +334,7 @@ export class ChunkManager {
       if (current?.pendingLodVersion === version && current.pendingLodStep === step) {
         current.pendingLod = false;
         current.pendingLodStep = 0;
+        current.pendingLodCacheParts = null;
         if (current.state !== 'stored') this.enqueueFetch(key);
       }
     });
@@ -447,7 +514,7 @@ export class ChunkManager {
           for (let dx = -1; dx <= 1; dx++) {
             if (!dx && !dz) continue;
             const n = this.chunks.get(this.key(e.cx + dx, e.cz + dz));
-            if (n?.displayed === 'full') n.dirty = true;
+            if (n && (n.displayed !== 'none' || n.pendingFull || n.pendingLod)) this.markDirty(n);
           }
         }
         this.reportStats();
@@ -462,23 +529,34 @@ export class ChunkManager {
       case 'meshResult': {
         this.meshing = Math.max(0, this.meshing - 1);
         const e = this.chunks.get(msg.key);
-        if (e) e.pendingFull = false;
+        const cacheParts = e?.pendingFullVersion === msg.version ? e.pendingFullCacheParts : null;
+        const dirtyToken = e?.pendingFullVersion === msg.version ? e.pendingFullDirtyToken : -1;
+        if (e?.pendingFullVersion === msg.version) {
+          e.pendingFull = false;
+          e.pendingFullCacheParts = null;
+        }
         if (!e || msg.version < e.displayedVersion) return;
         this.displayFull(e, msg.sections, msg.version);
-        const cacheParts = this.fullCacheParts(e);
+        if (dirtyToken >= 0) this.clearDirtyIfUnchanged(e, dirtyToken);
         if (cacheParts) void putCachedFull(cacheParts, msg.sections).catch(() => {});
         this.reportStats();
         break;
       }
       case 'lodResult': {
         const e = this.chunks.get(msg.key);
-        if (e && e.pendingLodStep === msg.step) {
+        let cacheParts: MeshCacheBaseParts | null = null;
+        let dirtyToken = -1;
+        if (e && e.pendingLodStep === msg.step && e.pendingLodVersion === msg.version) {
+          cacheParts = e.pendingLodCacheParts;
+          dirtyToken = e.pendingLodDirtyToken;
           e.pendingLod = false;
           e.pendingLodStep = 0;
+          e.pendingLodCacheParts = null;
         }
         if (!e || msg.version < e.displayedVersion) return;
         this.displayLod(e, msg.mesh, msg.version, msg.step);
-        if (e.sourceHash) void putCachedLod({ ...this.cacheParts(e), step: msg.step }, msg.mesh).catch(() => {});
+        if (dirtyToken >= 0) this.clearDirtyIfUnchanged(e, dirtyToken);
+        if (cacheParts) void putCachedLod({ ...cacheParts, step: msg.step }, msg.mesh).catch(() => {});
         this.reportStats();
         break;
       }

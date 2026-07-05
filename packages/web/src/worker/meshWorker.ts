@@ -189,7 +189,8 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
     case 'lod': {
       const entry = columns.get(msg.key);
       if (!entry) break;
-      const mesh = meshLodChunk(entry.col, msg.step, topColorOf, entry.hasSkyLight);
+      const hood = neighborhoodOf(msg.key);
+      const mesh = hood ? meshLodChunk(entry.col, msg.step, topColorOf, entry.hasSkyLight, hood, infoOf) : null;
       post({ type: 'lodResult', key: msg.key, version: msg.version, step: msg.step, mesh }, transfersOf([mesh]));
       break;
     }

@@ -11,6 +11,7 @@ import { createMaterials, createSharedUniforms, SharedUniforms, TerrainMaterials
 import type { WorkerInit } from '../worker/protocol';
 
 const VIEW_STORAGE_KEY = 'violet-map:view';
+const MESH_CACHE_SCHEMA = 'mesh-v3-neighborhood-lod';
 const SKY_PLANE_FORWARD = new THREE.Vector3(0, 0, 1);
 const celestialFacing = new THREE.Vector3();
 
@@ -144,12 +145,12 @@ function stableStringify(value: unknown): string {
 }
 
 function buildRenderKey(atlasKey: string, bundle: unknown, blockInfo: unknown, grassMap: Uint8Array | null, foliageMap: Uint8Array | null): string {
-  let h = hashString(atlasKey);
+  let h = hashString(`${MESH_CACHE_SCHEMA}:${atlasKey}`);
   h = hashString(stableStringify(bundle), h);
   h = hashString(stableStringify(blockInfo), h);
   h = hashBytes(grassMap, h);
   h = hashBytes(foliageMap, h);
-  return `${atlasKey}:${h.toString(36)}`;
+  return `${MESH_CACHE_SCHEMA}:${atlasKey}:${h.toString(36)}`;
 }
 
 function configurePixelTexture(texture: THREE.Texture): THREE.Texture {
