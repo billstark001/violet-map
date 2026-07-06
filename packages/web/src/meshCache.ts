@@ -1,9 +1,9 @@
 import { openDB, type DBSchema } from 'idb';
-import type { MeshBuffers, RenderLayer } from '@violet-map/core';
-import type { LodMeshMsg, SectionMeshMsg } from './worker/protocol';
+import type { MeshBuffers } from '@violet-map/core';
+import type { SectionMeshMsg } from './worker/protocol';
 
 const DB_NAME = 'violet-map-mesh-cache';
-const DB_VERSION = 2;
+const DB_VERSION = 4;
 const STORE = 'meshes';
 const MAX_ENTRIES = 1600;
 const MAX_BYTES = 384 * 1024 * 1024;
@@ -20,7 +20,7 @@ interface MeshCacheRecord {
   renderKey: string;
   cx: number;
   cz: number;
-  sourceHash: string;
+  contentKey: string;
   mode: CacheMode;
   step: number;
   createdAt: number;
@@ -44,7 +44,7 @@ export interface MeshCacheKeyParts {
   renderKey: string;
   cx: number;
   cz: number;
-  sourceHash: string;
+  contentKey: string;
   mode: CacheMode;
   step?: number;
 }
@@ -66,14 +66,14 @@ function cacheKey(parts: MeshCacheKeyParts): string {
     parts.renderKey,
     parts.cx,
     parts.cz,
-    parts.sourceHash,
+    parts.contentKey,
     parts.mode,
     parts.step ?? 0,
   ].map(encodeURIComponent).join('|');
 }
 
 function bufferBytes(b: MeshBuffers): number {
-  return b.positions.byteLength + b.uvs.byteLength + (b.atlasRects?.byteLength ?? 0)
+  return b.positions.byteLength + (b.uvs?.byteLength ?? 0) + (b.atlasRects?.byteLength ?? 0)
     + b.colors.byteLength + b.lights.byteLength + b.indices.byteLength;
 }
 
@@ -149,28 +149,6 @@ export async function putCachedLod(parts: Omit<MeshCacheKeyParts, 'mode'> & { st
     bytes: lod ? bufferBytes(lod) : 0,
     lod,
   });
-  await pruneCache();
-}
-
-export async function putCachedLodBatch(
-  parts: Omit<MeshCacheKeyParts, 'mode' | 'step'>,
-  lods: LodMeshMsg[],
-): Promise<void> {
-  if (!lods.length) return;
-  const now = Date.now();
-  const db = await dbPromise;
-  const tx = db.transaction(STORE, 'readwrite');
-  await Promise.all(lods.map((entry) => tx.store.put({
-    ...parts,
-    key: cacheKey({ ...parts, mode: 'lod', step: entry.step }),
-    mode: 'lod' as const,
-    step: entry.step,
-    createdAt: now,
-    accessedAt: now,
-    bytes: entry.mesh ? bufferBytes(entry.mesh) : 0,
-    lod: entry.mesh,
-  })));
-  await tx.done;
   await pruneCache();
 }
 

@@ -26,6 +26,9 @@ function unpackNibbles(bytes: Uint8Array): Uint8Array {
 }
 
 export class ChunkSection {
+  private blockIndices: Uint8Array | Uint16Array | null = null;
+  private biomeIndices: Uint8Array | Uint16Array | null = null;
+
   constructor(
     readonly y: number,
     readonly palette: BlockStateRef[],
@@ -38,13 +41,31 @@ export class ChunkSection {
   get isEmpty(): boolean {
     return this.palette.length === 1 && AIR_NAMES.has(this.palette[0].name);
   }
+  blockIndex(x: number, y: number, z: number): number {
+    if (!this.states) return 0;
+    const idx = (y << 8) | (z << 4) | x;
+    if (!this.blockIndices) {
+      const out = this.palette.length <= 256 ? new Uint8Array(4096) : new Uint16Array(4096);
+      for (let i = 0; i < 4096; i++) out[i] = this.states.get(i);
+      this.blockIndices = out;
+    }
+    return this.blockIndices[idx] ?? 0;
+  }
   block(x: number, y: number, z: number): BlockStateRef {
-    if (!this.states) return this.palette[0] ?? AIR;
-    return this.palette[this.states.get((y << 8) | (z << 4) | x)] ?? AIR;
+    return this.palette[this.blockIndex(x, y, z)] ?? AIR;
+  }
+  biomeIndex(x: number, y: number, z: number): number {
+    if (!this.biomeStates) return 0;
+    const idx = ((y >> 2) << 4) | ((z >> 2) << 2) | (x >> 2);
+    if (!this.biomeIndices) {
+      const out = this.biomePalette.length <= 256 ? new Uint8Array(64) : new Uint16Array(64);
+      for (let i = 0; i < 64; i++) out[i] = this.biomeStates.get(i);
+      this.biomeIndices = out;
+    }
+    return this.biomeIndices[idx] ?? 0;
   }
   biome(x: number, y: number, z: number): string {
-    if (!this.biomeStates) return this.biomePalette[0] ?? 'minecraft:plains';
-    return this.biomePalette[this.biomeStates.get(((y >> 2) << 4) | ((z >> 2) << 2) | (x >> 2))] ?? 'minecraft:plains';
+    return this.biomePalette[this.biomeIndex(x, y, z)] ?? 'minecraft:plains';
   }
 }
 

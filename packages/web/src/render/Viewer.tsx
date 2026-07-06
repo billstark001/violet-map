@@ -12,7 +12,7 @@ import { createMaterials, createSharedUniforms, SharedUniforms, TerrainMaterials
 import type { WorkerInit } from '../worker/protocol';
 
 const VIEW_STORAGE_KEY = 'violet-map:view';
-const MESH_CACHE_SCHEMA = 'mesh-v5-greedy-tiled-position16';
+const MESH_CACHE_SCHEMA = 'mesh-v6-packed-integer';
 const SKY_PLANE_FORWARD = new THREE.Vector3(0, 0, 1);
 const celestialFacing = new THREE.Vector3();
 
@@ -40,6 +40,7 @@ interface Engine {
   camera: THREE.PerspectiveCamera;
   controls: FlyControls;
   materials: TerrainMaterials;
+  terrainTexture: THREE.Texture;
   shared: SharedUniforms;
   sky: SkyObjects;
   renderKey: string;
@@ -452,7 +453,7 @@ export function Viewer(props: ViewerProps) {
         );
 
         engineRef.current = {
-          renderer, scene, camera, controls, materials, shared, sky: skyObjects, biomes, dimensions,
+          renderer, scene, camera, controls, materials, terrainTexture: texture, shared, sky: skyObjects, biomes, dimensions,
           renderKey,
           initPayload: {
             bundle, blockInfo, biomes,
@@ -549,6 +550,8 @@ export function Viewer(props: ViewerProps) {
         e.renderer.setAnimationLoop(null);
         e.controls.dispose();
         e.sky.dispose();
+        for (const material of e.materials.all) material.dispose();
+        e.terrainTexture.dispose();
         e.renderer.dispose();
         e.renderer.domElement.remove();
         engineRef.current = null;

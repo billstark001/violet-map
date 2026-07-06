@@ -21,7 +21,6 @@ export type WorkerRequest =
   | { type: 'drop'; key: string };
 
 export interface SectionMeshMsg { sy: number; layers: Partial<Record<RenderLayer, MeshBuffers>>; visibility?: number }
-export interface LodMeshMsg { step: number; mesh: MeshBuffers | null }
 
 export interface WorkerChunkProfile {
   chunkBytes: number;
@@ -46,7 +45,6 @@ export type WorkerResponse =
     version: number;
     step: number;
     mesh: MeshBuffers | null;
-    meshes?: LodMeshMsg[];
     profile?: WorkerMeshProfile;
   };
 

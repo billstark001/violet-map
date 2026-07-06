@@ -11,8 +11,8 @@ export interface SharedUniforms {
 }
 
 const VERT = /* glsl */ `
-uniform float positionScale;
-uniform float positionOffset;
+uniform vec3 positionScale;
+uniform vec3 positionOffset;
 attribute vec3 tintColor;
 attribute vec2 lightData;
 varying vec2 vUv;
@@ -23,7 +23,7 @@ void main() {
   vUv = uv;
   vColor = tintColor;
   vLight = lightData;
-  vec3 scaledPosition = position * positionScale + vec3(positionOffset);
+  vec3 scaledPosition = position * positionScale + positionOffset;
   vec4 world = modelMatrix * vec4(scaledPosition, 1.0);
   vWorldPos = world.xyz;
   vec4 mv = modelViewMatrix * vec4(scaledPosition, 1.0);
@@ -31,8 +31,8 @@ void main() {
 }`;
 
 const TILED_VERT = /* glsl */ `
-uniform float positionScale;
-uniform float positionOffset;
+uniform vec3 positionScale;
+uniform vec3 positionOffset;
 attribute vec3 tintColor;
 attribute vec2 lightData;
 attribute vec4 atlasRect;
@@ -46,7 +46,25 @@ void main() {
   vAtlasRect = atlasRect;
   vColor = tintColor;
   vLight = lightData;
-  vec3 scaledPosition = position * positionScale + vec3(positionOffset);
+  vec3 scaledPosition = position * positionScale + positionOffset;
+  vec4 world = modelMatrix * vec4(scaledPosition, 1.0);
+  vWorldPos = world.xyz;
+  vec4 mv = modelViewMatrix * vec4(scaledPosition, 1.0);
+  gl_Position = projectionMatrix * mv;
+}`;
+
+const COLOR_VERT = /* glsl */ `
+uniform vec3 positionScale;
+uniform vec3 positionOffset;
+attribute vec3 tintColor;
+attribute vec2 lightData;
+varying vec3 vColor;
+varying vec2 vLight;
+varying vec3 vWorldPos;
+void main() {
+  vColor = tintColor;
+  vLight = lightData;
+  vec3 scaledPosition = position * positionScale + positionOffset;
   vec4 world = modelMatrix * vec4(scaledPosition, 1.0);
   vWorldPos = world.xyz;
   vec4 mv = modelViewMatrix * vec4(scaledPosition, 1.0);
@@ -114,6 +132,29 @@ void main() {
   gl_FragColor = vec4(mix(c, fc, f), tex.a * opacity);
 }`;
 
+const COLOR_FRAG = /* glsl */ `
+uniform float skyDarken;
+uniform float ambient;
+uniform vec3 fogColor;
+uniform vec3 envFogColor;
+uniform float envFogDensity;
+uniform float fogNear;
+uniform float fogFar;
+varying vec3 vColor;
+varying vec2 vLight;
+varying vec3 vWorldPos;
+void main() {
+  float l = max(vLight.y, vLight.x * skyDarken);
+  float b = ambient + (1.0 - ambient) * l;
+  vec3 c = vColor * b;
+  vec3 rel = vWorldPos - cameraPosition;
+  float renderDistanceFog = smoothstep(fogNear, fogFar, length(rel.xz));
+  float environmentalFog = 1.0 - exp(-max(envFogDensity, 0.0) * length(rel));
+  float f = clamp(max(renderDistanceFog, environmentalFog), 0.0, 1.0);
+  vec3 fc = mix(envFogColor, fogColor, renderDistanceFog);
+  gl_FragColor = vec4(mix(c, fc, f), 1.0);
+}`;
+
 export function createSharedUniforms(): SharedUniforms {
   return {
     skyDarken: { value: 1 },
@@ -137,24 +178,27 @@ export interface TerrainMaterials {
 
 export function createMaterials(atlas: THREE.Texture, shared: SharedUniforms): TerrainMaterials {
   const make = (opts: {
-    alphaTest: number;
+    alphaTest?: number;
     transparent?: boolean;
     opacity?: number;
     map?: THREE.Texture;
     tiled?: boolean;
-    positionScale?: number;
-    positionOffset?: number;
+    colorOnly?: boolean;
+    positionScale?: THREE.Vector3;
+    positionOffset?: THREE.Vector3;
   }) => {
     const transparent = opts.transparent ?? false;
     return new THREE.ShaderMaterial({
-      vertexShader: opts.tiled ? TILED_VERT : VERT,
-      fragmentShader: opts.tiled ? TILED_FRAG : FRAG,
+      vertexShader: opts.colorOnly ? COLOR_VERT : opts.tiled ? TILED_VERT : VERT,
+      fragmentShader: opts.colorOnly ? COLOR_FRAG : opts.tiled ? TILED_FRAG : FRAG,
       uniforms: {
-        map: { value: opts.map ?? atlas },
-        alphaTest: { value: opts.alphaTest },
-        opacity: { value: opts.opacity ?? 1 },
-        positionScale: { value: opts.positionScale ?? 18 },
-        positionOffset: { value: opts.positionOffset ?? -1 },
+        ...(opts.colorOnly ? {} : {
+          map: { value: opts.map ?? atlas },
+          alphaTest: { value: opts.alphaTest ?? 0 },
+          opacity: { value: opts.opacity ?? 1 },
+        }),
+        positionScale: { value: opts.positionScale ?? new THREE.Vector3(18, 18, 18) },
+        positionOffset: { value: opts.positionOffset ?? new THREE.Vector3(-1, -1, -1) },
         ...shared,
       },
       transparent,
@@ -163,19 +207,16 @@ export function createMaterials(atlas: THREE.Texture, shared: SharedUniforms): T
     });
   };
 
-  const white = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
-  white.magFilter = THREE.NearestFilter;
-  white.minFilter = THREE.NearestFilter;
-  white.wrapS = THREE.ClampToEdgeWrapping;
-  white.wrapT = THREE.ClampToEdgeWrapping;
-  white.needsUpdate = true;
-
   const materials = {
     opaque: make({ alphaTest: 0.001 }),
     opaqueTiled: make({ alphaTest: 0.001, tiled: true }),
     cutout: make({ alphaTest: 0.5 }),
     translucent: make({ alphaTest: 0.01, transparent: true }),
-    lod: make({ alphaTest: 0, map: white, positionScale: 1, positionOffset: 0 }),
+    lod: make({
+      colorOnly: true,
+      positionScale: new THREE.Vector3(16, 4096, 16),
+      positionOffset: new THREE.Vector3(0, -2048, 0),
+    }),
   };
   return { ...materials, all: Object.values(materials) };
 }

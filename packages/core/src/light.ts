@@ -37,7 +37,7 @@ export function computeColumnLight(
       const y = sy * 16 + ly - col.minY;
       for (let lz = 0; lz < 16; lz++) {
         for (let lx = 0; lx < 16; lx++) {
-          const pi = s.states ? s.states.get((ly << 8) | (lz << 4) | lx) : 0;
+          const pi = s.blockIndex(lx, ly, lz);
           const info = infos[pi];
           if (!info) continue;
           const i = idxOf(lx, y, lz);

@@ -33,6 +33,9 @@ const SHADE: Record<Direction, number> = { up: 1, down: 0.5, north: 0.8, south: 
 const EPS = 1e-4;
 const COORD_SCALE = 1024;
 const NO_SKY_PADDING = 1;
+const LOD_POSITION_XZ_SCALE = 16;
+const LOD_POSITION_Y_SCALE = 4096;
+const LOD_POSITION_Y_OFFSET = -2048;
 
 const THIN_DECORATION = new Set([
   'air',
@@ -98,7 +101,6 @@ const THIN_SUFFIXES = [
 
 class LodBuilder {
   pos = new Float32Writer(1024 * 3);
-  uv = new Float32Writer(1024 * 2);
   col = new Float32Writer(1024 * 3);
   light = new Float32Writer(1024 * 2);
   idx = new Uint32Writer(1024 * 6);
@@ -106,7 +108,6 @@ class LodBuilder {
 
   vertex(x: number, y: number, z: number, color: Rgb, light: [number, number], shade: number) {
     this.pos.push3(x, y, z);
-    this.uv.push2(0, 0);
     this.col.push3(color[0] * shade, color[1] * shade, color[2] * shade);
     this.light.push2(light[0], light[1]);
     this.verts++;
@@ -119,14 +120,55 @@ class LodBuilder {
   }
 
   build(): MeshBuffers {
+    const positions = this.pos.toArray();
+    const colors = this.col.toArray();
+    const lights = this.light.toArray();
+    const indices = this.idx.toArray();
     return {
-      positions: this.pos.toArray(),
-      uvs: this.uv.toArray(),
-      colors: this.col.toArray(),
-      lights: this.light.toArray(),
-      indices: this.idx.toArray(),
+      positions: packLodPositions(positions),
+      colors: packNormalizedUint8(colors),
+      lights: packNormalizedUint8(lights),
+      indices: packIndices(indices, this.verts),
+      bounds: boundsOfPositions(positions),
     };
   }
+}
+
+function packNormalizedUint8(values: Float32Array): Uint8Array {
+  const out = new Uint8Array(values.length);
+  for (let i = 0; i < values.length; i++) out[i] = Math.round(Math.min(1, Math.max(0, values[i])) * 255);
+  return out;
+}
+
+function packLodPositions(values: Float32Array): Uint16Array {
+  const out = new Uint16Array(values.length);
+  for (let i = 0; i < values.length; i += 3) {
+    out[i] = Math.round(Math.min(1, Math.max(0, values[i] / LOD_POSITION_XZ_SCALE)) * 65535);
+    out[i + 1] = Math.round(Math.min(1, Math.max(0, (values[i + 1] - LOD_POSITION_Y_OFFSET) / LOD_POSITION_Y_SCALE)) * 65535);
+    out[i + 2] = Math.round(Math.min(1, Math.max(0, values[i + 2] / LOD_POSITION_XZ_SCALE)) * 65535);
+  }
+  return out;
+}
+
+function packIndices(values: Uint32Array, vertexCount: number): Uint16Array | Uint32Array {
+  if (vertexCount > 65535) return values;
+  const out = new Uint16Array(values.length);
+  for (let i = 0; i < values.length; i++) out[i] = values[i];
+  return out;
+}
+
+function boundsOfPositions(values: Float32Array): { min: [number, number, number]; max: [number, number, number] } {
+  const min: [number, number, number] = [Infinity, Infinity, Infinity];
+  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < values.length; i += 3) {
+    min[0] = Math.min(min[0], values[i]);
+    min[1] = Math.min(min[1], values[i + 1]);
+    min[2] = Math.min(min[2], values[i + 2]);
+    max[0] = Math.max(max[0], values[i]);
+    max[1] = Math.max(max[1], values[i + 1]);
+    max[2] = Math.max(max[2], values[i + 2]);
+  }
+  return { min, max };
 }
 
 class LodFaceAccumulator {
@@ -353,27 +395,9 @@ export function meshLodChunk(
   worldView?: LodWorldView,
   infoOf: (name: string) => BlockInfo = () => DEFAULT_INFO,
 ): MeshBuffers | null {
-  return meshLodChunkSteps(col, [step], colorOf, hasSkyLight, worldView, infoOf)[0]?.mesh ?? null;
-}
-
-/**
- * 同一次外表面扫描生成多个 LOD step。
- *
- * 颜色、形状、外部可见性和邻居遮挡判断只做一遍，再把同一张面按不同 step
- * 量化进多个 accumulator。比逐 step 调 meshLodChunk 更适合 worker 预热缓存。
- */
-export function meshLodChunkSteps(
-  col: ChunkColumn,
-  steps: readonly number[],
-  colorOf: (state: BlockStateRef, biome: string) => Rgb,
-  hasSkyLight = true,
-  worldView?: LodWorldView,
-  infoOf: (name: string) => BlockInfo = () => DEFAULT_INFO,
-): { step: number; mesh: MeshBuffers | null }[] {
-  const lods = Array.from(new Set(steps.map((s) => Math.max(1, Math.floor(s))).filter(Number.isFinite)))
-    .sort((a, b) => a - b)
-    .map((s) => ({ step: s, acc: new LodFaceAccumulator() }));
-  if (!lods.length) return [];
+  const lodStep = Math.max(1, Math.floor(step));
+  if (!Number.isFinite(lodStep)) return null;
+  const acc = new LodFaceAccumulator();
   const view = worldView ?? makeLocalView(col);
   const ox = col.x * 16;
   const oz = col.z * 16;
@@ -434,35 +458,30 @@ export function meshLodChunkSteps(
             if (!color) color = colorOf(state, view.getBiome(wx, wy, wz));
             return color;
           };
-          const quantized = lods.map((lod) => ({
-            lod,
-            x0: quantFloor(x, lod.step),
-            x1: quantCeil(x + 1, lod.step),
-            z0: quantFloor(z, lod.step),
-            z1: quantCeil(z + 1, lod.step),
-          }));
+          const x0 = quantFloor(x, lodStep);
+          const x1 = quantCeil(x + 1, lodStep);
+          const z0 = quantFloor(z, lodStep);
+          const z1 = quantCeil(z + 1, lodStep);
           const y0 = wy + shape.minY;
           const y1 = wy + shape.maxY;
           const addFace = (dir: Direction, ay: number, by: number, color: Rgb) => {
-            for (const q of quantized) {
-              switch (dir) {
-                case 'up':
-                case 'down':
-                  q.lod.acc.add(dir, q.x0, q.x1, ay, by, q.z0, q.z1, color);
-                  break;
-                case 'north':
-                  q.lod.acc.add(dir, q.x0, q.x1, ay, by, q.z0, q.z0, color);
-                  break;
-                case 'south':
-                  q.lod.acc.add(dir, q.x0, q.x1, ay, by, q.z1, q.z1, color);
-                  break;
-                case 'west':
-                  q.lod.acc.add(dir, q.x0, q.x0, ay, by, q.z0, q.z1, color);
-                  break;
-                case 'east':
-                  q.lod.acc.add(dir, q.x1, q.x1, ay, by, q.z0, q.z1, color);
-                  break;
-              }
+            switch (dir) {
+              case 'up':
+              case 'down':
+                acc.add(dir, x0, x1, ay, by, z0, z1, color);
+                break;
+              case 'north':
+                acc.add(dir, x0, x1, ay, by, z0, z0, color);
+                break;
+              case 'south':
+                acc.add(dir, x0, x1, ay, by, z1, z1, color);
+                break;
+              case 'west':
+                acc.add(dir, x0, x0, ay, by, z0, z1, color);
+                break;
+              case 'east':
+                acc.add(dir, x1, x1, ay, by, z0, z1, color);
+                break;
             }
           };
 
@@ -507,10 +526,8 @@ export function meshLodChunkSteps(
     }
   }
 
-  return lods.map(({ step: s, acc }) => {
-    if (acc.empty) return { step: s, mesh: null };
-    const builder = new LodBuilder();
-    acc.flush(builder, hasSkyLight ? [1, 0] : [0, 1]);
-    return { step: s, mesh: builder.build() };
-  });
+  if (acc.empty) return null;
+  const builder = new LodBuilder();
+  acc.flush(builder, hasSkyLight ? [1, 0] : [0, 1]);
+  return builder.build();
 }

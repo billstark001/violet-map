@@ -51,12 +51,13 @@ export interface AtlasRect { u0: number; v0: number; u1: number; v1: number }
 export type AtlasIndex = Record<string, AtlasRect>;
 
 export interface MeshBuffers {
-  positions: Float32Array;
-  uvs: Float32Array;
-  atlasRects?: Float32Array;
-  colors: Float32Array;
-  lights: Float32Array;
-  indices: Uint32Array;
+  positions: Uint16Array;
+  uvs?: Uint16Array;
+  atlasRects?: Uint16Array;
+  colors: Uint8Array;
+  lights: Uint8Array;
+  indices: Uint16Array | Uint32Array;
+  bounds?: { min: [number, number, number]; max: [number, number, number] };
 }
 export type SectionMeshes = Partial<Record<RenderLayer, MeshBuffers>>;
 export type TextureAlphaMap = Record<string, boolean>;
