@@ -17,7 +17,7 @@ export interface WorldView {
 /** 3x3 邻域，供跨区块面剔除 / AO / 平滑光照。 */
 export class ChunkNeighborhood implements WorldView {
   private grid: (ChunkColumn | null)[] = new Array(9).fill(null);
-  constructor(readonly baseX: number, readonly baseZ: number) {}
+  constructor(readonly baseX: number, readonly baseZ: number) { }
   set(col: ChunkColumn) {
     const gx = col.x - this.baseX, gz = col.z - this.baseZ;
     if (gx >= 0 && gx < 3 && gz >= 0 && gz < 3) this.grid[gx + gz * 3] = col;
@@ -42,6 +42,7 @@ export interface MesherResources {
 }
 
 const SHADE: Record<Direction, number> = { up: 1, down: 0.5, north: 0.8, south: 0.8, west: 0.6, east: 0.6 };
+const OCCLUSION_DIRECTIONS: Direction[] = ['down', 'up', 'north', 'south', 'west', 'east'];
 const AO_FACTOR = [0.4, 0.6, 0.8, 1.0];
 // 每个面的两个切向轴（坐标分量下标）
 const TANGENTS: Record<Direction, [number, number]> = {
@@ -172,6 +173,14 @@ function isSameFluid(res: MesherResources, texture: string, state: BlockStateRef
   return (state.properties.waterlogged === 'true' || !!bi.waterlogged) && texture.includes('water');
 }
 
+function fullyOccluded(res: MesherResources, view: WorldView, wx: number, wy: number, wz: number): boolean {
+  for (const dir of OCCLUSION_DIRECTIONS) {
+    const d = DIR_VEC[dir];
+    if (!res.info(view.getBlock(wx + d[0], wy + d[1], wz + d[2]).name).occludes) return false;
+  }
+  return true;
+}
+
 function emitFluid(
   res: MesherResources, view: WorldView, builders: Record<RenderLayer, MeshBuilder>,
   fluid: NonNullable<BlockInfo['fluid']>, state: BlockStateRef,
@@ -291,6 +300,16 @@ export function meshSection(
   cx: number, sy: number, cz: number,
   smoothLighting = true,
 ): SectionMeshes {
+  const infoCache = new Map<string, BlockInfo>();
+  const cachedInfo = (name: string): BlockInfo => {
+    let hit = infoCache.get(name);
+    if (!hit) {
+      hit = res.info(name);
+      infoCache.set(name, hit);
+    }
+    return hit;
+  };
+  const localRes: MesherResources = { ...res, info: cachedInfo };
   const builders: Record<RenderLayer, MeshBuilder> = {
     opaque: new MeshBuilder(), cutout: new MeshBuilder(), translucent: new MeshBuilder(),
   };
@@ -301,32 +320,34 @@ export function meshSection(
         const wx = ox + x, wy = oy + y, wz = oz + z;
         const state = view.getBlock(wx, wy, wz);
         if (AIR_NAMES.has(state.name)) continue;
-        const bi = res.info(state.name);
+        const bi = cachedInfo(state.name);
 
         const waterlogged = state.properties.waterlogged === 'true' || !!bi.waterlogged;
         if (bi.fluid) {
-          emitFluid(res, view, builders, bi.fluid, state, x, y, z, wx, wy, wz);
+          emitFluid(localRes, view, builders, bi.fluid, state, x, y, z, wx, wy, wz);
           continue;
         }
         if (waterlogged) {
-          const water = res.info('minecraft:water').fluid;
-          if (water) emitFluid(res, view, builders, water, { name: 'minecraft:water', properties: { level: '0' } }, x, y, z, wx, wy, wz);
+          const water = cachedInfo('minecraft:water').fluid;
+          if (water) emitFluid(localRes, view, builders, water, { name: 'minecraft:water', properties: { level: '0' } }, x, y, z, wx, wy, wz);
         }
 
-        const quads = res.baker.getQuads(state, hash3(wx, wy, wz));
+        if (!waterlogged && bi.occludes && fullyOccluded(localRes, view, wx, wy, wz)) continue;
+
+        const quads = localRes.baker.getQuads(state, hash3(wx, wy, wz));
         for (const q of quads) {
           if (q.cullFace) {
             const d = DIR_VEC[q.cullFace];
             const n = view.getBlock(wx + d[0], wy + d[1], wz + d[2]);
-            const ni = res.info(n.name);
+            const ni = cachedInfo(n.name);
             if (ni.occludes) continue;
             if (bi.layer === 'translucent' && n.name === state.name) continue;
           }
           const tint = q.tintIndex >= 0
-            ? res.tint(bi.tint, bi.fixedTint, view.getBiome(wx, wy, wz))
+            ? localRes.tint(bi.tint, bi.fixedTint, view.getBiome(wx, wy, wz))
             : WHITE;
-          const layer = bi.layer === 'opaque' && res.textureHasAlpha?.[q.texture] ? 'cutout' : bi.layer;
-          emitQuad(res, view, builders[layer], q, x, y, z, wx, wy, wz, tint, smoothLighting);
+          const layer = bi.layer === 'opaque' && localRes.textureHasAlpha?.[q.texture] ? 'cutout' : bi.layer;
+          emitQuad(localRes, view, builders[layer], q, x, y, z, wx, wy, wz, tint, smoothLighting);
         }
       }
     }

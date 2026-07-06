@@ -81,7 +81,7 @@ export default function App() {
   const [world, setWorld] = useState(() => stringSetting('world', ''));
   const [dimension, setDimension] = useState(() => stringSetting('dimension', 'minecraft:overworld'));
   const [viewDistance, setViewDistance] = useState(() => numberSetting('viewDistance', 8));
-  const [lodDistance, setLodDistance] = useState(() => numberSetting('lodDistance', 8));
+  const [lodDistance, setLodDistance] = useState(() => numberSetting('lodDistance', 12));
   const [fastMoveMultiplier, setFastMoveMultiplier] = useState(() => numberSetting('fastMoveMultiplier', 4));
   const [timeOfDay, setTimeOfDay] = useState(() => numberSetting('timeOfDay', 0));
   const [panelCollapsed, setPanelCollapsed] = useState(() => localStorage.getItem(PANEL_STORAGE_KEY) === 'true');
@@ -260,8 +260,8 @@ export default function App() {
                       </Flex>
                       <Box>
                         <Text size="1">{t('renderDistance', { view: viewDistance, lod: lodDistance })}</Text>
-                        <Slider value={[viewDistance]} min={2} max={16} onValueChange={([v]) => setViewDistance(v)} />
-                        <Slider mt="2" value={[lodDistance]} min={0} max={24} onValueChange={([v]) => setLodDistance(v)} />
+                        <Slider value={[viewDistance]} min={2} max={24} onValueChange={([v]) => setViewDistance(v)} />
+                        <Slider mt="2" value={[lodDistance]} min={0} max={40} onValueChange={([v]) => setLodDistance(v)} />
                       </Box>
                       <Box>
                         <Text size="1">{t('fastMove', { value: fastMoveMultiplier.toFixed(1) })}</Text>

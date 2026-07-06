@@ -14,13 +14,19 @@ const FETCH_BATCH_SIZE = 24;
 const MAX_ACTIVE_MESH_TASKS = 4;
 const MAX_MESH_QUEUE = 256;
 const MAX_IO_QUEUE = 768;
-const IO_QUEUE_RETENTION_MS = 1800;
+const RENDER_BACKLOG_LIGHT_LIMIT = 48;
+const RENDER_BACKLOG_SOFT_LIMIT = 96;
+const RENDER_BACKLOG_HARD_LIMIT = 180;
+const IO_QUEUE_RETENTION_MS = 2600;
 const PREDICT_LOOKAHEAD_SECONDS = 0.9;
-const PREDICT_FORWARD_BLOCKS = 48;
-const PREDICT_MARGIN_CHUNKS = 4;
-const UNLOAD_MARGIN_CHUNKS = 5;
-const FORCED_FULL_MIN_RADIUS = 2;
-const FORCED_FULL_MAX_RADIUS = 4;
+const PREDICT_FORWARD_BLOCKS = 64;
+const PREDICT_MARGIN_CHUNKS = 6;
+const UNLOAD_MARGIN_CHUNKS = 8;
+const LOAD_FRUSTUM_EXTRA_DEGREES = 18;
+const LOD_DISTANCE_EXTRA_CHUNKS = 4;
+const FORCED_FULL_MIN_RADIUS = 3;
+const FORCED_FULL_MAX_RADIUS = 5;
+const FORCED_FULL_FAST_RADIUS = 2;
 const SSE_TARGET_PX = 5.5;
 const SSE_REFINE_PX = 6.8;
 const SSE_COARSEN_PX = 3.2;
@@ -85,6 +91,8 @@ interface ChunkEntry {
   lastWantedAt: number;
   lastTier: number;
   lastScore: number;
+  lastTargetStep: LodStep;
+  lastForcedFull: boolean;
 }
 
 export interface ChunkManagerOptions {
@@ -119,6 +127,8 @@ export class ChunkManager {
   private currentFrustum = new THREE.Frustum();
   private predictedFrustum = new THREE.Frustum();
   private predictedCamera = new THREE.PerspectiveCamera();
+  private loadCamera = new THREE.PerspectiveCamera();
+  private predictedLoadCamera = new THREE.PerspectiveCamera();
   private predictedOffset = new THREE.Vector3();
   private tmpForward = new THREE.Vector3();
   private tmpBox = new THREE.Box3();
@@ -173,12 +183,15 @@ export class ChunkManager {
       e.lastWantedAt = now;
       e.lastTier = candidate.tier;
       e.lastScore = candidate.score;
+      e.lastTargetStep = candidate.targetStep;
+      e.lastForcedFull = candidate.forcedFull;
       this.scheduleCandidate(candidate, e);
     }
 
     this.pruneQueues(keepKeys, now);
     this.expirePriorities(now);
     this.evictChunks(ccx, ccz, keepKeys, now);
+    this.flushMeshQueue();
     this.flushHashQueue();
     this.flushFetchQueue();
     this.flushMeshQueue();
@@ -203,22 +216,29 @@ export class ChunkManager {
   }
 
   private updateFrustums(camera: THREE.PerspectiveCamera) {
-    this.frustumMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-    this.currentFrustum.setFromProjectionMatrix(this.frustumMatrix);
+    this.setLoadFrustum(camera, this.loadCamera, this.currentFrustum);
 
     camera.getWorldDirection(this.tmpForward);
     this.predictedOffset.copy(this.cameraVelocity).multiplyScalar(PREDICT_LOOKAHEAD_SECONDS);
     const forwardBoost = Math.min(
       Math.max(PREDICT_FORWARD_BLOCKS, this.cameraVelocity.length() * 0.35),
-      (this.opts.viewDistance + this.opts.lodDistance + PREDICT_MARGIN_CHUNKS) * 16,
+      (this.totalRenderRadius() + PREDICT_MARGIN_CHUNKS) * 16,
     );
     this.predictedOffset.addScaledVector(this.tmpForward, forwardBoost);
 
     this.predictedCamera.copy(camera);
     this.predictedCamera.position.add(this.predictedOffset);
     this.predictedCamera.updateMatrixWorld(true);
-    this.frustumMatrix.multiplyMatrices(this.predictedCamera.projectionMatrix, this.predictedCamera.matrixWorldInverse);
-    this.predictedFrustum.setFromProjectionMatrix(this.frustumMatrix);
+    this.setLoadFrustum(this.predictedCamera, this.predictedLoadCamera, this.predictedFrustum);
+  }
+
+  private setLoadFrustum(source: THREE.PerspectiveCamera, target: THREE.PerspectiveCamera, frustum: THREE.Frustum) {
+    target.copy(source);
+    target.fov = Math.min(120, source.fov + LOAD_FRUSTUM_EXTRA_DEGREES);
+    target.updateProjectionMatrix();
+    target.updateMatrixWorld(true);
+    this.frustumMatrix.multiplyMatrices(target.projectionMatrix, target.matrixWorldInverse);
+    frustum.setFromProjectionMatrix(this.frustumMatrix);
   }
 
   private buildCandidates(camera: THREE.PerspectiveCamera, viewportHeight: number, now: number): ChunkCandidate[] {
@@ -228,7 +248,7 @@ export class ChunkManager {
     const predictedZ = camera.position.z + this.predictedOffset.z;
     const pcx = Math.floor(predictedX / 16);
     const pcz = Math.floor(predictedZ / 16);
-    const total = Math.max(0, this.opts.viewDistance + this.opts.lodDistance);
+    const total = this.totalRenderRadius();
     const scanRadius = total + PREDICT_MARGIN_CHUNKS;
     const forcedRadius = this.forcedFullRadius();
     const movingFast = this.cameraVelocity.length() > FAST_MOVE_BLOCKS_PER_SECOND;
@@ -242,7 +262,7 @@ export class ChunkManager {
       for (let cx = minCx; cx <= maxCx; cx++) {
         const currentCheb = Math.max(Math.abs(cx - ccx), Math.abs(cz - ccz));
         const predictedCheb = Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz));
-        const forcedFull = currentCheb <= (movingFast ? 1 : forcedRadius);
+        const forcedFull = currentCheb <= (movingFast ? FORCED_FULL_FAST_RADIUS : forcedRadius);
         if (!forcedFull && currentCheb > total && predictedCheb > total + PREDICT_MARGIN_CHUNKS) continue;
 
         const currentFrustum = currentCheb <= total && (forcedFull || this.chunkIntersectsFrustum(this.currentFrustum, cx, cz));
@@ -293,6 +313,14 @@ export class ChunkManager {
       FORCED_FULL_MIN_RADIUS,
       Math.min(FORCED_FULL_MAX_RADIUS, Math.floor(this.opts.viewDistance * 0.16)),
     );
+  }
+
+  private effectiveLodDistance(): number {
+    return Math.max(0, this.opts.lodDistance + LOD_DISTANCE_EXTRA_CHUNKS);
+  }
+
+  private totalRenderRadius(): number {
+    return Math.max(0, this.opts.viewDistance + this.effectiveLodDistance());
   }
 
   private screenErrorForStep(step: LodStep, distance: number, camera: THREE.PerspectiveCamera, viewportHeight: number): number {
@@ -382,16 +410,15 @@ export class ChunkManager {
       lastWantedAt: now,
       lastTier: 6,
       lastScore: Infinity,
+      lastTargetStep: 8,
+      lastForcedFull: false,
     };
     this.chunks.set(key, e);
     return e;
   }
 
   private rememberPriority(key: string, priority: ChunkPriority) {
-    const previous = this.priorityByKey.get(key);
-    if (!previous || this.comparePriority(priority, previous) < 0) {
-      this.priorityByKey.set(key, { tier: priority.tier, score: priority.score, updatedAt: priority.updatedAt });
-    }
+    this.priorityByKey.set(key, { tier: priority.tier, score: priority.score, updatedAt: priority.updatedAt });
   }
 
   private comparePriority(a: ChunkPriority, b: ChunkPriority): number {
@@ -414,6 +441,10 @@ export class ChunkManager {
     if (e.state !== 'stored') return;
 
     if (candidate.targetStep === 1) {
+      if (e.displayed === 'none') {
+        this.enqueuePlaceholderLod(candidate.key, e, candidate);
+        return;
+      }
       if ((e.displayed !== 'full' || e.dirty) && !e.pendingFull) {
         this.enqueueMeshTask({ ...candidate, kind: 'full', step: 1 });
       }
@@ -423,6 +454,43 @@ export class ChunkManager {
     const wantsLod = e.displayed !== 'lod' || e.displayedLodStep !== candidate.targetStep || e.dirty;
     if (wantsLod && !(e.pendingLod && e.pendingLodStep === candidate.targetStep)) {
       this.enqueueMeshTask({ ...candidate, kind: 'lod', step: candidate.targetStep });
+    }
+  }
+
+  private placeholderStep(forcedFull: boolean): LodStep {
+    return forcedFull ? 1 : 2;
+  }
+
+  private enqueuePlaceholderLod(key: string, e: ChunkEntry, priority: ChunkPriority & { forcedFull?: boolean }) {
+    if (e.pendingLod) return;
+    const step = this.placeholderStep(!!priority.forcedFull);
+    const existing = this.meshQueue.get(key);
+    if (existing?.kind === 'full') this.meshQueue.delete(key);
+    this.enqueueMeshTask({
+      key,
+      kind: 'lod',
+      step,
+      tier: Math.min(priority.tier, priority.forcedFull ? 0 : 2),
+      score: priority.score - 0.5,
+      updatedAt: priority.updatedAt,
+    });
+  }
+
+  private scheduleStoredFromLastPriority(key: string, e: ChunkEntry) {
+    if (e.state !== 'stored' || performance.now() - e.lastWantedAt > IO_QUEUE_RETENTION_MS) return;
+    const priority = this.priorityByKey.get(key) ?? { tier: e.lastTier, score: e.lastScore, updatedAt: e.lastWantedAt };
+    if (e.lastTargetStep === 1) {
+      if (e.displayed === 'none') {
+        this.enqueuePlaceholderLod(key, e, { ...priority, forcedFull: e.lastForcedFull });
+      } else if ((e.displayed !== 'full' || e.dirty) && !e.pendingFull) {
+        this.enqueueMeshTask({ key, kind: 'full', step: 1, ...priority });
+      }
+      return;
+    }
+    const step = e.lastTargetStep;
+    const wantsLod = e.displayed !== 'lod' || e.displayedLodStep !== step || e.dirty;
+    if (wantsLod && !(e.pendingLod && e.pendingLodStep === step)) {
+      this.enqueueMeshTask({ key, kind: 'lod', step, ...priority });
     }
   }
 
@@ -440,12 +508,50 @@ export class ChunkManager {
     return a.step - b.step;
   }
 
+  private priorityFresh(e: ChunkEntry, maxAge = IO_QUEUE_RETENTION_MS): boolean {
+    return performance.now() - e.lastWantedAt <= maxAge;
+  }
+
+  private shouldStartMeshTask(task: MeshTask, e: ChunkEntry): boolean {
+    if (!this.priorityFresh(e)) return false;
+    if (task.kind === 'full') {
+      return e.lastTargetStep === 1 && !e.pendingFull && (e.displayed !== 'full' || e.dirty);
+    }
+    if (e.pendingLod && e.pendingLodStep === task.step) return false;
+    if (e.lastTargetStep === 1) {
+      return e.displayed === 'none' && task.step === this.placeholderStep(e.lastForcedFull);
+    }
+    if (task.step > e.lastTargetStep && e.displayed !== 'none') return false;
+    if (e.displayed === 'full' && e.lastTier <= 3 && !e.dirty) return false;
+    return true;
+  }
+
+  private shouldApplyFullResult(e: ChunkEntry, version: number): boolean {
+    if (version < e.displayedVersion || !this.priorityFresh(e)) return false;
+    return e.lastTargetStep === 1;
+  }
+
+  private shouldApplyLodResult(e: ChunkEntry, step: LodStep, version: number): boolean {
+    if (version < e.displayedVersion || !this.priorityFresh(e)) return false;
+    if (e.lastTargetStep === 1) return e.displayed === 'none' && step === this.placeholderStep(e.lastForcedFull);
+    if (step > e.lastTargetStep && e.displayed !== 'none') return false;
+    if (e.displayed === 'full' && e.lastTier <= 3 && !e.dirty) return false;
+    return true;
+  }
+
+  private rescheduleStoredIfFresh(key: string, e: ChunkEntry) {
+    if (!this.priorityFresh(e)) return;
+    this.scheduleStoredFromLastPriority(key, e);
+    this.flushMeshQueue();
+  }
+
   private flushMeshQueue() {
     while (this.activeMeshTasks < MAX_ACTIVE_MESH_TASKS && this.meshQueue.size > 0) {
       const task = this.nextMeshTask();
       if (!task) return;
       const e = this.chunks.get(task.key);
       if (!e || e.state !== 'stored') continue;
+      if (!this.shouldStartMeshTask(task, e)) continue;
       if (task.kind === 'full') {
         if (e.displayed === 'full' && !e.dirty) continue;
         if (e.pendingFull) continue;
@@ -513,7 +619,7 @@ export class ChunkManager {
   }
 
   private evictChunks(ccx: number, ccz: number, keepKeys: Set<string>, now: number) {
-    const total = Math.max(0, this.opts.viewDistance + this.opts.lodDistance);
+    const total = this.totalRenderRadius();
     const unloadDistance = total + PREDICT_MARGIN_CHUNKS + UNLOAD_MARGIN_CHUNKS;
     for (const [key, e] of this.chunks) {
       const d = Math.max(Math.abs(e.cx - ccx), Math.abs(e.cz - ccz));
@@ -533,8 +639,8 @@ export class ChunkManager {
   }
 
   private maxTrackedChunks(): number {
-    const total = this.opts.viewDistance + this.opts.lodDistance + PREDICT_MARGIN_CHUNKS;
-    return Math.max(512, Math.min(2600, Math.round(total * total * 1.7)));
+    const total = this.totalRenderRadius() + PREDICT_MARGIN_CHUNKS;
+    return Math.max(768, Math.min(4200, Math.round(total * total * 2.1)));
   }
 
   private dropEntry(key: string, e: ChunkEntry) {
@@ -621,7 +727,10 @@ export class ChunkManager {
         current.pendingFull = false;
         current.pendingFullCacheParts = null;
         this.finishActiveMesh();
-        if (version < current.displayedVersion) return;
+        if (!this.shouldApplyFullResult(current, version)) {
+          this.rescheduleStoredIfFresh(key, current);
+          return;
+        }
         this.displayFull(current, hit, version);
         this.clearDirtyIfUnchanged(current, current.pendingFullDirtyToken);
         return;
@@ -644,6 +753,13 @@ export class ChunkManager {
       current.pendingFullCacheParts = null;
       this.enqueueFetch(key);
       this.finishActiveMesh();
+      return;
+    }
+    if (!this.shouldApplyFullResult(current, version)) {
+      current.pendingFull = false;
+      current.pendingFullCacheParts = null;
+      this.finishActiveMesh();
+      this.rescheduleStoredIfFresh(key, current);
       return;
     }
     current.pendingFull = true;
@@ -678,6 +794,14 @@ export class ChunkManager {
     e.pendingLodVersion = ++this.versionCounter;
     const version = e.pendingLodVersion;
     if (!cache.stable) {
+      if (!this.shouldApplyLodResult(e, step, version)) {
+        e.pendingLod = false;
+        e.pendingLodStep = 0;
+        e.pendingLodCacheParts = null;
+        this.finishActiveMesh();
+        this.rescheduleStoredIfFresh(key, e);
+        return;
+      }
       this.markWorkerMesh(version);
       this.send({ type: 'lod', key, step, version });
       return;
@@ -694,7 +818,10 @@ export class ChunkManager {
         current.pendingLodStep = 0;
         current.pendingLodCacheParts = null;
         this.finishActiveMesh();
-        if (version < current.displayedVersion) return;
+        if (!this.shouldApplyLodResult(current, step, version)) {
+          this.rescheduleStoredIfFresh(key, current);
+          return;
+        }
         this.displayLod(current, hit, version, step);
         this.clearDirtyIfUnchanged(current, current.pendingLodDirtyToken);
         return;
@@ -709,6 +836,14 @@ export class ChunkManager {
       }
       current.pendingLod = true;
       current.pendingLodStep = step;
+      if (!this.shouldApplyLodResult(current, step, version)) {
+        current.pendingLod = false;
+        current.pendingLodStep = 0;
+        current.pendingLodCacheParts = null;
+        this.finishActiveMesh();
+        this.rescheduleStoredIfFresh(key, current);
+        return;
+      }
       this.markWorkerMesh(version);
       this.send({ type: 'lod', key, step, version });
     }).catch(() => {
@@ -733,8 +868,13 @@ export class ChunkManager {
   }
 
   private flushHashQueue() {
-    while (this.checking < MAX_HASH_BATCHES && this.hashQueue.size > 0) {
-      const keys = this.sortKeys(this.hashQueue).slice(0, HASH_BATCH_SIZE);
+    const backlog = this.renderBacklog();
+    const maxBatches = backlog >= RENDER_BACKLOG_SOFT_LIMIT ? 1 : MAX_HASH_BATCHES;
+    const batchSize = backlog >= RENDER_BACKLOG_SOFT_LIMIT ? Math.max(12, Math.floor(HASH_BATCH_SIZE / 2)) : HASH_BATCH_SIZE;
+    const maxTier = this.ioTierLimit('hash', backlog);
+    while (this.checking < maxBatches && this.hashQueue.size > 0) {
+      const keys = this.nextIoBatch(this.hashQueue, batchSize, maxTier);
+      if (!keys.length) break;
       for (const key of keys) this.hashQueue.delete(key);
       void this.fetchHashBatch(keys);
     }
@@ -758,8 +898,13 @@ export class ChunkManager {
   }
 
   private flushFetchQueue() {
-    while (this.fetching < MAX_FETCH_BATCHES && this.fetchQueue.size > 0) {
-      const keys = this.sortKeys(this.fetchQueue).slice(0, FETCH_BATCH_SIZE);
+    const backlog = this.renderBacklog();
+    const maxBatches = backlog >= RENDER_BACKLOG_LIGHT_LIMIT ? 1 : MAX_FETCH_BATCHES;
+    const batchSize = backlog >= RENDER_BACKLOG_LIGHT_LIMIT ? Math.max(6, Math.floor(FETCH_BATCH_SIZE / 3)) : FETCH_BATCH_SIZE;
+    const maxTier = this.ioTierLimit('fetch', backlog);
+    while (this.fetching < maxBatches && this.fetchQueue.size > 0) {
+      const keys = this.nextIoBatch(this.fetchQueue, batchSize, maxTier);
+      if (!keys.length) break;
       for (const key of keys) this.fetchQueue.delete(key);
       void this.fetchBatch(keys);
     }
@@ -777,6 +922,38 @@ export class ChunkManager {
       const bp = this.priorityByKey.get(b) ?? { tier: 99, score: Infinity, updatedAt: 0 };
       return this.comparePriority(ap, bp);
     });
+  }
+
+  private nextIoBatch(queue: Set<string>, batchSize: number, maxTier: number): string[] {
+    const out: string[] = [];
+    for (const key of this.sortKeys(queue)) {
+      const priority = this.priorityByKey.get(key) ?? { tier: 99, score: Infinity, updatedAt: 0 };
+      if (priority.tier > maxTier) continue;
+      out.push(key);
+      if (out.length >= batchSize) break;
+    }
+    return out;
+  }
+
+  private ioTierLimit(kind: 'hash' | 'fetch', backlog: number): number {
+    if (kind === 'fetch') {
+      if (backlog >= RENDER_BACKLOG_HARD_LIMIT) return 2;
+      if (backlog >= RENDER_BACKLOG_SOFT_LIMIT) return 3;
+      if (backlog >= RENDER_BACKLOG_LIGHT_LIMIT) return 4;
+      return 99;
+    }
+    if (backlog >= RENDER_BACKLOG_HARD_LIMIT) return 3;
+    if (backlog >= RENDER_BACKLOG_SOFT_LIMIT) return 4;
+    return 99;
+  }
+
+  private renderBacklog(): number {
+    let waitingStored = 0;
+    for (const e of this.chunks.values()) {
+      if (e.state !== 'stored' || e.lastTier > 4) continue;
+      if (e.displayed === 'none' || e.dirty || e.pendingFull || e.pendingLod) waitingStored++;
+    }
+    return this.meshQueue.size + this.activeMeshTasks + waitingStored;
   }
 
   private chunkBuffer(data: Uint8Array): ArrayBuffer {
@@ -897,6 +1074,8 @@ export class ChunkManager {
             if (n && (n.displayed !== 'none' || n.pendingFull || n.pendingLod)) this.markDirty(n);
           }
         }
+        this.scheduleStoredFromLastPriority(msg.key, e);
+        this.flushMeshQueue();
         this.reportStats();
         break;
       }
@@ -915,10 +1094,15 @@ export class ChunkManager {
         if (!e || !matched) return;
         e.pendingFull = false;
         e.pendingFullCacheParts = null;
-        if (!e || msg.version < e.displayedVersion) return;
+        const shouldDisplay = this.shouldApplyFullResult(e, msg.version);
+        if (cacheParts) void putCachedFull(cacheParts, msg.sections).catch(() => { });
+        if (!shouldDisplay) {
+          this.rescheduleStoredIfFresh(msg.key, e);
+          this.reportStats();
+          return;
+        }
         this.displayFull(e, msg.sections, msg.version);
         if (dirtyToken >= 0) this.clearDirtyIfUnchanged(e, dirtyToken);
-        if (cacheParts) void putCachedFull(cacheParts, msg.sections).catch(() => { });
         this.reportStats();
         break;
       }
@@ -936,9 +1120,15 @@ export class ChunkManager {
         }
         if (!e || dirtyToken < 0 || msg.version < e.displayedVersion) return;
         const step = (LOD_STEPS.includes(msg.step as LodStep) ? msg.step : 8) as LodStep;
+        const shouldDisplay = this.shouldApplyLodResult(e, step, msg.version);
+        if (cacheParts) void putCachedLod({ ...cacheParts, step }, msg.mesh).catch(() => { });
+        if (!shouldDisplay) {
+          this.rescheduleStoredIfFresh(msg.key, e);
+          this.reportStats();
+          return;
+        }
         this.displayLod(e, msg.mesh, msg.version, step);
         if (dirtyToken >= 0) this.clearDirtyIfUnchanged(e, dirtyToken);
-        if (cacheParts) void putCachedLod({ ...cacheParts, step }, msg.mesh).catch(() => { });
         this.reportStats();
         break;
       }
@@ -982,6 +1172,10 @@ export class ChunkManager {
     e.displayed = 'lod';
     e.displayedVersion = version;
     e.displayedLodStep = step;
+    if (e.lastTargetStep === 1) {
+      this.scheduleStoredFromLastPriority(this.key(e.cx, e.cz), e);
+      this.flushMeshQueue();
+    }
     this.reportStats();
   }
 
@@ -1014,7 +1208,7 @@ export class ChunkManager {
   private reportStats() {
     let loaded = 0, rendered = 0;
     for (const e of this.chunks.values()) {
-      if (e.state === 'stored' || e.state === 'hashed') loaded++;
+      if (e.state === 'stored') loaded++;
       if (e.group) rendered++;
     }
     this.onStats?.({ loaded, rendered });

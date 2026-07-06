@@ -32,6 +32,7 @@ const DEFAULT_INFO: BlockInfo = { occludes: true, emit: 0, filter: 15, layer: 'o
 const SHADE: Record<Direction, number> = { up: 1, down: 0.5, north: 0.8, south: 0.8, west: 0.6, east: 0.6 };
 const EPS = 1e-4;
 const COORD_SCALE = 1024;
+const NO_SKY_PADDING = 1;
 
 const THIN_DECORATION = new Set([
   'air',
@@ -147,15 +148,7 @@ class LodFaceAccumulator {
     if (Math.abs(z1 - z0) <= EPS && (dir === 'up' || dir === 'down' || dir === 'west' || dir === 'east')) return;
     if (Math.abs(y1 - y0) <= EPS && dir !== 'up' && dir !== 'down') return;
 
-    const key = [
-      dir,
-      coordKey(x0),
-      coordKey(x1),
-      coordKey(y0),
-      coordKey(y1),
-      coordKey(z0),
-      coordKey(z1),
-    ].join('|');
+    const key = `${dir}:${coordKey(x0)}:${coordKey(x1)}:${coordKey(y0)}:${coordKey(y1)}:${coordKey(z0)}:${coordKey(z1)}`;
     const hit = this.buckets.get(key);
     if (hit) {
       hit.r += color[0];
@@ -277,15 +270,74 @@ function quantCeil(v: number, step: number): number {
   return Math.max(0, Math.min(16, Math.ceil((v - EPS) / step) * step));
 }
 
-function subtractInterval(minY: number, maxY: number, cover: LodShape | null): [number, number][] {
-  if (!cover) return [[minY, maxY]];
-  const c0 = Math.max(minY, cover.minY);
-  const c1 = Math.min(maxY, cover.maxY);
-  if (c1 <= c0 + EPS) return [[minY, maxY]];
-  const out: [number, number][] = [];
-  if (c0 > minY + EPS) out.push([minY, c0]);
-  if (c1 < maxY - EPS) out.push([c1, maxY]);
-  return out;
+function makeNoSkyExteriorMask(
+  view: LodWorldView,
+  col: ChunkColumn,
+  shapeFor: (state: BlockStateRef) => LodShape | null,
+): (wx: number, wy: number, wz: number) => boolean {
+  const minX = col.x * 16 - NO_SKY_PADDING;
+  const minZ = col.z * 16 - NO_SKY_PADDING;
+  const minY = col.minY - NO_SKY_PADDING;
+  const sizeX = 16 + NO_SKY_PADDING * 2;
+  const sizeZ = 16 + NO_SKY_PADDING * 2;
+  const sizeY = Math.max(1, col.maxY - col.minY + NO_SKY_PADDING * 2);
+  const strideY = sizeX * sizeZ;
+  const total = strideY * sizeY;
+  const exterior = new Uint8Array(total);
+  const queue = new Int32Array(total);
+  let head = 0;
+  let tail = 0;
+
+  const idx = (x: number, y: number, z: number) => x + z * sizeX + y * strideY;
+  const passable = (x: number, y: number, z: number) => {
+    const state = view.getBlock(minX + x, minY + y, minZ + z);
+    return shapeFor(state) === null;
+  };
+  const push = (x: number, y: number, z: number) => {
+    const i = idx(x, y, z);
+    if (exterior[i] || !passable(x, y, z)) return;
+    exterior[i] = 1;
+    queue[tail++] = i;
+  };
+
+  for (let y = 0; y < sizeY; y++) {
+    for (let z = 0; z < sizeZ; z++) {
+      push(0, y, z);
+      push(sizeX - 1, y, z);
+    }
+    for (let x = 1; x < sizeX - 1; x++) {
+      push(x, y, 0);
+      push(x, y, sizeZ - 1);
+    }
+  }
+  for (let z = 1; z < sizeZ - 1; z++) {
+    for (let x = 1; x < sizeX - 1; x++) {
+      push(x, 0, z);
+      push(x, sizeY - 1, z);
+    }
+  }
+
+  while (head < tail) {
+    const i = queue[head++];
+    const y = Math.floor(i / strideY);
+    const rem = i - y * strideY;
+    const z = Math.floor(rem / sizeX);
+    const x = rem - z * sizeX;
+    if (x > 0) push(x - 1, y, z);
+    if (x + 1 < sizeX) push(x + 1, y, z);
+    if (y > 0) push(x, y - 1, z);
+    if (y + 1 < sizeY) push(x, y + 1, z);
+    if (z > 0) push(x, y, z - 1);
+    if (z + 1 < sizeZ) push(x, y, z + 1);
+  }
+
+  return (wx: number, wy: number, wz: number) => {
+    const x = wx - minX;
+    const y = wy - minY;
+    const z = wz - minZ;
+    if (x < 0 || x >= sizeX || y < 0 || y >= sizeY || z < 0 || z >= sizeZ) return true;
+    return exterior[idx(x, y, z)] > 0;
+  };
 }
 
 /**
@@ -306,14 +358,36 @@ export function meshLodChunk(
   const acc = new LodFaceAccumulator();
   const ox = col.x * 16;
   const oz = col.z * 16;
+  const infoCache = new Map<string, BlockInfo>();
+  const shapeCache = new WeakMap<BlockStateRef, LodShape | null>();
+
+  const cachedInfo = (name: string): BlockInfo => {
+    let hit = infoCache.get(name);
+    if (!hit) {
+      hit = infoOf(name);
+      infoCache.set(name, hit);
+    }
+    return hit;
+  };
+  const cachedShape = (state: BlockStateRef): LodShape | null => {
+    if (shapeCache.has(state)) return shapeCache.get(state) ?? null;
+    const shape = shapeOf(state, cachedInfo(state.name));
+    shapeCache.set(state, shape);
+    return shape;
+  };
 
   const neighborShape = (wx: number, wy: number, wz: number): LodShape | null => {
     const state = view.getBlock(wx, wy, wz);
-    return shapeOf(state, infoOf(state.name));
+    return cachedShape(state);
   };
+  const skyExterior = hasSkyLight && view.getSkyLight
+    ? (wx: number, wy: number, wz: number) => view.getSkyLight!(wx, wy, wz) > 0
+    : null;
+  let noSkyExterior: ((wx: number, wy: number, wz: number) => boolean) | null = null;
   const exterior = (wx: number, wy: number, wz: number): boolean => {
-    if (!hasSkyLight || !view.getSkyLight) return true;
-    return view.getSkyLight(wx, wy, wz) > 0;
+    if (skyExterior) return skyExterior(wx, wy, wz);
+    noSkyExterior ??= makeNoSkyExteriorMask(view, col, cachedShape);
+    return noSkyExterior(wx, wy, wz);
   };
 
   for (const [sy, section] of col.sections) {
@@ -323,13 +397,24 @@ export function meshLodChunk(
       for (let z = 0; z < 16; z++) {
         for (let x = 0; x < 16; x++) {
           const state = section.block(x, ly, z);
-          const info = infoOf(state.name);
-          const shape = shapeOf(state, info);
+          const shape = cachedShape(state);
           if (!shape) continue;
 
           const wx = ox + x;
           const wz = oz + z;
-          const color = colorOf(state, view.getBiome(wx, wy, wz));
+          const exteriorUp = exterior(wx, wy + 1, wz);
+          const exteriorDown = exterior(wx, wy - 1, wz);
+          const exteriorNorth = exterior(wx, wy, wz - 1);
+          const exteriorSouth = exterior(wx, wy, wz + 1);
+          const exteriorWest = exterior(wx - 1, wy, wz);
+          const exteriorEast = exterior(wx + 1, wy, wz);
+          if (!exteriorUp && !exteriorDown && !exteriorNorth && !exteriorSouth && !exteriorWest && !exteriorEast) continue;
+
+          let color: Rgb | null = null;
+          const getColor = () => {
+            if (!color) color = colorOf(state, view.getBiome(wx, wy, wz));
+            return color;
+          };
           const x0 = quantFloor(x, s);
           const x1 = quantCeil(x + 1, s);
           const z0 = quantFloor(z, s);
@@ -337,41 +422,57 @@ export function meshLodChunk(
           const y0 = wy + shape.minY;
           const y1 = wy + shape.maxY;
 
-          const above = neighborShape(wx, wy + 1, wz);
-          if ((!above || above.minY > EPS) && exterior(wx, wy + 1, wz)) acc.add('up', x0, x1, y1, y1, z0, z1, color);
+          if (exteriorUp) {
+            const above = neighborShape(wx, wy + 1, wz);
+            if (!above || above.minY > EPS) acc.add('up', x0, x1, y1, y1, z0, z1, getColor());
+          }
 
-          const below = neighborShape(wx, wy - 1, wz);
-          if ((!below || below.maxY < 1 - EPS) && exterior(wx, wy - 1, wz)) acc.add('down', x0, x1, y0, y0, z0, z1, color);
+          if (exteriorDown) {
+            const below = neighborShape(wx, wy - 1, wz);
+            if (!below || below.maxY < 1 - EPS) acc.add('down', x0, x1, y0, y0, z0, z1, getColor());
+          }
 
-          const side = (dir: Direction, nx: number, nz: number) => {
+          const side = (dir: Direction, nx: number, nz: number, exposed: boolean) => {
+            if (!exposed) return;
             const cover = neighborShape(wx + nx, wy, wz + nz);
-            for (const [a, b] of subtractInterval(shape.minY, shape.maxY, cover)) {
+            const emit = (a: number, b: number) => {
               const ay = wy + a;
               const by = wy + b;
-              if (!exterior(wx + nx, Math.floor((ay + by) * 0.5), wz + nz)) continue;
               switch (dir) {
                 case 'north':
-                  acc.add('north', x0, x1, ay, by, quantFloor(z, s), quantFloor(z, s), color);
+                  acc.add('north', x0, x1, ay, by, z0, z0, getColor());
                   break;
                 case 'south':
-                  acc.add('south', x0, x1, ay, by, quantCeil(z + 1, s), quantCeil(z + 1, s), color);
+                  acc.add('south', x0, x1, ay, by, z1, z1, getColor());
                   break;
                 case 'west':
-                  acc.add('west', quantFloor(x, s), quantFloor(x, s), ay, by, z0, z1, color);
+                  acc.add('west', x0, x0, ay, by, z0, z1, getColor());
                   break;
                 case 'east':
-                  acc.add('east', quantCeil(x + 1, s), quantCeil(x + 1, s), ay, by, z0, z1, color);
+                  acc.add('east', x1, x1, ay, by, z0, z1, getColor());
                   break;
                 default:
                   break;
               }
+            };
+            if (!cover) {
+              emit(shape.minY, shape.maxY);
+              return;
             }
+            const c0 = Math.max(shape.minY, cover.minY);
+            const c1 = Math.min(shape.maxY, cover.maxY);
+            if (c1 <= c0 + EPS) {
+              emit(shape.minY, shape.maxY);
+              return;
+            }
+            if (c0 > shape.minY + EPS) emit(shape.minY, c0);
+            if (c1 < shape.maxY - EPS) emit(c1, shape.maxY);
           };
 
-          side('north', 0, -1);
-          side('south', 0, 1);
-          side('west', -1, 0);
-          side('east', 1, 0);
+          side('north', 0, -1, exteriorNorth);
+          side('south', 0, 1, exteriorSouth);
+          side('west', -1, 0, exteriorWest);
+          side('east', 1, 0, exteriorEast);
         }
       }
     }
