@@ -171,7 +171,10 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       if (!res) break;
       const entry = columns.get(msg.key);
       const hood = neighborhoodOf(msg.key);
-      if (!entry || !hood) break;
+      if (!entry || !hood) {
+        post({ type: 'meshResult', key: msg.key, version: msg.version, sections: [] });
+        break;
+      }
       const { col } = entry;
       const sections: SectionMeshMsg[] = [];
       for (let sy = col.minSectionY; sy <= col.maxSectionY; sy++) {
@@ -188,7 +191,10 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
     }
     case 'lod': {
       const entry = columns.get(msg.key);
-      if (!entry) break;
+      if (!entry) {
+        post({ type: 'lodResult', key: msg.key, version: msg.version, step: msg.step, mesh: null });
+        break;
+      }
       const hood = neighborhoodOf(msg.key);
       const mesh = hood ? meshLodChunk(entry.col, msg.step, topColorOf, entry.hasSkyLight, hood, infoOf) : null;
       post({ type: 'lodResult', key: msg.key, version: msg.version, step: msg.step, mesh }, transfersOf([mesh]));

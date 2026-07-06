@@ -20,6 +20,7 @@ export interface StoredFileInfo {
 export interface WorldStorage {
   readonly kind: 'osfs' | 's3';
   read(filePath: string): Promise<Uint8Array | null>;
+  readRange(filePath: string, start: number, length: number): Promise<Uint8Array | null>;
   write(filePath: string, bytes: Uint8Array, contentType?: string): Promise<void>;
   delete(filePath: string): Promise<void>;
   deletePrefix(prefix: string): Promise<number>;
@@ -58,6 +59,20 @@ class OsFsStorage implements WorldStorage {
       return new Uint8Array(await fs.readFile(this.abs(filePath)));
     } catch {
       return null;
+    }
+  }
+
+  async readRange(filePath: string, start: number, length: number): Promise<Uint8Array | null> {
+    let handle: fs.FileHandle | null = null;
+    try {
+      handle = await fs.open(this.abs(filePath), 'r');
+      const buffer = Buffer.alloc(Math.max(0, length));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, Math.max(0, start));
+      return new Uint8Array(buffer.buffer, buffer.byteOffset, bytesRead).slice();
+    } catch {
+      return null;
+    } finally {
+      await handle?.close().catch(() => { });
     }
   }
 
@@ -183,6 +198,21 @@ class S3WorldStorage implements WorldStorage {
   async read(filePath: string): Promise<Uint8Array | null> {
     try {
       const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: this.key(filePath) }));
+      return bodyToBytes(res.Body);
+    } catch {
+      return null;
+    }
+  }
+
+  async readRange(filePath: string, start: number, length: number): Promise<Uint8Array | null> {
+    try {
+      const begin = Math.max(0, start);
+      const end = Math.max(begin, begin + Math.max(0, length) - 1);
+      const res = await this.client.send(new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: this.key(filePath),
+        Range: `bytes=${begin}-${end}`,
+      }));
       return bodyToBytes(res.Body);
     } catch {
       return null;

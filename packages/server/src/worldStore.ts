@@ -58,6 +58,12 @@ interface RegionCacheEntry {
   bytes: Uint8Array;
 }
 
+interface RegionHeaderCacheEntry {
+  validator: string;
+  hash: string;
+  header: Uint8Array;
+}
+
 interface ChunkCacheEntry {
   sourcePath: string;
   fileHash: string;
@@ -67,9 +73,15 @@ interface ChunkCacheEntry {
 
 const fileHashCache = new Map<string, HashCacheEntry>();
 const regionCache = new Map<string, RegionCacheEntry>();
+const regionHeaderCache = new Map<string, RegionHeaderCacheEntry>();
+const regionReadInflight = new Map<string, Promise<RegionCacheEntry | null>>();
+const regionHeaderInflight = new Map<string, Promise<RegionHeaderCacheEntry | null>>();
+const regionDirCache = new Map<string, string>();
 const chunkNbtCache = new Map<string, ChunkCacheEntry>();
 const MAX_REGION_CACHE = 16;
+const MAX_REGION_HEADER_CACHE = 256;
 const MAX_CHUNK_NBT_CACHE = 512;
+const REGION_LOCATION_BYTES = 4096;
 
 export function assertWorldName(world: string) {
   if (!WORLD_RE.test(world)) throw new Error('invalid world name');
@@ -88,6 +100,10 @@ function validator(info: StoredFileInfo): string {
   return `${info.size}:${info.modifiedAt ?? ''}:${info.etag ?? ''}`;
 }
 
+function sourceHashForInfo(info: StoredFileInfo): string {
+  return `v2:${validator(info)}`;
+}
+
 function rememberLru<K, V>(map: Map<K, V>, key: K, value: V, max: number): V {
   map.delete(key);
   map.set(key, value);
@@ -99,6 +115,9 @@ function invalidatePath(filePath: string) {
   const clean = cleanStoragePath(filePath);
   fileHashCache.delete(clean);
   regionCache.delete(clean);
+  regionHeaderCache.delete(clean);
+  regionReadInflight.delete(clean);
+  regionHeaderInflight.delete(clean);
   for (const [key, entry] of chunkNbtCache) {
     if (entry.sourcePath === clean) chunkNbtCache.delete(key);
   }
@@ -137,10 +156,17 @@ async function prefixHasRegionFiles(prefix: string): Promise<boolean> {
 
 async function regionDir(world: string, dim: string): Promise<string> {
   assertWorldName(world);
+  const key = `${world}|${dim}`;
+  const cached = regionDirCache.get(key);
+  if (cached) return cached;
   const candidates = dimensionRegionCandidates(dim).map((sub) => `${world}/${sub}`);
   for (const candidate of candidates) {
-    if (await prefixHasRegionFiles(candidate)) return candidate;
+    if (await prefixHasRegionFiles(candidate)) {
+      regionDirCache.set(key, candidate);
+      return candidate;
+    }
   }
+  regionDirCache.set(key, candidates[0]);
   return candidates[0];
 }
 
@@ -154,8 +180,12 @@ function regionPathFromDir(dir: string, rx: number, rz: number): string {
 }
 
 function hasRegionChunk(region: Uint8Array, localX: number, localZ: number): boolean {
-  if (region.length < 8192) return false;
-  const view = new DataView(region.buffer, region.byteOffset, region.byteLength);
+  return hasRegionChunkHeader(region, localX, localZ);
+}
+
+function hasRegionChunkHeader(header: Uint8Array, localX: number, localZ: number): boolean {
+  if (header.length < REGION_LOCATION_BYTES) return false;
+  const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
   const idx = (localX & 31) + ((localZ & 31) << 5);
   const loc = view.getUint32(idx * 4);
   return (loc >>> 8) !== 0 && (loc & 0xff) !== 0;
@@ -182,11 +212,58 @@ async function readRegionFile(filePath: string): Promise<RegionCacheEntry | null
     regionCache.set(clean, hit);
     return hit;
   }
-  const bytes = await worldStorage.read(clean);
-  if (!bytes) return null;
-  const hash = sha256(bytes);
-  fileHashCache.set(clean, { validator: v, hash });
-  return rememberLru(regionCache, clean, { validator: v, hash, bytes }, MAX_REGION_CACHE);
+  const pending = regionReadInflight.get(clean);
+  if (pending) return pending;
+  const load = (async () => {
+    const bytes = await worldStorage.read(clean);
+    if (!bytes) return null;
+    const hash = sourceHashForInfo(info);
+    if (bytes.length >= REGION_LOCATION_BYTES) {
+      rememberLru(regionHeaderCache, clean, {
+        validator: v,
+        hash,
+        header: bytes.subarray(0, REGION_LOCATION_BYTES).slice(),
+      }, MAX_REGION_HEADER_CACHE);
+    }
+    return rememberLru(regionCache, clean, { validator: v, hash, bytes }, MAX_REGION_CACHE);
+  })();
+  regionReadInflight.set(clean, load);
+  try {
+    return await load;
+  } finally {
+    regionReadInflight.delete(clean);
+  }
+}
+
+async function readRegionHeader(filePath: string): Promise<RegionHeaderCacheEntry | null> {
+  const info = await worldStorage.stat(filePath);
+  if (!info) return null;
+  const clean = cleanStoragePath(filePath);
+  const v = validator(info);
+  const fullHit = regionCache.get(clean);
+  if (fullHit?.validator === v) {
+    return { validator: v, hash: fullHit.hash, header: fullHit.bytes.subarray(0, REGION_LOCATION_BYTES) };
+  }
+  const hit = regionHeaderCache.get(clean);
+  if (hit?.validator === v) {
+    regionHeaderCache.delete(clean);
+    regionHeaderCache.set(clean, hit);
+    return hit;
+  }
+  const pending = regionHeaderInflight.get(clean);
+  if (pending) return pending;
+  const load = (async () => {
+    const header = await worldStorage.readRange(clean, 0, REGION_LOCATION_BYTES);
+    if (!header || header.length < REGION_LOCATION_BYTES) return null;
+    const value: RegionHeaderCacheEntry = { validator: v, hash: sourceHashForInfo(info), header };
+    return rememberLru(regionHeaderCache, clean, value, MAX_REGION_HEADER_CACHE);
+  })();
+  regionHeaderInflight.set(clean, load);
+  try {
+    return await load;
+  } finally {
+    regionHeaderInflight.delete(clean);
+  }
 }
 
 async function readJson<T>(filePath: string): Promise<T | null> {
@@ -292,54 +369,124 @@ export async function listRegions(world: string, dim: string): Promise<{ x: numb
   return [...out.values()].sort((a, b) => a.x - b.x || a.z - b.z);
 }
 
-export async function getChunkMetadata(world: string, dim: string, cx: number, cz: number): Promise<ChunkMetadata> {
-  const chunkPath = `${chunkOverrideDir(world, dim)}/c.${cx}.${cz}.nbt`;
-  const chunkInfo = await worldStorage.stat(chunkPath);
-  if (chunkInfo) {
-    const fileHash = await hashFileInfo(chunkInfo);
-    return { cx, cz, hash: fileHash, fileHash, source: 'chunk', sourcePath: chunkPath };
-  }
+export async function getChunkMetadataBatch(
+  world: string,
+  dim: string,
+  chunks: { cx: number; cz: number }[],
+): Promise<ChunkMetadata[]> {
+  assertWorldName(world);
+  const regionBase = await regionDir(world, dim);
+  const out = new Array<ChunkMetadata>(chunks.length);
+  const byRegion = new Map<string, { rx: number; rz: number; filePath: string; items: { index: number; cx: number; cz: number }[] }>();
 
-  const rx = cx >> 5;
-  const rz = cz >> 5;
-  const filePath = regionPathFromDir(await regionDir(world, dim), rx, rz);
-  const region = await readRegionFile(filePath);
-  if (!region || !hasRegionChunk(region.bytes, cx & 31, cz & 31)) return { cx, cz, missing: true };
-  return {
-    cx,
-    cz,
-    hash: region.hash,
-    fileHash: region.hash,
-    source: 'region',
-    sourcePath: filePath,
-    region: { x: rx, z: rz },
-  };
+  await Promise.all(chunks.map(async ({ cx, cz }, index) => {
+    if (!Number.isInteger(cx) || !Number.isInteger(cz)) {
+      out[index] = { cx, cz, missing: true };
+      return;
+    }
+
+    const chunkPath = `${chunkOverrideDir(world, dim)}/c.${cx}.${cz}.nbt`;
+    const chunkInfo = await worldStorage.stat(chunkPath);
+    if (chunkInfo) {
+      const fileHash = sourceHashForInfo(chunkInfo);
+      out[index] = { cx, cz, hash: fileHash, fileHash, source: 'chunk', sourcePath: chunkPath };
+      return;
+    }
+
+    const rx = cx >> 5;
+    const rz = cz >> 5;
+    const key = `${rx},${rz}`;
+    const filePath = regionPathFromDir(regionBase, rx, rz);
+    const group = byRegion.get(key) ?? { rx, rz, filePath, items: [] };
+    group.items.push({ index, cx, cz });
+    byRegion.set(key, group);
+  }));
+
+  await Promise.all([...byRegion.values()].map(async (group) => {
+    const region = await readRegionHeader(group.filePath);
+    for (const item of group.items) {
+      if (!region || !hasRegionChunkHeader(region.header, item.cx & 31, item.cz & 31)) {
+        out[item.index] = { cx: item.cx, cz: item.cz, missing: true };
+        continue;
+      }
+      out[item.index] = {
+        cx: item.cx,
+        cz: item.cz,
+        hash: region.hash,
+        fileHash: region.hash,
+        source: 'region',
+        sourcePath: group.filePath,
+        region: { x: group.rx, z: group.rz },
+      };
+    }
+  }));
+
+  return out;
+}
+
+export async function getChunkMetadata(world: string, dim: string, cx: number, cz: number): Promise<ChunkMetadata> {
+  return (await getChunkMetadataBatch(world, dim, [{ cx, cz }]))[0] ?? { cx, cz, missing: true };
+}
+
+export async function getChunksNbtWithMetaBatch(
+  world: string,
+  dim: string,
+  chunks: { cx: number; cz: number }[],
+): Promise<(ChunkReadResult | null)[]> {
+  const metas = await getChunkMetadataBatch(world, dim, chunks);
+  const out = new Array<ChunkReadResult | null>(metas.length).fill(null);
+  const byRegion = new Map<string, { meta: ChunkMetadata; index: number }[]>();
+
+  await Promise.all(metas.map(async (meta, index) => {
+    if (!meta.hash || !meta.fileHash || !meta.source || !meta.sourcePath || meta.missing) return;
+
+    const cacheKey = chunkCacheKey(world, dim, meta.cx, meta.cz);
+    const hit = chunkNbtCache.get(cacheKey);
+    if (hit?.sourcePath === meta.sourcePath && hit.fileHash === meta.fileHash) {
+      chunkNbtCache.delete(cacheKey);
+      chunkNbtCache.set(cacheKey, hit);
+      out[index] = { ...meta, data: hit.data, nbtHash: hit.nbtHash } as ChunkReadResult;
+      return;
+    }
+
+    if (meta.source === 'chunk') {
+      const bytes = await worldStorage.read(meta.sourcePath);
+      const data = bytes ? decompress(bytes) : null;
+      if (!data) return;
+      const nbtHash = sha256(data);
+      rememberLru(chunkNbtCache, cacheKey, { sourcePath: meta.sourcePath, fileHash: meta.fileHash, data, nbtHash }, MAX_CHUNK_NBT_CACHE);
+      out[index] = { ...meta, data, nbtHash } as ChunkReadResult;
+      return;
+    }
+
+    const group = byRegion.get(meta.sourcePath) ?? [];
+    group.push({ meta, index });
+    byRegion.set(meta.sourcePath, group);
+  }));
+
+  await Promise.all([...byRegion.entries()].map(async ([filePath, items]) => {
+    const region = await readRegionFile(filePath);
+    if (!region) return;
+    for (const { meta, index } of items) {
+      if (!meta.fileHash || !meta.sourcePath) continue;
+      const data = getRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31);
+      if (!data) continue;
+      const nbtHash = sha256(data);
+      rememberLru(chunkNbtCache, chunkCacheKey(world, dim, meta.cx, meta.cz), {
+        sourcePath: meta.sourcePath,
+        fileHash: meta.fileHash,
+        data,
+        nbtHash,
+      }, MAX_CHUNK_NBT_CACHE);
+      out[index] = { ...meta, data, nbtHash } as ChunkReadResult;
+    }
+  }));
+
+  return out;
 }
 
 export async function getChunkNbtWithMeta(world: string, dim: string, cx: number, cz: number): Promise<ChunkReadResult | null> {
-  const meta = await getChunkMetadata(world, dim, cx, cz);
-  if (!meta.hash || !meta.fileHash || !meta.source || !meta.sourcePath || meta.missing) return null;
-
-  const cacheKey = chunkCacheKey(world, dim, cx, cz);
-  const hit = chunkNbtCache.get(cacheKey);
-  if (hit?.sourcePath === meta.sourcePath && hit.fileHash === meta.fileHash) {
-    chunkNbtCache.delete(cacheKey);
-    chunkNbtCache.set(cacheKey, hit);
-    return { ...meta, data: hit.data, nbtHash: hit.nbtHash } as ChunkReadResult;
-  }
-
-  let data: Uint8Array | null = null;
-  if (meta.source === 'chunk') {
-    const bytes = await worldStorage.read(meta.sourcePath);
-    data = bytes ? decompress(bytes) : null;
-  } else {
-    const region = await readRegionFile(meta.sourcePath);
-    data = region ? getRegionChunk(region.bytes, cx & 31, cz & 31) : null;
-  }
-  if (!data) return null;
-  const nbtHash = sha256(data);
-  rememberLru(chunkNbtCache, cacheKey, { sourcePath: meta.sourcePath, fileHash: meta.fileHash, data, nbtHash }, MAX_CHUNK_NBT_CACHE);
-  return { ...meta, data, nbtHash } as ChunkReadResult;
+  return (await getChunksNbtWithMetaBatch(world, dim, [{ cx, cz }]))[0] ?? null;
 }
 
 /** 取一个区块的未压缩 NBT。保留给旧调用点。 */
@@ -366,9 +513,11 @@ export async function saveChunkNbt(world: string, dim: string, bytes: Uint8Array
   const filePath = `${chunkOverrideDir(world, dim)}/c.${x}.${z}.nbt`;
   await worldStorage.write(filePath, data, 'application/octet-stream');
   invalidatePath(filePath);
+  const info = await worldStorage.stat(filePath);
+  const fileHash = info ? sourceHashForInfo(info) : sha256(data);
   rememberLru(chunkNbtCache, chunkCacheKey(world, dim, x, z), {
     sourcePath: filePath,
-    fileHash: sha256(data),
+    fileHash,
     data,
     nbtHash: sha256(data),
   }, MAX_CHUNK_NBT_CACHE);

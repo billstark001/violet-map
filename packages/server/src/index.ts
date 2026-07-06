@@ -13,7 +13,8 @@ import {
   deleteRegion,
   deleteWorld,
   diffWorldManifest,
-  getChunkMetadata,
+  getChunkMetadataBatch,
+  getChunksNbtWithMetaBatch,
   getChunkNbtWithMeta,
   listRegions,
   listWorlds,
@@ -59,11 +60,8 @@ app.get('/api/worlds/:world/:dim/chunk/:cx/:cz', async (c) => {
 
 app.post('/api/worlds/:world/:dim/chunk-hashes', async (c) => {
   const body = decode(new Uint8Array(await c.req.arrayBuffer()));
-  const metas = await Promise.all(requestedChunks(body).map(async ({ cx, cz }) => {
-    if (!Number.isInteger(cx) || !Number.isInteger(cz)) return null;
-    return publicChunkMeta(await getChunkMetadata(c.req.param('world'), c.req.param('dim'), cx, cz));
-  }));
-  return c.body(msgpackBody({ chunks: metas.filter(Boolean) }), 200, {
+  const metas = await getChunkMetadataBatch(c.req.param('world'), c.req.param('dim'), requestedChunks(body));
+  return c.body(msgpackBody({ chunks: metas.map(publicChunkMeta) }), 200, {
     'cache-control': 'private, max-age=15',
     'content-type': 'application/msgpack',
   });
@@ -72,12 +70,10 @@ app.post('/api/worlds/:world/:dim/chunk-hashes', async (c) => {
 app.post('/api/worlds/:world/:dim/chunks', async (c) => {
   const body = decode(new Uint8Array(await c.req.arrayBuffer()));
   const requested = requestedChunks(body).slice(0, 128);
-  const chunks = await Promise.all(requested.map(async ({ cx, cz }) => {
-    if (!Number.isInteger(cx) || !Number.isInteger(cz)) return null;
-    const chunk = await getChunkNbtWithMeta(c.req.param('world'), c.req.param('dim'), cx, cz);
-    return chunk ? publicChunkMeta(chunk) : { cx, cz, missing: true };
-  }));
-  return c.body(msgpackBody({ chunks: chunks.filter(Boolean) }), 200, {
+  const chunks = await getChunksNbtWithMetaBatch(c.req.param('world'), c.req.param('dim'), requested);
+  return c.body(msgpackBody({
+    chunks: chunks.map((chunk, index) => chunk ? publicChunkMeta(chunk) : { ...requested[index], missing: true }),
+  }), 200, {
     'cache-control': 'private, max-age=15',
     'content-type': 'application/msgpack',
   });

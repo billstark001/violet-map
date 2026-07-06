@@ -6,8 +6,53 @@ import { getCachedFull, getCachedLod, putCachedFull, putCachedLod, type MeshCach
 import type { TerrainMaterials } from './materials';
 
 type ChunkState = 'checking' | 'hashed' | 'fetching' | 'stored' | 'absent' | 'error';
-const UPDATE_INTERVAL_MS = 100;
+const UPDATE_INTERVAL_MS = 80;
+const MAX_HASH_BATCHES = 3;
+const HASH_BATCH_SIZE = 48;
+const MAX_FETCH_BATCHES = 3;
+const FETCH_BATCH_SIZE = 24;
+const MAX_ACTIVE_MESH_TASKS = 4;
+const MAX_MESH_QUEUE = 256;
+const MAX_IO_QUEUE = 768;
+const IO_QUEUE_RETENTION_MS = 1800;
+const PREDICT_LOOKAHEAD_SECONDS = 0.9;
+const PREDICT_FORWARD_BLOCKS = 48;
+const PREDICT_MARGIN_CHUNKS = 4;
+const UNLOAD_MARGIN_CHUNKS = 5;
+const FORCED_FULL_MIN_RADIUS = 2;
+const FORCED_FULL_MAX_RADIUS = 4;
+const SSE_TARGET_PX = 5.5;
+const SSE_REFINE_PX = 6.8;
+const SSE_COARSEN_PX = 3.2;
+const FAST_MOVE_BLOCKS_PER_SECOND = 32;
+const CHUNK_WORLD_MIN_Y = -80;
+const CHUNK_WORLD_MAX_Y = 384;
+const LOD_STEPS = [1, 2, 4, 8] as const;
 type MeshCacheBaseParts = Omit<MeshCacheKeyParts, 'mode' | 'step'>;
+type LodStep = typeof LOD_STEPS[number];
+type MeshTaskKind = 'full' | 'lod';
+
+interface ChunkPriority {
+  tier: number;
+  score: number;
+  updatedAt: number;
+}
+
+interface MeshTask extends ChunkPriority {
+  key: string;
+  kind: MeshTaskKind;
+  step: LodStep;
+}
+
+interface ChunkCandidate extends ChunkPriority {
+  key: string;
+  cx: number;
+  cz: number;
+  targetStep: LodStep;
+  currentFrustum: boolean;
+  predictedFrustum: boolean;
+  forcedFull: boolean;
+}
 
 interface CachePartsResult {
   parts: MeshCacheBaseParts;
@@ -37,6 +82,9 @@ interface ChunkEntry {
   sourceHash: string | null;
   nbtHash: string | null;
   source: 'region' | 'chunk' | null;
+  lastWantedAt: number;
+  lastTier: number;
+  lastScore: number;
 }
 
 export interface ChunkManagerOptions {
@@ -57,10 +105,23 @@ export class ChunkManager {
   private fetching = 0;
   private fetchQueue = new Set<string>();
   private fetchTimer: ReturnType<typeof setTimeout> | null = null;
-  private meshing = 0;
+  private activeMeshTasks = 0;
+  private inFlightMeshVersions = new Set<number>();
+  private meshQueue = new Map<string, MeshTask>();
+  private priorityByKey = new Map<string, ChunkPriority>();
   private versionCounter = 0;
   private lastUpdate = 0;
-  private lastCenterKey = '';
+  private lastCameraPos = new THREE.Vector3();
+  private hasCameraSample = false;
+  private lastCameraSampleTime = 0;
+  private cameraVelocity = new THREE.Vector3();
+  private frustumMatrix = new THREE.Matrix4();
+  private currentFrustum = new THREE.Frustum();
+  private predictedFrustum = new THREE.Frustum();
+  private predictedCamera = new THREE.PerspectiveCamera();
+  private predictedOffset = new THREE.Vector3();
+  private tmpForward = new THREE.Vector3();
+  private tmpBox = new THREE.Box3();
   private disposed = false;
   readonly root = new THREE.Group();
   onStats?: (s: { loaded: number; rendered: number }) => void;
@@ -92,97 +153,398 @@ export class ChunkManager {
   }
 
   /** 每帧调用（内部节流）。 */
-  update(cameraPos: THREE.Vector3, now: number, force = false) {
-    const ccx = Math.floor(cameraPos.x / 16);
-    const ccz = Math.floor(cameraPos.z / 16);
-    const centerKey = `${ccx},${ccz}`;
-    if (!force && centerKey === this.lastCenterKey && now - this.lastUpdate < UPDATE_INTERVAL_MS) return;
+  update(camera: THREE.PerspectiveCamera, now: number, force = false, viewportHeight = window.innerHeight) {
+    if (!force && now - this.lastUpdate < UPDATE_INTERVAL_MS) return;
     this.lastUpdate = now;
-    this.lastCenterKey = centerKey;
-    const { viewDistance, lodDistance } = this.opts;
-    const total = viewDistance + lodDistance;
 
-    // 卸载
-    for (const [key, e] of this.chunks) {
-      const d = Math.max(Math.abs(e.cx - ccx), Math.abs(e.cz - ccz));
-      if (d > total + 2) {
-        this.removeMesh(e);
-        if (e.state === 'stored') this.send({ type: 'drop', key });
-        this.chunks.delete(key);
-        this.hashQueue.delete(key);
-        this.fetchQueue.delete(key);
-      }
+    camera.updateMatrixWorld(true);
+    this.updateCameraVelocity(camera.position, now, force);
+    this.updateFrustums(camera);
+
+    const ccx = Math.floor(camera.position.x / 16);
+    const ccz = Math.floor(camera.position.z / 16);
+    const keepKeys = new Set<string>();
+    const candidates = this.buildCandidates(camera, viewportHeight, now);
+
+    for (const candidate of candidates) {
+      keepKeys.add(candidate.key);
+      this.rememberPriority(candidate.key, candidate);
+      const e = this.ensureEntry(candidate.cx, candidate.cz, now);
+      e.lastWantedAt = now;
+      e.lastTier = candidate.tier;
+      e.lastScore = candidate.score;
+      this.scheduleCandidate(candidate, e);
     }
 
-    // 期望集合（按距离排序）
-    const wanted: { cx: number; cz: number; d: number; dist2: number }[] = [];
-    for (let dz = -total; dz <= total; dz++) {
-      for (let dx = -total; dx <= total; dx++) {
-        wanted.push({ cx: ccx + dx, cz: ccz + dz, d: Math.max(Math.abs(dx), Math.abs(dz)), dist2: dx * dx + dz * dz });
-      }
-    }
-    wanted.sort((a, b) => a.d - b.d || a.dist2 - b.dist2);
-
-    for (const w of wanted) {
-      const key = this.key(w.cx, w.cz);
-      let e = this.chunks.get(key);
-      if (!e) {
-        e = {
-          cx: w.cx, cz: w.cz,
-          state: 'checking',
-          pendingFullVersion: -1,
-          pendingLodVersion: -1,
-          pendingFull: false,
-          pendingLod: false,
-          pendingLodStep: 0,
-          pendingFullCacheParts: null,
-          pendingLodCacheParts: null,
-          pendingFullDirtyToken: 0,
-          pendingLodDirtyToken: 0,
-          displayed: 'none',
-          displayedVersion: -1,
-          displayedLodStep: 0,
-          dirty: false,
-          dirtyToken: 0,
-          group: null,
-          biome: 'minecraft:plains',
-          surfaceY: 64,
-          sourceHash: null,
-          nbtHash: null,
-          source: null,
-        };
-        this.chunks.set(key, e);
-        this.enqueueHash(key);
-      }
-      if (e.state === 'checking' || e.state === 'fetching' || e.state === 'absent' || e.state === 'error') continue;
-
-      const wantFull = w.d <= this.opts.viewDistance;
-      if (wantFull) {
-        if (e.displayed !== 'full' && e.displayedLodStep !== 1 && !e.pendingLod && !e.pendingFull) {
-          this.requestLod(key, e, 1);
-        }
-        const needs = e.displayed !== 'full' || e.dirty;
-        if (needs && !e.pendingFull && this.meshing < 4) this.requestFull(key, e);
-      } else {
-        const step = this.lodStepForDistance(w.d);
-        if ((e.displayed !== 'lod' || e.displayedLodStep !== step || e.dirty) && !(e.pendingLod && e.pendingLodStep === step)) {
-          this.requestLod(key, e, step);
-        }
-      }
-    }
-    this.prioritizeQueues(wanted.map((w) => this.key(w.cx, w.cz)));
+    this.pruneQueues(keepKeys, now);
+    this.expirePriorities(now);
+    this.evictChunks(ccx, ccz, keepKeys, now);
     this.flushHashQueue();
     this.flushFetchQueue();
+    this.flushMeshQueue();
     this.reportStats();
   }
 
-  private lodStepForDistance(distance: number): number {
-    const span = Math.max(1, this.opts.lodDistance);
-    const t = Math.min(1, Math.max(0, (distance - this.opts.viewDistance) / span));
-    if (t <= 0.25) return 1;
-    if (t <= 0.5) return 2;
-    if (t <= 0.75) return 4;
+  private updateCameraVelocity(cameraPos: THREE.Vector3, now: number, force: boolean) {
+    if (!this.hasCameraSample || force) {
+      this.lastCameraPos.copy(cameraPos);
+      this.lastCameraSampleTime = now;
+      this.cameraVelocity.set(0, 0, 0);
+      this.hasCameraSample = true;
+      return;
+    }
+    const dt = Math.max(0.001, Math.min(0.5, (now - this.lastCameraSampleTime) / 1000));
+    const instantX = (cameraPos.x - this.lastCameraPos.x) / dt;
+    const instantY = (cameraPos.y - this.lastCameraPos.y) / dt;
+    const instantZ = (cameraPos.z - this.lastCameraPos.z) / dt;
+    this.cameraVelocity.lerp(new THREE.Vector3(instantX, instantY, instantZ), 0.35);
+    this.lastCameraPos.copy(cameraPos);
+    this.lastCameraSampleTime = now;
+  }
+
+  private updateFrustums(camera: THREE.PerspectiveCamera) {
+    this.frustumMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this.currentFrustum.setFromProjectionMatrix(this.frustumMatrix);
+
+    camera.getWorldDirection(this.tmpForward);
+    this.predictedOffset.copy(this.cameraVelocity).multiplyScalar(PREDICT_LOOKAHEAD_SECONDS);
+    const forwardBoost = Math.min(
+      Math.max(PREDICT_FORWARD_BLOCKS, this.cameraVelocity.length() * 0.35),
+      (this.opts.viewDistance + this.opts.lodDistance + PREDICT_MARGIN_CHUNKS) * 16,
+    );
+    this.predictedOffset.addScaledVector(this.tmpForward, forwardBoost);
+
+    this.predictedCamera.copy(camera);
+    this.predictedCamera.position.add(this.predictedOffset);
+    this.predictedCamera.updateMatrixWorld(true);
+    this.frustumMatrix.multiplyMatrices(this.predictedCamera.projectionMatrix, this.predictedCamera.matrixWorldInverse);
+    this.predictedFrustum.setFromProjectionMatrix(this.frustumMatrix);
+  }
+
+  private buildCandidates(camera: THREE.PerspectiveCamera, viewportHeight: number, now: number): ChunkCandidate[] {
+    const ccx = Math.floor(camera.position.x / 16);
+    const ccz = Math.floor(camera.position.z / 16);
+    const predictedX = camera.position.x + this.predictedOffset.x;
+    const predictedZ = camera.position.z + this.predictedOffset.z;
+    const pcx = Math.floor(predictedX / 16);
+    const pcz = Math.floor(predictedZ / 16);
+    const total = Math.max(0, this.opts.viewDistance + this.opts.lodDistance);
+    const scanRadius = total + PREDICT_MARGIN_CHUNKS;
+    const forcedRadius = this.forcedFullRadius();
+    const movingFast = this.cameraVelocity.length() > FAST_MOVE_BLOCKS_PER_SECOND;
+    const minCx = Math.min(ccx, pcx) - scanRadius;
+    const maxCx = Math.max(ccx, pcx) + scanRadius;
+    const minCz = Math.min(ccz, pcz) - scanRadius;
+    const maxCz = Math.max(ccz, pcz) + scanRadius;
+    const out: ChunkCandidate[] = [];
+
+    for (let cz = minCz; cz <= maxCz; cz++) {
+      for (let cx = minCx; cx <= maxCx; cx++) {
+        const currentCheb = Math.max(Math.abs(cx - ccx), Math.abs(cz - ccz));
+        const predictedCheb = Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz));
+        const forcedFull = currentCheb <= (movingFast ? 1 : forcedRadius);
+        if (!forcedFull && currentCheb > total && predictedCheb > total + PREDICT_MARGIN_CHUNKS) continue;
+
+        const currentFrustum = currentCheb <= total && (forcedFull || this.chunkIntersectsFrustum(this.currentFrustum, cx, cz));
+        const predictedFrustum = !currentFrustum
+          && predictedCheb <= total + PREDICT_MARGIN_CHUNKS
+          && this.chunkIntersectsFrustum(this.predictedFrustum, cx, cz);
+        if (!forcedFull && !currentFrustum && !predictedFrustum) continue;
+
+        const key = this.key(cx, cz);
+        const e = this.chunks.get(key);
+        const distCurrent = this.distanceToChunk(camera.position, cx, cz);
+        const distPredicted = this.distanceToChunk(this.predictedCamera.position, cx, cz);
+        const sseDistance = currentFrustum || forcedFull ? distCurrent : distPredicted;
+        let targetStep = this.selectLodStep(sseDistance, camera, viewportHeight, e, forcedFull);
+        if (movingFast && !forcedFull && targetStep === 1) targetStep = 2;
+        if (predictedFrustum && !forcedFull) targetStep = Math.max(targetStep, movingFast ? 4 : 2) as LodStep;
+        const tier = this.tierForCandidate(e, targetStep, currentFrustum, predictedFrustum, forcedFull);
+        const score = (currentFrustum || forcedFull ? distCurrent : distPredicted) - this.screenErrorForStep(targetStep, sseDistance, camera, viewportHeight) * 8;
+        out.push({ key, cx, cz, targetStep, currentFrustum, predictedFrustum, forcedFull, tier, score, updatedAt: now });
+      }
+    }
+
+    out.sort((a, b) => a.tier - b.tier || a.score - b.score);
+    return out;
+  }
+
+  private chunkIntersectsFrustum(frustum: THREE.Frustum, cx: number, cz: number): boolean {
+    const x = cx * 16;
+    const z = cz * 16;
+    this.tmpBox.min.set(x, CHUNK_WORLD_MIN_Y, z);
+    this.tmpBox.max.set(x + 16, CHUNK_WORLD_MAX_Y, z + 16);
+    return frustum.intersectsBox(this.tmpBox);
+  }
+
+  private distanceToChunk(pos: THREE.Vector3, cx: number, cz: number): number {
+    const minX = cx * 16;
+    const maxX = minX + 16;
+    const minZ = cz * 16;
+    const maxZ = minZ + 16;
+    const dx = pos.x < minX ? minX - pos.x : pos.x > maxX ? pos.x - maxX : 0;
+    const dy = pos.y < CHUNK_WORLD_MIN_Y ? CHUNK_WORLD_MIN_Y - pos.y : pos.y > CHUNK_WORLD_MAX_Y ? pos.y - CHUNK_WORLD_MAX_Y : 0;
+    const dz = pos.z < minZ ? minZ - pos.z : pos.z > maxZ ? pos.z - maxZ : 0;
+    return Math.max(1, Math.sqrt(dx * dx + dy * dy + dz * dz));
+  }
+
+  private forcedFullRadius(): number {
+    return Math.max(
+      FORCED_FULL_MIN_RADIUS,
+      Math.min(FORCED_FULL_MAX_RADIUS, Math.floor(this.opts.viewDistance * 0.16)),
+    );
+  }
+
+  private screenErrorForStep(step: LodStep, distance: number, camera: THREE.PerspectiveCamera, viewportHeight: number): number {
+    const fov = THREE.MathUtils.degToRad(camera.fov);
+    const pixelsPerBlock = Math.max(1, viewportHeight) / (2 * Math.tan(fov * 0.5) * Math.max(1, distance));
+    const geometricError = step <= 1 ? 0.5 : step * 0.75;
+    return geometricError * pixelsPerBlock;
+  }
+
+  private baseLodStep(distance: number, camera: THREE.PerspectiveCamera, viewportHeight: number): LodStep {
+    if (this.screenErrorForStep(2, distance, camera, viewportHeight) > SSE_TARGET_PX) return 1;
+    if (this.screenErrorForStep(4, distance, camera, viewportHeight) > SSE_TARGET_PX) return 2;
+    if (this.screenErrorForStep(8, distance, camera, viewportHeight) > SSE_TARGET_PX) return 4;
     return 8;
+  }
+
+  private currentStep(e: ChunkEntry | undefined): LodStep | null {
+    if (!e || e.displayed === 'none') return null;
+    if (e.displayed === 'full') return 1;
+    return (LOD_STEPS.includes(e.displayedLodStep as LodStep) ? e.displayedLodStep : 8) as LodStep;
+  }
+
+  private selectLodStep(
+    distance: number,
+    camera: THREE.PerspectiveCamera,
+    viewportHeight: number,
+    e: ChunkEntry | undefined,
+    forcedFull: boolean,
+  ): LodStep {
+    if (forcedFull) return 1;
+    const base = this.baseLodStep(distance, camera, viewportHeight);
+    const current = this.currentStep(e);
+    if (!current || e?.dirty) return base;
+    if (base > current) {
+      return this.screenErrorForStep(base, distance, camera, viewportHeight) < SSE_COARSEN_PX ? base : current;
+    }
+    if (base < current) {
+      return this.screenErrorForStep(current, distance, camera, viewportHeight) > SSE_REFINE_PX ? base : current;
+    }
+    return base;
+  }
+
+  private tierForCandidate(
+    e: ChunkEntry | undefined,
+    targetStep: LodStep,
+    currentFrustum: boolean,
+    predictedFrustum: boolean,
+    forcedFull: boolean,
+  ): number {
+    const displayedStep = this.currentStep(e);
+    const empty = !e || e.displayed === 'none';
+    if (forcedFull && targetStep === 1 && empty) return 0;
+    if (forcedFull && targetStep === 1 && e?.displayed !== 'full') return 1;
+    if (currentFrustum && empty) return 2;
+    if (currentFrustum && (!displayedStep || targetStep < displayedStep || e?.dirty || (targetStep === 1 && e?.displayed !== 'full'))) return 3;
+    if (predictedFrustum) return 4;
+    return 5;
+  }
+
+  private ensureEntry(cx: number, cz: number, now: number): ChunkEntry {
+    const key = this.key(cx, cz);
+    let e = this.chunks.get(key);
+    if (e) return e;
+    e = {
+      cx, cz,
+      state: 'checking',
+      pendingFullVersion: -1,
+      pendingLodVersion: -1,
+      pendingFull: false,
+      pendingLod: false,
+      pendingLodStep: 0,
+      pendingFullCacheParts: null,
+      pendingLodCacheParts: null,
+      pendingFullDirtyToken: 0,
+      pendingLodDirtyToken: 0,
+      displayed: 'none',
+      displayedVersion: -1,
+      displayedLodStep: 0,
+      dirty: false,
+      dirtyToken: 0,
+      group: null,
+      biome: 'minecraft:plains',
+      surfaceY: 64,
+      sourceHash: null,
+      nbtHash: null,
+      source: null,
+      lastWantedAt: now,
+      lastTier: 6,
+      lastScore: Infinity,
+    };
+    this.chunks.set(key, e);
+    return e;
+  }
+
+  private rememberPriority(key: string, priority: ChunkPriority) {
+    const previous = this.priorityByKey.get(key);
+    if (!previous || this.comparePriority(priority, previous) < 0) {
+      this.priorityByKey.set(key, { tier: priority.tier, score: priority.score, updatedAt: priority.updatedAt });
+    }
+  }
+
+  private comparePriority(a: ChunkPriority, b: ChunkPriority): number {
+    return a.tier - b.tier || a.score - b.score || b.updatedAt - a.updatedAt;
+  }
+
+  private scheduleCandidate(candidate: ChunkCandidate, e: ChunkEntry) {
+    if (e.state === 'absent' || e.state === 'error') {
+      this.removeMesh(e);
+      return;
+    }
+    if (e.state === 'checking') {
+      this.enqueueHash(candidate.key);
+      return;
+    }
+    if (e.state === 'hashed' || e.state === 'fetching') {
+      this.enqueueFetch(candidate.key);
+      return;
+    }
+    if (e.state !== 'stored') return;
+
+    if (candidate.targetStep === 1) {
+      if ((e.displayed !== 'full' || e.dirty) && !e.pendingFull) {
+        this.enqueueMeshTask({ ...candidate, kind: 'full', step: 1 });
+      }
+      return;
+    }
+
+    const wantsLod = e.displayed !== 'lod' || e.displayedLodStep !== candidate.targetStep || e.dirty;
+    if (wantsLod && !(e.pendingLod && e.pendingLodStep === candidate.targetStep)) {
+      this.enqueueMeshTask({ ...candidate, kind: 'lod', step: candidate.targetStep });
+    }
+  }
+
+  private enqueueMeshTask(task: MeshTask) {
+    const existing = this.meshQueue.get(task.key);
+    if (existing && this.compareMeshTasks(existing, task) <= 0) return;
+    this.meshQueue.set(task.key, task);
+    this.trimMeshQueue();
+  }
+
+  private compareMeshTasks(a: MeshTask, b: MeshTask): number {
+    const priority = this.comparePriority(a, b);
+    if (priority !== 0) return priority;
+    if (a.kind !== b.kind) return a.kind === 'full' ? -1 : 1;
+    return a.step - b.step;
+  }
+
+  private flushMeshQueue() {
+    while (this.activeMeshTasks < MAX_ACTIVE_MESH_TASKS && this.meshQueue.size > 0) {
+      const task = this.nextMeshTask();
+      if (!task) return;
+      const e = this.chunks.get(task.key);
+      if (!e || e.state !== 'stored') continue;
+      if (task.kind === 'full') {
+        if (e.displayed === 'full' && !e.dirty) continue;
+        if (e.pendingFull) continue;
+        this.requestFull(task.key, e);
+      } else {
+        if (e.displayed === 'lod' && e.displayedLodStep === task.step && !e.dirty) continue;
+        if (e.pendingLod && e.pendingLodStep === task.step) continue;
+        this.requestLod(task.key, e, task.step);
+      }
+    }
+  }
+
+  private nextMeshTask(): MeshTask | null {
+    let best: MeshTask | null = null;
+    for (const task of this.meshQueue.values()) {
+      const latest = this.priorityByKey.get(task.key);
+      const effective = latest ? { ...task, tier: latest.tier, score: latest.score, updatedAt: latest.updatedAt } : task;
+      if (!best || this.compareMeshTasks(effective, best) < 0) best = effective;
+    }
+    if (best) this.meshQueue.delete(best.key);
+    return best;
+  }
+
+  private trimMeshQueue() {
+    if (this.meshQueue.size <= MAX_MESH_QUEUE) return;
+    const sorted = [...this.meshQueue.values()].sort((a, b) => this.compareMeshTasks(a, b));
+    this.meshQueue = new Map(sorted.slice(0, MAX_MESH_QUEUE).map((task) => [task.key, task]));
+  }
+
+  private finishActiveMesh(version?: number) {
+    if (version !== undefined && !this.inFlightMeshVersions.delete(version)) return;
+    this.activeMeshTasks = Math.max(0, this.activeMeshTasks - 1);
+    this.flushMeshQueue();
+  }
+
+  private markWorkerMesh(version: number) {
+    this.inFlightMeshVersions.add(version);
+  }
+
+  private pruneQueues(keepKeys: Set<string>, now: number) {
+    const keepIo = (key: string) => {
+      const priority = this.priorityByKey.get(key);
+      return keepKeys.has(key) || (!!priority && now - priority.updatedAt < IO_QUEUE_RETENTION_MS);
+    };
+    for (const key of this.hashQueue) if (!keepIo(key)) this.hashQueue.delete(key);
+    for (const key of this.fetchQueue) if (!keepIo(key)) this.fetchQueue.delete(key);
+    for (const key of this.meshQueue.keys()) if (!keepKeys.has(key)) this.meshQueue.delete(key);
+    this.trimIoQueue('hash');
+    this.trimIoQueue('fetch');
+    this.trimMeshQueue();
+  }
+
+  private expirePriorities(now: number) {
+    for (const [key, priority] of this.priorityByKey) {
+      if (now - priority.updatedAt > IO_QUEUE_RETENTION_MS) this.priorityByKey.delete(key);
+    }
+  }
+
+  private trimIoQueue(kind: 'hash' | 'fetch') {
+    const queue = kind === 'hash' ? this.hashQueue : this.fetchQueue;
+    if (queue.size <= MAX_IO_QUEUE) return;
+    const sorted = this.sortKeys(queue).slice(0, MAX_IO_QUEUE);
+    if (kind === 'hash') this.hashQueue = new Set(sorted);
+    else this.fetchQueue = new Set(sorted);
+  }
+
+  private evictChunks(ccx: number, ccz: number, keepKeys: Set<string>, now: number) {
+    const total = Math.max(0, this.opts.viewDistance + this.opts.lodDistance);
+    const unloadDistance = total + PREDICT_MARGIN_CHUNKS + UNLOAD_MARGIN_CHUNKS;
+    for (const [key, e] of this.chunks) {
+      const d = Math.max(Math.abs(e.cx - ccx), Math.abs(e.cz - ccz));
+      if (!keepKeys.has(key) && d > unloadDistance) this.dropEntry(key, e);
+    }
+
+    const maxTracked = this.maxTrackedChunks();
+    if (this.chunks.size <= maxTracked) return;
+    const victims = [...this.chunks.entries()]
+      .filter(([key]) => !keepKeys.has(key))
+      .sort(([, a], [, b]) => a.lastWantedAt - b.lastWantedAt || b.lastScore - a.lastScore);
+    for (const [key, e] of victims) {
+      if (this.chunks.size <= maxTracked) break;
+      if (now - e.lastWantedAt < 1000) continue;
+      this.dropEntry(key, e);
+    }
+  }
+
+  private maxTrackedChunks(): number {
+    const total = this.opts.viewDistance + this.opts.lodDistance + PREDICT_MARGIN_CHUNKS;
+    return Math.max(512, Math.min(2600, Math.round(total * total * 1.7)));
+  }
+
+  private dropEntry(key: string, e: ChunkEntry) {
+    this.removeMesh(e);
+    if (e.state === 'stored') this.send({ type: 'drop', key });
+    this.chunks.delete(key);
+    this.hashQueue.delete(key);
+    this.fetchQueue.delete(key);
+    this.meshQueue.delete(key);
+    this.priorityByKey.delete(key);
   }
 
   private cacheParts(e: ChunkEntry): MeshCacheBaseParts {
@@ -228,11 +590,17 @@ export class ChunkManager {
   }
 
   private requestFull(key: string, e: ChunkEntry) {
+    if (this.activeMeshTasks >= MAX_ACTIVE_MESH_TASKS) {
+      const priority = this.priorityByKey.get(key) ?? { tier: 3, score: 0, updatedAt: performance.now() };
+      this.enqueueMeshTask({ key, kind: 'full', step: 1, ...priority });
+      return;
+    }
     const cache = this.neighborhoodCacheParts(e);
     if (!cache) {
       this.enqueueHash(key);
       return;
     }
+    this.activeMeshTasks++;
     e.pendingFull = true;
     e.pendingFullCacheParts = cache.stable ? cache.parts : null;
     e.pendingFullDirtyToken = e.dirtyToken;
@@ -243,12 +611,16 @@ export class ChunkManager {
       return;
     }
     void getCachedFull(cache.parts).then((hit) => {
-      if (this.disposed) return;
+      if (this.disposed) { this.finishActiveMesh(); return; }
       const current = this.chunks.get(key);
-      if (!current || current.pendingFullVersion !== version) return;
+      if (!current || current.pendingFullVersion !== version) {
+        this.finishActiveMesh();
+        return;
+      }
       if (hit) {
         current.pendingFull = false;
         current.pendingFullCacheParts = null;
+        this.finishActiveMesh();
         if (version < current.displayedVersion) return;
         this.displayFull(current, hit, version);
         this.clearDirtyIfUnchanged(current, current.pendingFullDirtyToken);
@@ -262,6 +634,7 @@ export class ChunkManager {
         current.pendingFullCacheParts = null;
         if (current.state !== 'stored') this.enqueueFetch(key);
       }
+      this.finishActiveMesh();
     });
   }
 
@@ -270,19 +643,20 @@ export class ChunkManager {
       current.pendingFull = false;
       current.pendingFullCacheParts = null;
       this.enqueueFetch(key);
-      return;
-    }
-    if (this.meshing >= 4) {
-      current.pendingFull = false;
-      current.pendingFullCacheParts = null;
+      this.finishActiveMesh();
       return;
     }
     current.pendingFull = true;
-    this.meshing++;
+    this.markWorkerMesh(version);
     this.send({ type: 'mesh', key, version });
   }
 
-  private requestLod(key: string, e: ChunkEntry, step: number) {
+  private requestLod(key: string, e: ChunkEntry, step: LodStep) {
+    if (this.activeMeshTasks >= MAX_ACTIVE_MESH_TASKS) {
+      const priority = this.priorityByKey.get(key) ?? { tier: 4, score: 0, updatedAt: performance.now() };
+      this.enqueueMeshTask({ key, kind: 'lod', step, ...priority });
+      return;
+    }
     if (!e.sourceHash) {
       this.enqueueHash(key);
       return;
@@ -296,6 +670,7 @@ export class ChunkManager {
       this.enqueueHash(key);
       return;
     }
+    this.activeMeshTasks++;
     e.pendingLod = true;
     e.pendingLodStep = step;
     e.pendingLodCacheParts = cache.stable ? cache.parts : null;
@@ -303,17 +678,22 @@ export class ChunkManager {
     e.pendingLodVersion = ++this.versionCounter;
     const version = e.pendingLodVersion;
     if (!cache.stable) {
+      this.markWorkerMesh(version);
       this.send({ type: 'lod', key, step, version });
       return;
     }
     void getCachedLod({ ...cache.parts, step }).then((hit) => {
-      if (this.disposed) return;
+      if (this.disposed) { this.finishActiveMesh(); return; }
       const current = this.chunks.get(key);
-      if (!current || current.pendingLodVersion !== version || current.pendingLodStep !== step) return;
+      if (!current || current.pendingLodVersion !== version || current.pendingLodStep !== step) {
+        this.finishActiveMesh();
+        return;
+      }
       if (hit !== undefined) {
         current.pendingLod = false;
         current.pendingLodStep = 0;
         current.pendingLodCacheParts = null;
+        this.finishActiveMesh();
         if (version < current.displayedVersion) return;
         this.displayLod(current, hit, version, step);
         this.clearDirtyIfUnchanged(current, current.pendingLodDirtyToken);
@@ -324,10 +704,12 @@ export class ChunkManager {
         current.pendingLodStep = 0;
         current.pendingLodCacheParts = null;
         this.enqueueFetch(key);
+        this.finishActiveMesh();
         return;
       }
       current.pendingLod = true;
       current.pendingLodStep = step;
+      this.markWorkerMesh(version);
       this.send({ type: 'lod', key, step, version });
     }).catch(() => {
       const current = this.chunks.get(key);
@@ -337,6 +719,7 @@ export class ChunkManager {
         current.pendingLodCacheParts = null;
         if (current.state !== 'stored') this.enqueueFetch(key);
       }
+      this.finishActiveMesh();
     });
   }
 
@@ -350,10 +733,8 @@ export class ChunkManager {
   }
 
   private flushHashQueue() {
-    const maxBatches = 4;
-    const batchSize = 64;
-    while (this.checking < maxBatches && this.hashQueue.size > 0) {
-      const keys = [...this.hashQueue].slice(0, batchSize);
+    while (this.checking < MAX_HASH_BATCHES && this.hashQueue.size > 0) {
+      const keys = this.sortKeys(this.hashQueue).slice(0, HASH_BATCH_SIZE);
       for (const key of keys) this.hashQueue.delete(key);
       void this.fetchHashBatch(keys);
     }
@@ -377,10 +758,8 @@ export class ChunkManager {
   }
 
   private flushFetchQueue() {
-    const maxBatches = 4;
-    const batchSize = 32;
-    while (this.fetching < maxBatches && this.fetchQueue.size > 0) {
-      const keys = [...this.fetchQueue].slice(0, batchSize);
+    while (this.fetching < MAX_FETCH_BATCHES && this.fetchQueue.size > 0) {
+      const keys = this.sortKeys(this.fetchQueue).slice(0, FETCH_BATCH_SIZE);
       for (const key of keys) this.fetchQueue.delete(key);
       void this.fetchBatch(keys);
     }
@@ -392,11 +771,12 @@ export class ChunkManager {
     }
   }
 
-  private prioritizeQueues(wantedKeys: string[]) {
-    const order = new Map(wantedKeys.map((key, index) => [key, index]));
-    const sortKeys = (keys: Iterable<string>) => [...keys].sort((a, b) => (order.get(a) ?? Infinity) - (order.get(b) ?? Infinity));
-    this.hashQueue = new Set(sortKeys(this.hashQueue));
-    this.fetchQueue = new Set(sortKeys(this.fetchQueue));
+  private sortKeys(keys: Iterable<string>): string[] {
+    return [...keys].sort((a, b) => {
+      const ap = this.priorityByKey.get(a) ?? { tier: 99, score: Infinity, updatedAt: 0 };
+      const bp = this.priorityByKey.get(b) ?? { tier: 99, score: Infinity, updatedAt: 0 };
+      return this.comparePriority(ap, bp);
+    });
   }
 
   private chunkBuffer(data: Uint8Array): ArrayBuffer {
@@ -527,22 +907,23 @@ export class ChunkManager {
         break;
       }
       case 'meshResult': {
-        this.meshing = Math.max(0, this.meshing - 1);
+        this.finishActiveMesh(msg.version);
         const e = this.chunks.get(msg.key);
-        const cacheParts = e?.pendingFullVersion === msg.version ? e.pendingFullCacheParts : null;
-        const dirtyToken = e?.pendingFullVersion === msg.version ? e.pendingFullDirtyToken : -1;
-        if (e?.pendingFullVersion === msg.version) {
-          e.pendingFull = false;
-          e.pendingFullCacheParts = null;
-        }
+        const matched = e?.pendingFullVersion === msg.version;
+        const cacheParts = matched ? e.pendingFullCacheParts : null;
+        const dirtyToken = matched ? e.pendingFullDirtyToken : -1;
+        if (!e || !matched) return;
+        e.pendingFull = false;
+        e.pendingFullCacheParts = null;
         if (!e || msg.version < e.displayedVersion) return;
         this.displayFull(e, msg.sections, msg.version);
         if (dirtyToken >= 0) this.clearDirtyIfUnchanged(e, dirtyToken);
-        if (cacheParts) void putCachedFull(cacheParts, msg.sections).catch(() => {});
+        if (cacheParts) void putCachedFull(cacheParts, msg.sections).catch(() => { });
         this.reportStats();
         break;
       }
       case 'lodResult': {
+        this.finishActiveMesh(msg.version);
         const e = this.chunks.get(msg.key);
         let cacheParts: MeshCacheBaseParts | null = null;
         let dirtyToken = -1;
@@ -553,10 +934,11 @@ export class ChunkManager {
           e.pendingLodStep = 0;
           e.pendingLodCacheParts = null;
         }
-        if (!e || msg.version < e.displayedVersion) return;
-        this.displayLod(e, msg.mesh, msg.version, msg.step);
+        if (!e || dirtyToken < 0 || msg.version < e.displayedVersion) return;
+        const step = (LOD_STEPS.includes(msg.step as LodStep) ? msg.step : 8) as LodStep;
+        this.displayLod(e, msg.mesh, msg.version, step);
         if (dirtyToken >= 0) this.clearDirtyIfUnchanged(e, dirtyToken);
-        if (cacheParts) void putCachedLod({ ...cacheParts, step: msg.step }, msg.mesh).catch(() => {});
+        if (cacheParts) void putCachedLod({ ...cacheParts, step }, msg.mesh).catch(() => { });
         this.reportStats();
         break;
       }

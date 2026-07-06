@@ -480,7 +480,7 @@ export function Viewer(props: ViewerProps) {
           const p = propsRef.current;
           controls.update(dt);
           const manager = managerRef.current;
-          manager?.update(camera.position, now);
+          manager?.update(camera, now, false, renderer.domElement.clientHeight || window.innerHeight);
 
           // 天空/雾：数据驱动（群系 + 维度）
           const e = engineRef.current!;
@@ -601,7 +601,7 @@ export function Viewer(props: ViewerProps) {
     persistView(e.controls.getView(), true);
     const s = latestStatsRef.current;
     propsRef.current.onStats?.({ ...s, pos: [e.camera.position.x, e.camera.position.y, e.camera.position.z] });
-    managerRef.current?.update(e.camera.position, performance.now(), true);
+    managerRef.current?.update(e.camera, performance.now(), true, e.renderer.domElement.clientHeight || window.innerHeight);
   }, [ready, props.cameraTarget?.seq]);
 
   return (
