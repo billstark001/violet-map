@@ -20,7 +20,7 @@ export type WorkerRequest =
   | { type: 'lod'; key: string; step: number; version: number }
   | { type: 'drop'; key: string };
 
-export interface SectionMeshMsg { sy: number; layers: Partial<Record<RenderLayer, MeshBuffers>> }
+export interface SectionMeshMsg { sy: number; layers: Partial<Record<RenderLayer, MeshBuffers>>; visibility?: number }
 export type WorkerResponse =
   | { type: 'chunkReady'; key: string; biome: string; surfaceY: number }
   | { type: 'chunkError'; key: string; error: string }

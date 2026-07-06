@@ -43,6 +43,7 @@ export interface MesherResources {
 
 const SHADE: Record<Direction, number> = { up: 1, down: 0.5, north: 0.8, south: 0.8, west: 0.6, east: 0.6 };
 const OCCLUSION_DIRECTIONS: Direction[] = ['down', 'up', 'north', 'south', 'west', 'east'];
+export const SECTION_VISIBILITY_DIRECTIONS: Direction[] = ['down', 'up', 'north', 'south', 'west', 'east'];
 const AO_FACTOR = [0.4, 0.6, 0.8, 1.0];
 // 每个面的两个切向轴（坐标分量下标）
 const TANGENTS: Record<Direction, [number, number]> = {
@@ -357,4 +358,107 @@ export function meshSection(
     if (!builders[layer].empty) out[layer] = builders[layer].build();
   }
   return out;
+}
+
+function visibilityBit(from: number, to: number): number {
+  return 2 ** (from * SECTION_VISIBILITY_DIRECTIONS.length + to);
+}
+
+/**
+ * Minecraft 1.8-style section visibility graph input.
+ *
+ * The mask stores directed connectivity between the six section boundary faces.
+ * A bit at from*6+to means transparent/non-occluding cells connect those faces,
+ * so traversal can continue through the section from `from` to `to`.
+ */
+export function sectionVisibilityMask(
+  res: Pick<MesherResources, 'info'>,
+  view: WorldView,
+  cx: number,
+  sy: number,
+  cz: number,
+): number {
+  const ox = cx * 16;
+  const oy = sy * 16;
+  const oz = cz * 16;
+  const total = 16 * 16 * 16;
+  const passable = new Uint8Array(total);
+  const visited = new Uint8Array(total);
+  const queue = new Int32Array(total);
+  let passableCount = 0;
+
+  const idxOf = (x: number, y: number, z: number) => (y << 8) | (z << 4) | x;
+  for (let y = 0; y < 16; y++) {
+    for (let z = 0; z < 16; z++) {
+      for (let x = 0; x < 16; x++) {
+        const i = idxOf(x, y, z);
+        if (!res.info(view.getBlock(ox + x, oy + y, oz + z).name).occludes) {
+          passable[i] = 1;
+          passableCount++;
+        }
+      }
+    }
+  }
+
+  if (passableCount === 0) return 0;
+  if (passableCount === total) {
+    let all = 0;
+    for (let from = 0; from < 6; from++) {
+      for (let to = 0; to < 6; to++) {
+        if (from !== to) all += visibilityBit(from, to);
+      }
+    }
+    return all;
+  }
+
+  const faceBitsOf = (x: number, y: number, z: number): number => {
+    let bits = 0;
+    if (y === 0) bits |= 1 << 0;
+    if (y === 15) bits |= 1 << 1;
+    if (z === 0) bits |= 1 << 2;
+    if (z === 15) bits |= 1 << 3;
+    if (x === 0) bits |= 1 << 4;
+    if (x === 15) bits |= 1 << 5;
+    return bits;
+  };
+
+  let mask = 0;
+  for (let start = 0; start < total; start++) {
+    if (!passable[start] || visited[start]) continue;
+    let head = 0;
+    let tail = 0;
+    let faces = 0;
+    visited[start] = 1;
+    queue[tail++] = start;
+
+    while (head < tail) {
+      const i = queue[head++];
+      const y = i >> 8;
+      const z = (i >> 4) & 15;
+      const x = i & 15;
+      faces |= faceBitsOf(x, y, z);
+
+      const push = (nx: number, ny: number, nz: number) => {
+        const ni = idxOf(nx, ny, nz);
+        if (!passable[ni] || visited[ni]) return;
+        visited[ni] = 1;
+        queue[tail++] = ni;
+      };
+
+      if (x > 0) push(x - 1, y, z);
+      if (x < 15) push(x + 1, y, z);
+      if (y > 0) push(x, y - 1, z);
+      if (y < 15) push(x, y + 1, z);
+      if (z > 0) push(x, y, z - 1);
+      if (z < 15) push(x, y, z + 1);
+    }
+
+    for (let from = 0; from < 6; from++) {
+      if (!(faces & (1 << from))) continue;
+      for (let to = 0; to < 6; to++) {
+        if (from !== to && (faces & (1 << to))) mask += visibilityBit(from, to);
+      }
+    }
+  }
+  return mask;
 }

@@ -8,6 +8,14 @@ import { Viewer, type CameraPositionRequest } from './render/Viewer';
 
 interface WorldInfo { id: string; dimensions: string[] }
 type Axis = 'x' | 'y' | 'z';
+interface ViewerStats {
+  nbt: number;
+  lodReady: number;
+  lodRendered: number;
+  fullReady: number;
+  fullRendered: number;
+  pos: [number, number, number];
+}
 
 const SETTINGS_STORAGE_KEY = 'violet-map:settings';
 const PANEL_STORAGE_KEY = 'violet-map:panel-collapsed';
@@ -85,7 +93,14 @@ export default function App() {
   const [fastMoveMultiplier, setFastMoveMultiplier] = useState(() => numberSetting('fastMoveMultiplier', 4));
   const [timeOfDay, setTimeOfDay] = useState(() => numberSetting('timeOfDay', 0));
   const [panelCollapsed, setPanelCollapsed] = useState(() => localStorage.getItem(PANEL_STORAGE_KEY) === 'true');
-  const [stats, setStats] = useState({ loaded: 0, rendered: 0, pos: [0, 0, 0] as [number, number, number] });
+  const [stats, setStats] = useState<ViewerStats>({
+    nbt: 0,
+    lodReady: 0,
+    lodRendered: 0,
+    fullReady: 0,
+    fullRendered: 0,
+    pos: [0, 0, 0],
+  });
   const [panelTab, setPanelTab] = useState('view');
   const [cacheStats, setCacheStats] = useState({ entries: 0, bytes: 0 });
   const [coordDirty, setCoordDirty] = useState(false);
@@ -259,9 +274,10 @@ export default function App() {
                         </Select.Root>
                       </Flex>
                       <Box>
-                        <Text size="1">{t('renderDistance', { view: viewDistance, lod: lodDistance })}</Text>
-                        <Slider value={[viewDistance]} min={2} max={24} onValueChange={([v]) => setViewDistance(v)} />
-                        <Slider mt="2" value={[lodDistance]} min={0} max={40} onValueChange={([v]) => setLodDistance(v)} />
+                        <Text size="1">{t('fullRadius', { value: viewDistance })}</Text>
+                        <Slider value={[viewDistance]} min={2} max={32} onValueChange={([v]) => setViewDistance(v)} />
+                        <Text mt="2" size="1">{t('lodRadius', { value: lodDistance })}</Text>
+                        <Slider mt="1" value={[lodDistance]} min={0} max={128} onValueChange={([v]) => setLodDistance(v)} />
                       </Box>
                       <Box>
                         <Text size="1">{t('fastMove', { value: fastMoveMultiplier.toFixed(1) })}</Text>
@@ -273,8 +289,9 @@ export default function App() {
                       </Box>
                       <Flex gap="2" wrap="wrap">
                         <Badge>XYZ {stats.pos.map((v) => v.toFixed(0)).join(' / ')}</Badge>
-                        <Badge color="blue">{t('loaded', { value: stats.loaded })}</Badge>
-                        <Badge color="green">{t('rendered', { value: stats.rendered })}</Badge>
+                        <Badge color="blue">{t('nbtChunks', { value: stats.nbt })}</Badge>
+                        <Badge color="green">{t('lodChunks', { rendered: stats.lodRendered, ready: stats.lodReady })}</Badge>
+                        <Badge color="jade">{t('fullChunks', { rendered: stats.fullRendered, ready: stats.fullReady })}</Badge>
                       </Flex>
                       <Flex gap="2" align="end">
                         {(['x', 'y', 'z'] as Axis[]).map((axis) => (

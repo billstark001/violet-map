@@ -2,13 +2,22 @@
 import {
   BlockInfo, ChunkColumn, ChunkNeighborhood, MeshBuffers, MesherResources, ModelBaker,
   computeColumnLight, hexToRgb, meshLodChunk, meshSection, parseChunkColumn,
-  resolveBiomeColors, type BlockStateRef, type Rgb, type TintType,
+  resolveBiomeColors, sectionVisibilityMask, type BlockStateRef, type Rgb, type TintType,
 } from '@violet-map/core';
 import { parseNbt } from '@violet-map/core/nbt';
 import type { SectionMeshMsg, WorkerRequest, WorkerResponse } from './protocol';
 
 const DEFAULT_INFO: BlockInfo = { occludes: false, emit: 0, filter: 0, layer: 'cutout', tint: 'none' };
 const WHITE: Rgb = [1, 1, 1];
+const SECTION_VISIBILITY_ALL = (() => {
+  let mask = 0;
+  for (let from = 0; from < 6; from++) {
+    for (let to = 0; to < 6; to++) {
+      if (from !== to) mask += 2 ** (from * 6 + to);
+    }
+  }
+  return mask;
+})();
 
 let res: MesherResources | null = null;
 let avgColors: Record<string, [number, number, number]> = {};
@@ -108,6 +117,26 @@ function ensureLight(entry: { col: ChunkColumn; hasSkyLight: boolean; litSky: bo
   entry.litBlock = entry.litBlock || needBlock || entry.col.hasStoredBlockLight;
 }
 
+function visibilityForSection(
+  section: { palette: BlockStateRef[] } | undefined,
+  hood: ChunkNeighborhood,
+  cx: number,
+  sy: number,
+  cz: number,
+): number {
+  if (!section) return SECTION_VISIBILITY_ALL;
+  let hasOccluding = false;
+  let hasPassable = false;
+  for (const state of section.palette) {
+    if (infoOf(state.name).occludes) hasOccluding = true;
+    else hasPassable = true;
+    if (hasOccluding && hasPassable) break;
+  }
+  if (!hasOccluding) return SECTION_VISIBILITY_ALL;
+  if (!hasPassable) return 0;
+  return sectionVisibilityMask({ info: infoOf }, hood, cx, sy, cz);
+}
+
 function neighborhoodOf(key: string): ChunkNeighborhood | null {
   const entry = columns.get(key);
   if (!entry) return null;
@@ -179,9 +208,9 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       const sections: SectionMeshMsg[] = [];
       for (let sy = col.minSectionY; sy <= col.maxSectionY; sy++) {
         const s = col.sections.get(sy);
-        if (!s || s.isEmpty) continue;
-        const layers = meshSection(res, hood, col.x, sy, col.z);
-        if (Object.keys(layers).length) sections.push({ sy, layers });
+        const layers = s && !s.isEmpty ? meshSection(res, hood, col.x, sy, col.z) : {};
+        const visibility = !s || s.isEmpty ? SECTION_VISIBILITY_ALL : visibilityForSection(s, hood, col.x, sy, col.z);
+        if (Object.keys(layers).length || visibility > 0) sections.push({ sy, layers, visibility });
       }
       post(
         { type: 'meshResult', key: msg.key, version: msg.version, sections },
