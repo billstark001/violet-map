@@ -102,6 +102,7 @@ export interface ChunkProfileStats {
   workerChunkCopies: number;
   displayedMeshBytes: number;
   chunkBytesFetched: number;
+  diagnostics: ChunkDiagnosticEvent[];
   hashFetchMsAvg: number;
   chunkFetchMsAvg: number;
   parseMsAvg: number;
@@ -111,6 +112,20 @@ export interface ChunkProfileStats {
   fullCacheMisses: number;
   lodCacheHits: number;
   lodCacheMisses: number;
+}
+
+export type ChunkDiagnosticOp = 'hashFetch' | 'chunkFetch' | 'parse' | 'fullMesh' | 'lodMesh';
+export type ChunkDiagnosticKind = 'slow' | 'delayed';
+
+export interface ChunkDiagnosticEvent {
+  id: number;
+  time: number;
+  kind: ChunkDiagnosticKind;
+  op: ChunkDiagnosticOp;
+  detail: string;
+  durationMs: number;
+  thresholdMs: number;
+  sampleCount: number;
 }
 
 export interface ChunkSchedulerStats extends ChunkRenderStats, ChunkProfileStats {
@@ -140,6 +155,7 @@ const EMPTY_PROFILE_STATS: ChunkProfileStats = {
   workerChunkCopies: 0,
   displayedMeshBytes: 0,
   chunkBytesFetched: 0,
+  diagnostics: [],
   hashFetchMsAvg: 0,
   chunkFetchMsAvg: 0,
   parseMsAvg: 0,

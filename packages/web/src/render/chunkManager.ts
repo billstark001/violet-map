@@ -8,6 +8,8 @@ import {
   ChunkScheduler,
   LOD_STEPS,
   type ChunkProfileStats,
+  type ChunkDiagnosticEvent,
+  type ChunkDiagnosticOp,
   type ChunkRenderStats,
   type ChunkSchedulerEntry,
   type ChunkSchedulerStats,
@@ -28,6 +30,24 @@ const STALE_MESH_RELEASE_MS = 8000;
 const MIN_WORKER_RESIDENT_COLUMNS = 192;
 const MAX_WORKER_RESIDENT_COLUMNS = 1400;
 const WORKER_RESIDENT_FULL_PADDING = 4;
+const DIAGNOSTIC_HISTORY_LIMIT = 32;
+const DIAGNOSTIC_MIN_SAMPLES = 8;
+const DIAGNOSTIC_STDDEV_FACTOR = 3;
+const DIAGNOSTIC_DELAY_CHECK_MS = 1000;
+const DIAGNOSTIC_MIN_SLOW_MS: Record<ChunkDiagnosticOp, number> = {
+  hashFetch: 450,
+  chunkFetch: 900,
+  parse: 90,
+  fullMesh: 180,
+  lodMesh: 120,
+};
+const DIAGNOSTIC_MIN_DELAY_MS: Record<ChunkDiagnosticOp, number> = {
+  hashFetch: 1500,
+  chunkFetch: 2500,
+  parse: 0,
+  fullMesh: 2500,
+  lodMesh: 1800,
+};
 const SECTION_VISIBILITY_DIRS = ['down', 'up', 'north', 'south', 'west', 'east'] as const;
 const SECTION_VISIBILITY_ALL = (() => {
   let mask = 0;
@@ -59,6 +79,21 @@ type IoQueueKind = 'hash' | 'fetch';
 interface ProfileSample {
   total: number;
   count: number;
+  mean: number;
+  m2: number;
+}
+
+interface ActiveDiagnosticOperation {
+  id: number;
+  op: Exclude<ChunkDiagnosticOp, 'parse'>;
+  detail: string;
+  startedAt: number;
+  profile: ProfileSample;
+  reportedDelayed: boolean;
+}
+
+function profileSample(): ProfileSample {
+  return { total: 0, count: 0, mean: 0, m2: 0 };
 }
 
 interface FullSectionRender {
@@ -114,11 +149,17 @@ export class ChunkManager {
   private activeMeshTasks = 0;
   private inFlightMeshVersions = new Set<number>();
   private versionCounter = 0;
-  private hashFetchProfile: ProfileSample = { total: 0, count: 0 };
-  private chunkFetchProfile: ProfileSample = { total: 0, count: 0 };
-  private parseProfile: ProfileSample = { total: 0, count: 0 };
-  private fullMeshProfile: ProfileSample = { total: 0, count: 0 };
-  private lodMeshProfile: ProfileSample = { total: 0, count: 0 };
+  private hashFetchProfile = profileSample();
+  private chunkFetchProfile = profileSample();
+  private parseProfile = profileSample();
+  private fullMeshProfile = profileSample();
+  private lodMeshProfile = profileSample();
+  private diagnostics: ChunkDiagnosticEvent[] = [];
+  private diagnosticSeq = 0;
+  private activeDiagnostics = new Map<number, ActiveDiagnosticOperation>();
+  private meshDiagnosticByVersion = new Map<number, number>();
+  private activeDiagnosticSeq = 0;
+  private lastDiagnosticDelayCheck = 0;
   private chunkBytesFetched = 0;
   private displayedMeshBytes = 0;
   private fullCacheHits = 0;
@@ -136,6 +177,7 @@ export class ChunkManager {
     workerChunkCopies: 0,
     displayedMeshBytes: 0,
     chunkBytesFetched: 0,
+    diagnostics: [],
     hashFetchMsAvg: 0,
     chunkFetchMsAvg: 0,
     parseMsAvg: 0,
@@ -290,6 +332,7 @@ export class ChunkManager {
     }
     this.releaseStaleEntries(frame.keepKeys, now);
     this.releaseWorkerDataOverBudget();
+    this.checkDelayedOperations(now);
     this.syncSchedulerStats();
     this.flushMeshQueue();
     this.flushHashQueue();
@@ -458,6 +501,10 @@ export class ChunkManager {
       return;
     }
     const workerIndex = this.markWorkerMesh(version);
+    const op = kind === 'full' ? 'fullMesh' : 'lodMesh';
+    const profile = kind === 'full' ? this.fullMeshProfile : this.lodMeshProfile;
+    const detail = kind === 'full' ? e.key : `${e.key} LOD ${step}`;
+    this.meshDiagnosticByVersion.set(version, this.beginActiveOperation(op, detail, profile));
     if (kind === 'full') this.sendToWorker(workerIndex, { type: 'mesh', key: e.key, version });
     else this.sendToWorker(workerIndex, { type: 'lod', key: e.key, step, version });
   }
@@ -724,10 +771,107 @@ export class ChunkManager {
     if (value === undefined || !Number.isFinite(value) || value < 0) return;
     profile.total += value;
     profile.count++;
+    const delta = value - profile.mean;
+    profile.mean += delta / profile.count;
+    profile.m2 += delta * (value - profile.mean);
   }
 
   private average(profile: ProfileSample): number {
     return profile.count > 0 ? profile.total / profile.count : 0;
+  }
+
+  private stddev(profile: ProfileSample): number {
+    return profile.count > 1 ? Math.sqrt(profile.m2 / (profile.count - 1)) : 0;
+  }
+
+  private slowThreshold(op: ChunkDiagnosticOp, profile: ProfileSample): number {
+    if (profile.count < DIAGNOSTIC_MIN_SAMPLES) return Infinity;
+    return Math.max(DIAGNOSTIC_MIN_SLOW_MS[op], profile.mean + this.stddev(profile) * DIAGNOSTIC_STDDEV_FACTOR);
+  }
+
+  private delayThreshold(op: Exclude<ChunkDiagnosticOp, 'parse'>, profile: ProfileSample): number {
+    if (profile.count < DIAGNOSTIC_MIN_SAMPLES) return DIAGNOSTIC_MIN_DELAY_MS[op];
+    return Math.max(DIAGNOSTIC_MIN_DELAY_MS[op], profile.mean + this.stddev(profile) * DIAGNOSTIC_STDDEV_FACTOR);
+  }
+
+  private addDiagnostic(
+    kind: ChunkDiagnosticEvent['kind'],
+    op: ChunkDiagnosticOp,
+    detail: string,
+    durationMs: number,
+    thresholdMs: number,
+    sampleCount: number,
+  ) {
+    this.diagnostics.unshift({
+      id: ++this.diagnosticSeq,
+      time: Date.now(),
+      kind,
+      op,
+      detail,
+      durationMs,
+      thresholdMs,
+      sampleCount,
+    });
+    if (this.diagnostics.length > DIAGNOSTIC_HISTORY_LIMIT) this.diagnostics.length = DIAGNOSTIC_HISTORY_LIMIT;
+  }
+
+  private recordCompletedOperation(
+    op: ChunkDiagnosticOp,
+    profile: ProfileSample,
+    durationMs: number | undefined,
+    detail: string,
+  ) {
+    if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 0) return;
+    const threshold = this.slowThreshold(op, profile);
+    const sampleCount = profile.count;
+    if (durationMs > threshold) this.addDiagnostic('slow', op, detail, durationMs, threshold, sampleCount);
+    this.sample(profile, durationMs);
+  }
+
+  private beginActiveOperation(
+    op: Exclude<ChunkDiagnosticOp, 'parse'>,
+    detail: string,
+    profile: ProfileSample,
+  ): number {
+    const id = ++this.activeDiagnosticSeq;
+    this.activeDiagnostics.set(id, {
+      id,
+      op,
+      detail,
+      profile,
+      startedAt: performance.now(),
+      reportedDelayed: false,
+    });
+    return id;
+  }
+
+  private finishActiveOperation(id: number, durationMs?: number) {
+    const op = this.activeDiagnostics.get(id);
+    if (!op) return;
+    this.activeDiagnostics.delete(id);
+    const duration = durationMs ?? performance.now() - op.startedAt;
+    if (op.reportedDelayed) this.sample(op.profile, duration);
+    else this.recordCompletedOperation(op.op, op.profile, duration, op.detail);
+  }
+
+  private finishMeshDiagnostic(version: number, durationMs: number | undefined) {
+    const opId = this.meshDiagnosticByVersion.get(version);
+    if (opId === undefined) return;
+    this.meshDiagnosticByVersion.delete(version);
+    this.finishActiveOperation(opId, durationMs);
+  }
+
+  private checkDelayedOperations(now: number) {
+    if (now - this.lastDiagnosticDelayCheck < DIAGNOSTIC_DELAY_CHECK_MS) return;
+    this.lastDiagnosticDelayCheck = now;
+    for (const op of this.activeDiagnostics.values()) {
+      if (op.reportedDelayed) continue;
+      const duration = now - op.startedAt;
+      const threshold = this.delayThreshold(op.op, op.profile);
+      if (duration <= threshold) continue;
+      op.reportedDelayed = true;
+      this.addDiagnostic('delayed', op.op, op.detail, duration, threshold, op.profile.count);
+    }
   }
 
   private chunkBuffer(data: Uint8Array): ArrayBuffer {
@@ -846,10 +990,10 @@ export class ChunkManager {
     if (!entries.length) return;
     this.checking++;
     const started = performance.now();
+    const opId = this.beginActiveOperation('hashFetch', `${entries.length} hashes`, this.hashFetchProfile);
     try {
       const seen = new Set<string>();
       const payloads = await fetchChunkHashes(this.opts.world, this.opts.dimension, entries.map((e) => ({ cx: e.cx, cz: e.cz })));
-      this.sample(this.hashFetchProfile, performance.now() - started);
       for (const payload of payloads) {
         seen.add(this.key(payload.cx, payload.cz));
         this.handleFetchedHash(payload);
@@ -863,6 +1007,7 @@ export class ChunkManager {
       }
       this.reportStats();
     } finally {
+      this.finishActiveOperation(opId, performance.now() - started);
       this.checking--;
       this.flushHashQueue();
     }
@@ -904,10 +1049,10 @@ export class ChunkManager {
     for (const e of entries) e.state = 'fetching';
     this.fetching++;
     const started = performance.now();
+    const opId = this.beginActiveOperation('chunkFetch', `${entries.length} chunks`, this.chunkFetchProfile);
     try {
       const seen = new Set<string>();
       const payloads = await fetchChunks(this.opts.world, this.opts.dimension, entries.map((e) => ({ cx: e.cx, cz: e.cz })));
-      this.sample(this.chunkFetchProfile, performance.now() - started);
       for (const payload of payloads) {
         seen.add(this.key(payload.cx, payload.cz));
         this.handleFetchedChunk(payload);
@@ -921,6 +1066,7 @@ export class ChunkManager {
       }
       this.reportStats();
     } finally {
+      this.finishActiveOperation(opId, performance.now() - started);
       this.fetching--;
       this.flushFetchQueue();
     }
@@ -933,7 +1079,7 @@ export class ChunkManager {
   private handleMessage(msg: WorkerResponse, workerIndex: number) {
     switch (msg.type) {
       case 'chunkReady': {
-        this.sample(this.parseProfile, msg.profile?.parseMs);
+        this.recordCompletedOperation('parse', this.parseProfile, msg.profile?.parseMs, msg.key);
         const e = this.chunks.get(msg.key);
         if (!e) { this.broadcast({ type: 'drop', key: msg.key }); return; }
         if (e.state !== 'decoding' && e.state !== 'stored') break;
@@ -955,7 +1101,7 @@ export class ChunkManager {
         break;
       }
       case 'meshResult': {
-        this.sample(this.fullMeshProfile, msg.profile?.meshMs);
+        this.finishMeshDiagnostic(msg.version, msg.profile?.meshMs);
         this.finishActiveMesh(msg.version);
         const e = this.chunks.get(msg.key);
         const matched = e?.pendingFullVersion === msg.version;
@@ -980,7 +1126,7 @@ export class ChunkManager {
         break;
       }
       case 'lodResult': {
-        this.sample(this.lodMeshProfile, msg.profile?.meshMs);
+        this.finishMeshDiagnostic(msg.version, msg.profile?.meshMs);
         this.finishActiveMesh(msg.version);
         const e = this.chunks.get(msg.key);
         const step = (LOD_STEPS.includes(msg.step as LodStep) ? msg.step : 8) as LodStep;
@@ -1206,6 +1352,7 @@ export class ChunkManager {
       workerChunkCopies: renderStats.nbt * this.workers.length,
       displayedMeshBytes: this.displayedMeshBytes,
       chunkBytesFetched: this.chunkBytesFetched,
+      diagnostics: [...this.diagnostics],
       hashFetchMsAvg: this.average(this.hashFetchProfile),
       chunkFetchMsAvg: this.average(this.chunkFetchProfile),
       parseMsAvg: this.average(this.parseProfile),
@@ -1248,6 +1395,8 @@ export class ChunkManager {
     this.scene.remove(this.root);
     this.inFlightMeshVersions.clear();
     this.versionWorker.clear();
+    this.meshDiagnosticByVersion.clear();
+    this.activeDiagnostics.clear();
     for (const worker of this.workers) worker.terminate();
     this.workers = [];
     this.workerLoads = [];

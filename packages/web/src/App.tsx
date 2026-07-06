@@ -94,6 +94,10 @@ function formatMs(ms: number): string {
   return `${ms >= 10 ? ms.toFixed(0) : ms.toFixed(1)} ms`;
 }
 
+function formatTime(time: number): string {
+  return new Date(time).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
 export default function App() {
   const { t, i18n } = useTranslation();
   const [worlds, setWorlds] = useState<WorldInfo[]>([]);
@@ -425,6 +429,31 @@ export default function App() {
                       <Badge color="cyan">{t('chunkBytesFetched', { value: formatBytes(stats.chunkBytesFetched) })}</Badge>
                       <Badge color="blue">{t('cacheEntries', { value: cacheStats.entries })}</Badge>
                       <Badge color="green">{t('cacheSize', { value: formatBytes(cacheStats.bytes) })}</Badge>
+                      <Box style={{
+                        width: '100%',
+                        maxHeight: 168,
+                        overflowY: 'auto',
+                        borderTop: '1px solid rgba(148, 163, 184, 0.22)',
+                        paddingTop: 8,
+                      }}>
+                        <Text size="1" weight="bold" style={{ display: 'block', marginBottom: 6 }}>{t('diagnosticEvents')}</Text>
+                        {stats.diagnostics.length === 0 ? (
+                          <Text size="1" color="gray">{t('noDiagnosticEvents')}</Text>
+                        ) : stats.diagnostics.map((event) => (
+                          <Box key={event.id} mb="1">
+                            <Text size="1" color={event.kind === 'slow' ? 'amber' : 'orange'}>
+                              {formatTime(event.time)} {t(event.kind === 'slow' ? 'diagnosticSlow' : 'diagnosticDelayed')}{' '}
+                              {t(`diagOp_${event.op}`)} {formatMs(event.durationMs)}
+                            </Text>
+                            <Text size="1" color="gray" style={{ display: 'block' }}>
+                              {t('diagnosticThreshold', {
+                                threshold: formatMs(event.thresholdMs),
+                                samples: event.sampleCount,
+                              })} - {event.detail}
+                            </Text>
+                          </Box>
+                        ))}
+                      </Box>
                     </>
                   )}
                 </Flex>
