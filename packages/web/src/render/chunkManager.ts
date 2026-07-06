@@ -25,6 +25,9 @@ const DEFAULT_LOD_RELEASE_STEP: LodStep = 2;
 const LOD_RELEASE_STEP_STORAGE_KEY = 'violet-map:lodReleaseStep';
 const STALE_WORKER_RELEASE_MS = 4000;
 const STALE_MESH_RELEASE_MS = 8000;
+const MIN_WORKER_RESIDENT_COLUMNS = 192;
+const MAX_WORKER_RESIDENT_COLUMNS = 1400;
+const WORKER_RESIDENT_FULL_PADDING = 4;
 const SECTION_VISIBILITY_DIRS = ['down', 'up', 'north', 'south', 'west', 'east'] as const;
 const SECTION_VISIBILITY_ALL = (() => {
   let mask = 0;
@@ -286,6 +289,7 @@ export class ChunkManager {
       if (e) this.dropEntry(key, e);
     }
     this.releaseStaleEntries(frame.keepKeys, now);
+    this.releaseWorkerDataOverBudget();
     this.syncSchedulerStats();
     this.flushMeshQueue();
     this.flushHashQueue();
@@ -777,6 +781,34 @@ export class ChunkManager {
     this.broadcast({ type: 'drop', key: e.key });
     e.workerReadyMask = 0;
     e.state = 'hashed';
+  }
+
+  private displaySatisfiesLastTarget(e: ChunkEntry): boolean {
+    if (e.dirty || e.displayed === 'none') return false;
+    if (e.lastTargetStep === 1) return e.displayed === 'full';
+    if (e.displayed === 'full') return true;
+    return e.displayed === 'lod' && e.displayedLodStep > 0 && e.displayedLodStep <= e.lastTargetStep;
+  }
+
+  private maxWorkerResidentColumns(): number {
+    const radius = Math.max(4, Math.floor(this.opts.viewDistance) + WORKER_RESIDENT_FULL_PADDING);
+    const target = (radius * 2 + 1) ** 2;
+    return Math.max(MIN_WORKER_RESIDENT_COLUMNS, Math.min(MAX_WORKER_RESIDENT_COLUMNS, target));
+  }
+
+  private releaseWorkerDataOverBudget() {
+    const resident = [...this.chunks.values()].filter((e) => e.state === 'stored');
+    const budget = this.maxWorkerResidentColumns();
+    if (resident.length <= budget) return;
+    const victims = resident
+      .filter((e) => !e.pendingFull && !e.pendingLod && this.displaySatisfiesLastTarget(e) && !!this.contentHash(e))
+      .sort((a, b) => b.lastTier - a.lastTier || a.lastWantedAt - b.lastWantedAt || b.lastScore - a.lastScore);
+    let count = resident.length;
+    for (const e of victims) {
+      if (count <= budget) break;
+      this.releaseWorkerData(e);
+      count--;
+    }
   }
 
   private releaseStaleEntries(keepKeys: Set<string>, now: number) {

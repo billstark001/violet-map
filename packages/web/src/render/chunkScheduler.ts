@@ -184,6 +184,7 @@ export class ChunkScheduler {
   private predictedLoadCamera = new THREE.PerspectiveCamera();
   private predictedOffset = new THREE.Vector3();
   private tmpForward = new THREE.Vector3();
+  private tmpVelocity = new THREE.Vector3();
   private tmpBox = new THREE.Box3();
 
   // #region Lifecycle and options
@@ -425,7 +426,8 @@ export class ChunkScheduler {
     const instantX = (cameraPos.x - this.lastCameraPos.x) / dt;
     const instantY = (cameraPos.y - this.lastCameraPos.y) / dt;
     const instantZ = (cameraPos.z - this.lastCameraPos.z) / dt;
-    this.cameraVelocity.lerp(new THREE.Vector3(instantX, instantY, instantZ), 0.35);
+    this.tmpVelocity.set(instantX, instantY, instantZ);
+    this.cameraVelocity.lerp(this.tmpVelocity, 0.35);
     this.lastCameraPos.copy(cameraPos);
     this.lastCameraSampleTime = now;
   }
@@ -656,7 +658,10 @@ export class ChunkScheduler {
 
   private wantsLod(e: ChunkSchedulerEntry, step: LodStep): boolean {
     const displayedSameLod = e.displayed === 'lod' && e.displayedLodStep === step;
-    return (!displayedSameLod || e.dirty) && !(e.pendingLod && e.pendingLodStep === step);
+    if (displayedSameLod && !e.dirty) return false;
+    if (!e.pendingLod) return true;
+    if (!e.dirty && e.pendingLodStep > 0 && e.pendingLodStep <= step) return false;
+    return e.pendingLodStep !== step;
   }
 
   private displaySatisfiesTarget(e: ChunkSchedulerEntry, targetStep: LodStep): boolean {
@@ -773,11 +778,18 @@ export class ChunkScheduler {
 
   private nextIoBatch(queue: Set<string>, batchSize: number, maxTier: number): string[] {
     const out: string[] = [];
-    for (const key of this.sortKeys(queue)) {
+    for (const key of queue) {
       const priority = this.priorityByKey.get(key) ?? { tier: 99, score: Infinity, updatedAt: 0 };
       if (priority.tier > maxTier) continue;
-      out.push(key);
-      if (out.length >= batchSize) break;
+      const candidate = { key, ...priority };
+      let i = 0;
+      while (i < out.length) {
+        const existing = this.priorityByKey.get(out[i]) ?? { tier: 99, score: Infinity, updatedAt: 0 };
+        if (this.comparePriority(candidate, existing) < 0) break;
+        i++;
+      }
+      out.splice(i, 0, key);
+      if (out.length > batchSize) out.pop();
     }
     for (const key of out) queue.delete(key);
     return out;

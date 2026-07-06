@@ -36,7 +36,7 @@ export class ChunkNeighborhood implements WorldView {
 export interface MesherResources {
   baker: ModelBaker;
   info(name: string): BlockInfo;
-  tint(type: TintType, fixed: number | undefined, biome: string): Rgb;
+  tint(type: TintType, fixed: number | undefined, biome: string, state?: BlockStateRef): Rgb;
   atlas: AtlasIndex;
   textureHasAlpha?: TextureAlphaMap;
 }
@@ -639,7 +639,7 @@ function emitFluid(
 ) {
   const builder = builders[fluid.layer ?? 'translucent'];
   const rect = res.atlas[fluid.texture] ?? res.atlas[MISSING_TEXTURE];
-  const tint = res.tint(fluid.tint, undefined, view.getBiome(wx, wy, wz));
+  const tint = res.tint(fluid.tint, undefined, view.getBiome(wx, wy, wz), state);
   const above = view.getBlock(wx, wy + 1, wz);
   const aboveSame = isSameFluid(res, fluid.texture, above);
   const aboveOccludes = blockOccludes(res, view, wx, wy + 1, wz);
@@ -849,7 +849,7 @@ export function meshSection(
             if (bi.layer === 'translucent' && n.name === state.name) continue;
           }
           const tint = q.tintIndex >= 0
-            ? localRes.tint(bi.tint, bi.fixedTint, cachedView.getBiome(wx, wy, wz))
+            ? localRes.tint(bi.tint, bi.fixedTint, cachedView.getBiome(wx, wy, wz), state)
             : WHITE;
           const layer = blockLayer === 'opaque' && localRes.textureHasAlpha?.[q.texture] ? 'cutout' : blockLayer;
           emitQuad(localRes, cachedView, builders[layer], q, x, y, z, wx, wy, wz, tint, smoothLighting);

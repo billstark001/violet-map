@@ -12,6 +12,7 @@ interface LodWorldView {
 interface LodShape {
   minY: number;
   maxY: number;
+  sideMaxY: number;
 }
 
 interface FaceBucket {
@@ -282,7 +283,7 @@ function shapeOf(state: BlockStateRef, info: BlockInfo): LodShape | null {
 
   minY = Math.min(1, Math.max(0, minY));
   maxY = Math.min(1, Math.max(0, maxY));
-  return maxY - minY > EPS ? { minY, maxY } : null;
+  return maxY - minY > EPS ? { minY, maxY, sideMaxY: info.fluid ? 1 : maxY } : null;
 }
 
 function makeLocalView(col: ChunkColumn): LodWorldView {
@@ -504,17 +505,17 @@ export function meshLodChunk(
               addFace(dir, ay, by, getColor());
             };
             if (!cover) {
-              emit(shape.minY, shape.maxY);
+              emit(shape.minY, shape.sideMaxY);
               return;
             }
             const c0 = Math.max(shape.minY, cover.minY);
-            const c1 = Math.min(shape.maxY, cover.maxY);
+            const c1 = Math.min(shape.sideMaxY, cover.sideMaxY);
             if (c1 <= c0 + EPS) {
-              emit(shape.minY, shape.maxY);
+              emit(shape.minY, shape.sideMaxY);
               return;
             }
             if (c0 > shape.minY + EPS) emit(shape.minY, c0);
-            if (c1 < shape.maxY - EPS) emit(c1, shape.maxY);
+            if (c1 < shape.sideMaxY - EPS) emit(c1, shape.sideMaxY);
           };
 
           side('north', 0, -1, exteriorNorth);

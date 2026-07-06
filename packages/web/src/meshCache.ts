@@ -92,9 +92,14 @@ async function pruneCache() {
   if (started - lastPrune < PRUNE_INTERVAL_MS) return;
   lastPrune = started;
   const db = await dbPromise;
-  let entries = await db.getAllFromIndex(STORE, 'accessedAt');
-  await Promise.all(entries.filter((e) => started - e.accessedAt > TTL_MS).map((e) => db.delete(STORE, e.key)));
-  entries = entries.filter((e) => started - e.accessedAt <= TTL_MS);
+  const entries: { key: string; accessedAt: number; bytes: number }[] = [];
+  let cursor = await db.transaction(STORE, 'readwrite').store.index('accessedAt').openCursor();
+  while (cursor) {
+    const { key, accessedAt, bytes } = cursor.value;
+    if (started - accessedAt > TTL_MS) await cursor.delete();
+    else entries.push({ key, accessedAt, bytes });
+    cursor = await cursor.continue();
+  }
   let totalBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0);
   while (entries.length > MAX_ENTRIES || totalBytes > MAX_BYTES) {
     const oldest = entries.shift();
@@ -158,11 +163,15 @@ export interface MeshCacheStats {
 }
 
 export async function getMeshCacheStats(): Promise<MeshCacheStats> {
-  const entries = await (await dbPromise).getAll(STORE);
-  return {
-    entries: entries.length,
-    bytes: entries.reduce((sum, entry) => sum + entry.bytes, 0),
-  };
+  let entries = 0;
+  let bytes = 0;
+  let cursor = await (await dbPromise).transaction(STORE).store.openCursor();
+  while (cursor) {
+    entries++;
+    bytes += cursor.value.bytes;
+    cursor = await cursor.continue();
+  }
+  return { entries, bytes };
 }
 
 export async function clearMeshCache(): Promise<void> {

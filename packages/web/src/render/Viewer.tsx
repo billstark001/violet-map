@@ -552,6 +552,7 @@ export function Viewer(props: ViewerProps) {
         e.sky.dispose();
         for (const material of e.materials.all) material.dispose();
         e.terrainTexture.dispose();
+        e.renderer.renderLists.dispose();
         e.renderer.dispose();
         e.renderer.domElement.remove();
         engineRef.current = null;

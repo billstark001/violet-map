@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Badge, Box, Button, Card, Flex, Select, Slider, Tabs, Text, TextField, Theme } from '@radix-ui/themes';
 import { useTranslation } from 'react-i18next';
 import { fetchWorlds } from './api';
@@ -9,12 +9,14 @@ import { EMPTY_CHUNK_SCHEDULER_STATS, type ChunkSchedulerStats } from './render/
 
 interface WorldInfo { id: string; dimensions: string[] }
 type Axis = 'x' | 'y' | 'z';
+type DiagnosticDetail = 'off' | 'simple' | 'standard' | 'detailed';
 interface ViewerStats extends ChunkSchedulerStats {
   pos: [number, number, number];
 }
 
 const SETTINGS_STORAGE_KEY = 'violet-map:settings';
 const PANEL_STORAGE_KEY = 'violet-map:panel-collapsed';
+const DIAGNOSTIC_PANEL_STORAGE_KEY = 'violet-map:diagnostic-panel-collapsed';
 
 interface ViewerSettings {
   world?: string;
@@ -23,6 +25,7 @@ interface ViewerSettings {
   lodDistance?: number;
   fastMoveMultiplier?: number;
   timeOfDay?: number;
+  diagnosticDetail?: DiagnosticDetail;
 }
 
 const params = new URLSearchParams(location.search);
@@ -61,6 +64,13 @@ function stringSetting(key: keyof ViewerSettings, fallback: string): string {
   }
 }
 
+function diagnosticDetailSetting(): DiagnosticDetail {
+  const value = stringSetting('diagnosticDetail', 'standard');
+  return value === 'off' || value === 'simple' || value === 'standard' || value === 'detailed'
+    ? value
+    : 'standard';
+}
+
 function coordText(v: number): string {
   if (!Number.isFinite(v)) return '0';
   const rounded = Math.round(v * 10) / 10;
@@ -93,8 +103,11 @@ export default function App() {
   const [lodDistance, setLodDistance] = useState(() => numberSetting('lodDistance', 12));
   const [fastMoveMultiplier, setFastMoveMultiplier] = useState(() => numberSetting('fastMoveMultiplier', 4));
   const [timeOfDay, setTimeOfDay] = useState(() => numberSetting('timeOfDay', 0));
+  const [diagnosticDetail, setDiagnosticDetail] = useState<DiagnosticDetail>(() => diagnosticDetailSetting());
   const [panelCollapsed, setPanelCollapsed] = useState(() => localStorage.getItem(PANEL_STORAGE_KEY) === 'true');
+  const [diagnosticCollapsed, setDiagnosticCollapsed] = useState(() => localStorage.getItem(DIAGNOSTIC_PANEL_STORAGE_KEY) === 'true');
   const [stats, setStats] = useState<ViewerStats>({ ...EMPTY_CHUNK_SCHEDULER_STATS, pos: [0, 0, 0] });
+  const latestStatsRef = useRef<ViewerStats>({ ...EMPTY_CHUNK_SCHEDULER_STATS, pos: [0, 0, 0] });
   const [panelTab, setPanelTab] = useState('view');
   const [cacheStats, setCacheStats] = useState({ entries: 0, bytes: 0 });
   const [coordDirty, setCoordDirty] = useState(false);
@@ -128,11 +141,12 @@ export default function App() {
       if (!params.has('lodDistance')) next.lodDistance = lodDistance;
       if (!params.has('fastMoveMultiplier')) next.fastMoveMultiplier = fastMoveMultiplier;
       if (!params.has('timeOfDay')) next.timeOfDay = timeOfDay;
+      if (!params.has('diagnosticDetail')) next.diagnosticDetail = diagnosticDetail;
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(next));
     } catch {
       // Storage may be unavailable in restricted contexts.
     }
-  }, [world, dimension, viewDistance, lodDistance, fastMoveMultiplier, timeOfDay, worldsLoaded]);
+  }, [world, dimension, viewDistance, lodDistance, fastMoveMultiplier, timeOfDay, diagnosticDetail, worldsLoaded]);
 
   useEffect(() => {
     try {
@@ -143,7 +157,16 @@ export default function App() {
   }, [panelCollapsed]);
 
   useEffect(() => {
-    if (panelCollapsed) return;
+    try {
+      localStorage.setItem(DIAGNOSTIC_PANEL_STORAGE_KEY, String(diagnosticCollapsed));
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [diagnosticCollapsed]);
+
+  useEffect(() => {
+    const diagnosticsNeedCache = diagnosticDetail === 'detailed' && !diagnosticCollapsed;
+    if (panelCollapsed && !diagnosticsNeedCache) return;
     let cancelled = false;
     const refresh = () => {
       getMeshCacheStats()
@@ -156,13 +179,17 @@ export default function App() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [panelCollapsed]);
+  }, [panelCollapsed, diagnosticDetail, diagnosticCollapsed]);
 
   const dims = worlds.find((w) => w.id === world)?.dimensions ?? [];
   const draftValues = [Number(coordDraft.x), Number(coordDraft.y), Number(coordDraft.z)] as const;
   const draftValid = draftValues.every(Number.isFinite);
+  const diagnosticsVisible = diagnosticDetail !== 'off' && !diagnosticCollapsed;
+  const showStandardDiagnostics = diagnosticDetail === 'standard' || diagnosticDetail === 'detailed';
+  const showDetailedDiagnostics = diagnosticDetail === 'detailed';
   const handleStats = (next: typeof stats) => {
-    setStats(next);
+    latestStatsRef.current = next;
+    if (diagnosticsVisible) setStats(next);
     if (!coordDirty) {
       const draft = { x: coordText(next.pos[0]), y: coordText(next.pos[1]), z: coordText(next.pos[2]) };
       setCoordDraft((prev) => (
@@ -175,7 +202,8 @@ export default function App() {
     setCoordDraft((prev) => ({ ...prev, [axis]: value }));
   };
   const useCurrentPosition = () => {
-    setCoordDraft({ x: coordText(stats.pos[0]), y: coordText(stats.pos[1]), z: coordText(stats.pos[2]) });
+    const current = latestStatsRef.current;
+    setCoordDraft({ x: coordText(current.pos[0]), y: coordText(current.pos[1]), z: coordText(current.pos[2]) });
     setCoordDirty(false);
   };
   const applyPosition = () => {
@@ -281,28 +309,6 @@ export default function App() {
                         <Text size="1">{t('timeOfDay', { value: timeOfDay.toFixed(2) })}</Text>
                         <Slider value={[timeOfDay]} min={0} max={1} step={0.01} onValueChange={([v]) => setTimeOfDay(v)} />
                       </Box>
-                      <Flex gap="2" wrap="wrap">
-                        <Badge>XYZ {stats.pos.map((v) => v.toFixed(0)).join(' / ')}</Badge>
-                        <Badge color="blue">{t('nbtChunks', { value: stats.nbt })}</Badge>
-                        <Badge color="green">{t('lodChunks', { rendered: stats.lodRendered, ready: stats.lodReady })}</Badge>
-                        <Badge color="jade">{t('fullChunks', { rendered: stats.fullRendered, ready: stats.fullReady })}</Badge>
-                        <Badge color="gray">{t('queueStats', { hash: stats.hashQueued, fetch: stats.fetchQueued, mesh: stats.meshQueued })}</Badge>
-                        <Badge color="orange">{t('workerStats', {
-                          workers: stats.workerCount,
-                          copies: stats.workerChunkCopies,
-                          active: stats.activeMeshTasks,
-                        })}</Badge>
-                        <Badge color="purple">{t('profileFetch', {
-                          hash: formatMs(stats.hashFetchMsAvg),
-                          chunk: formatMs(stats.chunkFetchMsAvg),
-                        })}</Badge>
-                        <Badge color="pink">{t('profileMesh', {
-                          parse: formatMs(stats.parseMsAvg),
-                          full: formatMs(stats.fullMeshMsAvg),
-                          lod: formatMs(stats.lodMeshMsAvg),
-                        })}</Badge>
-                        <Badge color="amber">{t('meshBytesRendered', { value: formatBytes(stats.displayedMeshBytes) })}</Badge>
-                      </Flex>
                       <Flex gap="2" align="end">
                         {(['x', 'y', 'z'] as Axis[]).map((axis) => (
                           <Box key={axis} style={{ flex: 1, minWidth: 0 }}>
@@ -334,6 +340,18 @@ export default function App() {
                           </Select.Content>
                         </Select.Root>
                       </Flex>
+                      <Flex gap="2" align="center">
+                        <Text size="1" style={{ width: 64 }}>{t('diagnostics')}</Text>
+                        <Select.Root value={diagnosticDetail} onValueChange={(value) => setDiagnosticDetail(value as DiagnosticDetail)}>
+                          <Select.Trigger style={{ flex: 1 }} />
+                          <Select.Content>
+                            <Select.Item value="off">{t('diagnosticsOff')}</Select.Item>
+                            <Select.Item value="simple">{t('diagnosticsSimple')}</Select.Item>
+                            <Select.Item value="standard">{t('diagnosticsStandard')}</Select.Item>
+                            <Select.Item value="detailed">{t('diagnosticsDetailed')}</Select.Item>
+                          </Select.Content>
+                        </Select.Root>
+                      </Flex>
                       <Box>
                         <Text size="1" weight="bold">{t('meshCache')}</Text>
                         <Flex gap="2" wrap="wrap" mt="2">
@@ -352,6 +370,68 @@ export default function App() {
             )}
           </Flex>
         </Card>
+        {diagnosticDetail !== 'off' && (
+          <Card style={{
+            position: 'absolute',
+            top: 12,
+            right: 12,
+            width: diagnosticCollapsed ? 48 : 300,
+            opacity: 0.94,
+            backgroundColor: 'rgba(5, 9, 18, 0.88)',
+            borderColor: 'rgba(148, 163, 184, 0.22)',
+            transition: 'width 140ms ease',
+          }}>
+            <Flex direction="column" gap="2">
+              <Flex justify="between" align="center">
+                {!diagnosticCollapsed && <Text size="2" weight="bold">{t('diagnostics')}</Text>}
+                <Button
+                  size="1"
+                  variant="ghost"
+                  aria-label={diagnosticCollapsed ? t('expandDiagnostics') : t('collapseDiagnostics')}
+                  onClick={() => setDiagnosticCollapsed((v) => !v)}
+                  style={{ width: 28, height: 28, padding: 0, marginLeft: diagnosticCollapsed ? -4 : 0 }}
+                >
+                  {diagnosticCollapsed ? 'i' : 'x'}
+                </Button>
+              </Flex>
+              {!diagnosticCollapsed && (
+                <Flex gap="2" wrap="wrap">
+                  <Badge>XYZ {stats.pos.map((v) => v.toFixed(0)).join(' / ')}</Badge>
+                  <Badge color="green">{t('lodChunks', { rendered: stats.lodRendered, ready: stats.lodReady })}</Badge>
+                  <Badge color="jade">{t('fullChunks', { rendered: stats.fullRendered, ready: stats.fullReady })}</Badge>
+                  <Badge color="amber">{t('meshBytesRendered', { value: formatBytes(stats.displayedMeshBytes) })}</Badge>
+                  {showStandardDiagnostics && (
+                    <>
+                      <Badge color="blue">{t('nbtChunks', { value: stats.nbt })}</Badge>
+                      <Badge color="gray">{t('queueStats', { hash: stats.hashQueued, fetch: stats.fetchQueued, mesh: stats.meshQueued })}</Badge>
+                      <Badge color="orange">{t('workerStats', {
+                        workers: stats.workerCount,
+                        copies: stats.workerChunkCopies,
+                        active: stats.activeMeshTasks,
+                      })}</Badge>
+                    </>
+                  )}
+                  {showDetailedDiagnostics && (
+                    <>
+                      <Badge color="purple">{t('profileFetch', {
+                        hash: formatMs(stats.hashFetchMsAvg),
+                        chunk: formatMs(stats.chunkFetchMsAvg),
+                      })}</Badge>
+                      <Badge color="pink">{t('profileMesh', {
+                        parse: formatMs(stats.parseMsAvg),
+                        full: formatMs(stats.fullMeshMsAvg),
+                        lod: formatMs(stats.lodMeshMsAvg),
+                      })}</Badge>
+                      <Badge color="cyan">{t('chunkBytesFetched', { value: formatBytes(stats.chunkBytesFetched) })}</Badge>
+                      <Badge color="blue">{t('cacheEntries', { value: cacheStats.entries })}</Badge>
+                      <Badge color="green">{t('cacheSize', { value: formatBytes(cacheStats.bytes) })}</Badge>
+                    </>
+                  )}
+                </Flex>
+              )}
+            </Flex>
+          </Card>
+        )}
       </Box>
     </Theme>
   );

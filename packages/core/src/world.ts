@@ -32,9 +32,9 @@ export class ChunkSection {
   constructor(
     readonly y: number,
     readonly palette: BlockStateRef[],
-    readonly states: BitArray | null,
+    private states: BitArray | null,
     readonly biomePalette: string[],
-    readonly biomeStates: BitArray | null,
+    private biomeStates: BitArray | null,
     public blockLight: Uint8Array | null,
     public skyLight: Uint8Array | null,
   ) {}
@@ -42,12 +42,14 @@ export class ChunkSection {
     return this.palette.length === 1 && AIR_NAMES.has(this.palette[0].name);
   }
   blockIndex(x: number, y: number, z: number): number {
-    if (!this.states) return 0;
     const idx = (y << 8) | (z << 4) | x;
+    if (this.blockIndices) return this.blockIndices[idx] ?? 0;
+    if (!this.states) return 0;
     if (!this.blockIndices) {
       const out = this.palette.length <= 256 ? new Uint8Array(4096) : new Uint16Array(4096);
       for (let i = 0; i < 4096; i++) out[i] = this.states.get(i);
       this.blockIndices = out;
+      this.states = null;
     }
     return this.blockIndices[idx] ?? 0;
   }
@@ -55,12 +57,14 @@ export class ChunkSection {
     return this.palette[this.blockIndex(x, y, z)] ?? AIR;
   }
   biomeIndex(x: number, y: number, z: number): number {
-    if (!this.biomeStates) return 0;
     const idx = ((y >> 2) << 4) | ((z >> 2) << 2) | (x >> 2);
+    if (this.biomeIndices) return this.biomeIndices[idx] ?? 0;
+    if (!this.biomeStates) return 0;
     if (!this.biomeIndices) {
       const out = this.biomePalette.length <= 256 ? new Uint8Array(64) : new Uint16Array(64);
       for (let i = 0; i < 64; i++) out[i] = this.biomeStates.get(i);
       this.biomeIndices = out;
+      this.biomeStates = null;
     }
     return this.biomeIndices[idx] ?? 0;
   }

@@ -1,6 +1,6 @@
 export type Direction = 'down' | 'up' | 'north' | 'south' | 'west' | 'east';
 export type RenderLayer = 'opaque' | 'opaqueTiled' | 'cutout' | 'translucent';
-export type TintType = 'none' | 'grass' | 'foliage' | 'water';
+export type TintType = 'none' | 'grass' | 'foliage' | 'water' | 'redstone' | 'stem' | 'attachedStem';
 
 export interface BlockStateRef {
   name: string;
