@@ -5,13 +5,14 @@ import type { BiomeMap, DimensionMap } from '@violet-map/core';
 import { hexToRgb } from '@violet-map/core';
 import { fetchBiomes, fetchBlockInfo, fetchBundle, fetchDimensions, textureUrl } from '../api';
 import { buildAtlas, collectTextureIds, loadColormap } from '../atlas';
-import { ChunkManager, type ChunkManagerStats } from './chunkManager';
+import { ChunkManager } from './chunkManager';
+import { EMPTY_CHUNK_SCHEDULER_STATS, type ChunkSchedulerStats } from './chunkScheduler';
 import { FlyControls, type FlyView } from './controls';
 import { createMaterials, createSharedUniforms, SharedUniforms, TerrainMaterials } from './materials';
 import type { WorkerInit } from '../worker/protocol';
 
 const VIEW_STORAGE_KEY = 'violet-map:view';
-const MESH_CACHE_SCHEMA = 'mesh-v4-section-visibility';
+const MESH_CACHE_SCHEMA = 'mesh-v5-greedy-tiled-position16';
 const SKY_PLANE_FORWARD = new THREE.Vector3(0, 0, 1);
 const celestialFacing = new THREE.Vector3();
 
@@ -30,7 +31,7 @@ export interface ViewerProps {
   fastMoveMultiplier: number;
   timeOfDay: number; // 0=正午, 0.5=午夜
   cameraTarget?: CameraPositionRequest;
-  onStats?: (s: ChunkManagerStats & { pos: [number, number, number] }) => void;
+  onStats?: (s: ChunkSchedulerStats & { pos: [number, number, number] }) => void;
 }
 
 interface Engine {
@@ -389,7 +390,7 @@ export function Viewer(props: ViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<Engine | null>(null);
   const managerRef = useRef<ChunkManager | null>(null);
-  const latestStatsRef = useRef<ChunkManagerStats>({ nbt: 0, lodReady: 0, lodRendered: 0, fullReady: 0, fullRendered: 0 });
+  const latestStatsRef = useRef<ChunkSchedulerStats>({ ...EMPTY_CHUNK_SCHEDULER_STATS });
   const propsRef = useRef(props);
   propsRef.current = props;
   const [ready, setReady] = useState(false);

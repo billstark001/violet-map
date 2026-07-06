@@ -1,5 +1,5 @@
 export type Direction = 'down' | 'up' | 'north' | 'south' | 'west' | 'east';
-export type RenderLayer = 'opaque' | 'cutout' | 'translucent';
+export type RenderLayer = 'opaque' | 'opaqueTiled' | 'cutout' | 'translucent';
 export type TintType = 'none' | 'grass' | 'foliage' | 'water';
 
 export interface BlockStateRef {
@@ -53,6 +53,7 @@ export type AtlasIndex = Record<string, AtlasRect>;
 export interface MeshBuffers {
   positions: Float32Array;
   uvs: Float32Array;
+  atlasRects?: Float32Array;
   colors: Float32Array;
   lights: Float32Array;
   indices: Uint32Array;

@@ -21,10 +21,33 @@ export type WorkerRequest =
   | { type: 'drop'; key: string };
 
 export interface SectionMeshMsg { sy: number; layers: Partial<Record<RenderLayer, MeshBuffers>>; visibility?: number }
+export interface LodMeshMsg { step: number; mesh: MeshBuffers | null }
+
+export interface WorkerChunkProfile {
+  chunkBytes: number;
+  parseMs: number;
+  storedColumns: number;
+}
+
+export interface WorkerMeshProfile {
+  meshBytes: number;
+  meshMs: number;
+  storedColumns: number;
+  sectionCount?: number;
+}
+
 export type WorkerResponse =
-  | { type: 'chunkReady'; key: string; biome: string; surfaceY: number }
+  | { type: 'chunkReady'; key: string; biome: string; surfaceY: number; profile?: WorkerChunkProfile }
   | { type: 'chunkError'; key: string; error: string }
-  | { type: 'meshResult'; key: string; version: number; sections: SectionMeshMsg[] }
-  | { type: 'lodResult'; key: string; version: number; step: number; mesh: MeshBuffers | null };
+  | { type: 'meshResult'; key: string; version: number; sections: SectionMeshMsg[]; profile?: WorkerMeshProfile }
+  | {
+    type: 'lodResult';
+    key: string;
+    version: number;
+    step: number;
+    mesh: MeshBuffers | null;
+    meshes?: LodMeshMsg[];
+    profile?: WorkerMeshProfile;
+  };
 
 export const chunkKey = (world: string, dim: string, cx: number, cz: number) => `${world}|${dim}|${cx},${cz}`;

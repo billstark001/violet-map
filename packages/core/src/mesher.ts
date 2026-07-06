@@ -52,6 +52,34 @@ const TANGENTS: Record<Direction, [number, number]> = {
 const WHITE: Rgb = [1, 1, 1];
 const UV_EPS = 1e-4;
 const HEIGHT_EPS = 1e-3;
+const GEOMETRY_EPS = 1e-4;
+const FULL_FACE_UVS = new Float32Array([0, 0, 16, 0, 16, 16, 0, 16]);
+const FULL_FACE_POSITIONS: Record<Direction, Float32Array> = {
+  up: new Float32Array([0, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1]),
+  down: new Float32Array([0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0]),
+  north: new Float32Array([1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0]),
+  south: new Float32Array([0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1]),
+  west: new Float32Array([0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0]),
+  east: new Float32Array([1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 1]),
+};
+
+type SimpleCubeDef = Record<Direction, BakedQuad>;
+
+interface GreedyCell {
+  key: string;
+  rect: AtlasRect;
+  r: number;
+  g: number;
+  b: number;
+  sky: number;
+  block: number;
+}
+
+interface GreedyGrid {
+  dir: Direction;
+  slice: number;
+  cells: (GreedyCell | null)[];
+}
 
 /** 原版风格的坐标散列，用于随机变体选择。 */
 export function hash3(x: number, y: number, z: number): number {
@@ -63,14 +91,26 @@ export function hash3(x: number, y: number, z: number): number {
 class MeshBuilder {
   pos = new Float32Writer(4096 * 3);
   uv = new Float32Writer(4096 * 2);
+  atlas: Float32Writer | null;
   col = new Float32Writer(4096 * 3);
   light = new Float32Writer(4096 * 2);
   idx = new Uint32Writer(4096 * 6);
   verts = 0;
+  constructor(withAtlasRects = false) {
+    this.atlas = withAtlasRects ? new Float32Writer(4096 * 4) : null;
+  }
   get empty() { return this.verts === 0; }
-  vertex(x: number, y: number, z: number, u: number, v: number, r: number, g: number, b: number, sky: number, block: number) {
+  vertex(
+    x: number, y: number, z: number, u: number, v: number,
+    r: number, g: number, b: number, sky: number, block: number,
+    atlasRect?: AtlasRect,
+  ) {
     this.pos.push3(x, y, z);
     this.uv.push2(u, v);
+    if (this.atlas) {
+      const rect = atlasRect ?? { u0: 0, v0: 0, u1: 0, v1: 0 };
+      this.atlas.push4(rect.u0, rect.v0, rect.u1, rect.v1);
+    }
     this.col.push3(r, g, b);
     this.light.push2(sky, block);
     this.verts++;
@@ -82,6 +122,7 @@ class MeshBuilder {
   build(): MeshBuffers {
     return {
       positions: this.pos.toArray(), uvs: this.uv.toArray(),
+      atlasRects: this.atlas?.toArray(),
       colors: this.col.toArray(), lights: this.light.toArray(),
       indices: this.idx.toArray(),
     };
@@ -166,6 +207,171 @@ function emitQuad(
     );
   }
   builder.quadIndices();
+}
+
+function arrayMatches(a: Float32Array, b: Float32Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (Math.abs(a[i] - b[i]) > GEOMETRY_EPS) return false;
+  }
+  return true;
+}
+
+function isDefaultCubeFace(q: BakedQuad, dir: Direction): boolean {
+  return q.face === dir
+    && q.cullFace === dir
+    && q.tintIndex < 0
+    && arrayMatches(q.positions, FULL_FACE_POSITIONS[dir])
+    && arrayMatches(q.uvs, FULL_FACE_UVS);
+}
+
+function simpleCubeFromQuads(quads: BakedQuad[], textureHasAlpha?: TextureAlphaMap): SimpleCubeDef | null {
+  if (quads.length !== SECTION_VISIBILITY_DIRECTIONS.length) return null;
+  const faces: Partial<SimpleCubeDef> = {};
+  for (const q of quads) {
+    if (!isDefaultCubeFace(q, q.face)) return null;
+    if (textureHasAlpha?.[q.texture]) return null;
+    if (faces[q.face]) return null;
+    faces[q.face] = q;
+  }
+  for (const dir of SECTION_VISIBILITY_DIRECTIONS) {
+    if (!faces[dir]) return null;
+  }
+  return faces as SimpleCubeDef;
+}
+
+function quantByte(value: number): number {
+  return Math.round(Math.min(1, Math.max(0, value)) * 255);
+}
+
+function greedyCellForQuad(
+  res: MesherResources, view: WorldView, q: BakedQuad,
+  wx: number, wy: number, wz: number, smooth: boolean,
+): GreedyCell | null {
+  const rect = res.atlas[q.texture] ?? res.atlas[MISSING_TEXTURE];
+  if (!rect) return null;
+  const shade = q.shade ? SHADE[q.face] : 1;
+  const d = DIR_VEC[q.face];
+  const bx = wx + d[0], by = wy + d[1], bz = wz + d[2];
+  const flatSky = view.getSkyLight(bx, by, bz) / 15;
+  const flatBlock = view.getBlockLight(bx, by, bz) / 15;
+  let key = '';
+  let out: GreedyCell | null = null;
+  for (let i = 0; i < 4; i++) {
+    let sky = flatSky, block = flatBlock, ao = 1;
+    if (smooth && q.ao) {
+      const s = smoothVertexLight(res, view, q, i, bx, by, bz);
+      sky = s.sky; block = s.block; ao = s.ao;
+    }
+    const r = quantByte(shade * ao);
+    const g = r;
+    const b = r;
+    const skyQ = quantByte(sky);
+    const blockQ = quantByte(block);
+    const vertexKey = `${q.texture}|${r}|${g}|${b}|${skyQ}|${blockQ}`;
+    if (i === 0) {
+      key = vertexKey;
+      out = { key, rect, r: r / 255, g: g / 255, b: b / 255, sky: skyQ / 255, block: blockQ / 255 };
+    } else if (vertexKey !== key) {
+      return null;
+    }
+  }
+  return out;
+}
+
+function greedyCoords(dir: Direction, x: number, y: number, z: number): { slice: number; u: number; v: number } {
+  switch (dir) {
+    case 'up': return { slice: y + 1, u: x, v: z };
+    case 'down': return { slice: y, u: x, v: z };
+    case 'north': return { slice: z, u: x, v: y };
+    case 'south': return { slice: z + 1, u: x, v: y };
+    case 'west': return { slice: x, u: z, v: y };
+    case 'east': return { slice: x + 1, u: z, v: y };
+  }
+}
+
+function addGreedyCell(
+  grids: Map<string, GreedyGrid>,
+  dir: Direction, slice: number, u: number, v: number, cell: GreedyCell,
+) {
+  const key = `${dir}:${slice}`;
+  let grid = grids.get(key);
+  if (!grid) {
+    grid = { dir, slice, cells: new Array<GreedyCell | null>(16 * 16).fill(null) };
+    grids.set(key, grid);
+  }
+  grid.cells[v * 16 + u] = cell;
+}
+
+function greedyCellsEqual(a: GreedyCell | null, b: GreedyCell | null): boolean {
+  return !!a && !!b && a.key === b.key;
+}
+
+function emitGreedyQuad(
+  builder: MeshBuilder, dir: Direction, slice: number,
+  u0: number, u1: number, v0: number, v1: number, cell: GreedyCell,
+) {
+  let verts: [number, number, number][];
+  switch (dir) {
+    case 'up':
+      verts = [[u0, slice, v0], [u1, slice, v0], [u1, slice, v1], [u0, slice, v1]];
+      break;
+    case 'down':
+      verts = [[u0, slice, v1], [u1, slice, v1], [u1, slice, v0], [u0, slice, v0]];
+      break;
+    case 'north':
+      verts = [[u1, v1, slice], [u0, v1, slice], [u0, v0, slice], [u1, v0, slice]];
+      break;
+    case 'south':
+      verts = [[u0, v1, slice], [u1, v1, slice], [u1, v0, slice], [u0, v0, slice]];
+      break;
+    case 'west':
+      verts = [[slice, v1, u0], [slice, v1, u1], [slice, v0, u1], [slice, v0, u0]];
+      break;
+    case 'east':
+      verts = [[slice, v1, u1], [slice, v1, u0], [slice, v0, u0], [slice, v0, u1]];
+      break;
+  }
+  const w = u1 - u0;
+  const h = v1 - v0;
+  const uvs: [number, number][] = [[0, 0], [w, 0], [w, h], [0, h]];
+  for (let i = 0; i < 4; i++) {
+    const [x, y, z] = verts[i];
+    const [u, v] = uvs[i];
+    builder.vertex(x, y, z, u, v, cell.r, cell.g, cell.b, cell.sky, cell.block, cell.rect);
+  }
+  builder.quadIndices();
+}
+
+function flushGreedyGrids(grids: Map<string, GreedyGrid>, builder: MeshBuilder) {
+  for (const grid of grids.values()) {
+    const used = new Uint8Array(16 * 16);
+    for (let v = 0; v < 16; v++) {
+      for (let u = 0; u < 16; u++) {
+        const idx = v * 16 + u;
+        const start = grid.cells[idx];
+        if (!start || used[idx]) continue;
+        let width = 1;
+        while (u + width < 16) {
+          const nextIdx = v * 16 + u + width;
+          if (used[nextIdx] || !greedyCellsEqual(start, grid.cells[nextIdx])) break;
+          width++;
+        }
+        let height = 1;
+        grow: while (v + height < 16) {
+          for (let du = 0; du < width; du++) {
+            const nextIdx = (v + height) * 16 + u + du;
+            if (used[nextIdx] || !greedyCellsEqual(start, grid.cells[nextIdx])) break grow;
+          }
+          height++;
+        }
+        for (let dv = 0; dv < height; dv++) {
+          for (let du = 0; du < width; du++) used[(v + dv) * 16 + u + du] = 1;
+        }
+        emitGreedyQuad(builder, grid.dir, grid.slice, u, u + width, v, v + height, start);
+      }
+    }
+  }
 }
 
 function isSameFluid(res: MesherResources, texture: string, state: BlockStateRef): boolean {
@@ -312,7 +518,16 @@ export function meshSection(
   };
   const localRes: MesherResources = { ...res, info: cachedInfo };
   const builders: Record<RenderLayer, MeshBuilder> = {
-    opaque: new MeshBuilder(), cutout: new MeshBuilder(), translucent: new MeshBuilder(),
+    opaque: new MeshBuilder(),
+    opaqueTiled: new MeshBuilder(true),
+    cutout: new MeshBuilder(),
+    translucent: new MeshBuilder(),
+  };
+  const greedyGrids = new Map<string, GreedyGrid>();
+  const simpleCubeCache = new WeakMap<BakedQuad[], SimpleCubeDef | null>();
+  const cachedSimpleCube = (quads: BakedQuad[]): SimpleCubeDef | null => {
+    if (!simpleCubeCache.has(quads)) simpleCubeCache.set(quads, simpleCubeFromQuads(quads, localRes.textureHasAlpha));
+    return simpleCubeCache.get(quads) ?? null;
   };
   const ox = cx * 16, oy = sy * 16, oz = cz * 16;
   for (let y = 0; y < 16; y++) {
@@ -322,6 +537,7 @@ export function meshSection(
         const state = view.getBlock(wx, wy, wz);
         if (AIR_NAMES.has(state.name)) continue;
         const bi = cachedInfo(state.name);
+        const blockLayer = bi.layer === 'opaqueTiled' ? 'opaque' : bi.layer;
 
         const waterlogged = state.properties.waterlogged === 'true' || !!bi.waterlogged;
         if (bi.fluid) {
@@ -333,9 +549,33 @@ export function meshSection(
           if (water) emitFluid(localRes, view, builders, water, { name: 'minecraft:water', properties: { level: '0' } }, x, y, z, wx, wy, wz);
         }
 
+        const quads = localRes.baker.getQuads(state, hash3(wx, wy, wz));
+        const simple = !waterlogged
+          && blockLayer === 'opaque'
+          && bi.occludes
+          && bi.tint === 'none'
+          && bi.fixedTint === undefined
+          ? cachedSimpleCube(quads)
+          : null;
+        if (simple) {
+          for (const dir of SECTION_VISIBILITY_DIRECTIONS) {
+            const q = simple[dir];
+            const d = DIR_VEC[dir];
+            const n = view.getBlock(wx + d[0], wy + d[1], wz + d[2]);
+            if (cachedInfo(n.name).occludes) continue;
+            const cell = greedyCellForQuad(localRes, view, q, wx, wy, wz, smoothLighting);
+            if (cell) {
+              const coord = greedyCoords(dir, x, y, z);
+              addGreedyCell(greedyGrids, dir, coord.slice, coord.u, coord.v, cell);
+            } else {
+              emitQuad(localRes, view, builders.opaque, q, x, y, z, wx, wy, wz, WHITE, smoothLighting);
+            }
+          }
+          continue;
+        }
+
         if (!waterlogged && bi.occludes && fullyOccluded(localRes, view, wx, wy, wz)) continue;
 
-        const quads = localRes.baker.getQuads(state, hash3(wx, wy, wz));
         for (const q of quads) {
           if (q.cullFace) {
             const d = DIR_VEC[q.cullFace];
@@ -347,14 +587,15 @@ export function meshSection(
           const tint = q.tintIndex >= 0
             ? localRes.tint(bi.tint, bi.fixedTint, view.getBiome(wx, wy, wz))
             : WHITE;
-          const layer = bi.layer === 'opaque' && localRes.textureHasAlpha?.[q.texture] ? 'cutout' : bi.layer;
+          const layer = blockLayer === 'opaque' && localRes.textureHasAlpha?.[q.texture] ? 'cutout' : blockLayer;
           emitQuad(localRes, view, builders[layer], q, x, y, z, wx, wy, wz, tint, smoothLighting);
         }
       }
     }
   }
+  flushGreedyGrids(greedyGrids, builders.opaqueTiled);
   const out: SectionMeshes = {};
-  for (const layer of ['opaque', 'cutout', 'translucent'] as RenderLayer[]) {
+  for (const layer of ['opaque', 'opaqueTiled', 'cutout', 'translucent'] as RenderLayer[]) {
     if (!builders[layer].empty) out[layer] = builders[layer].build();
   }
   return out;

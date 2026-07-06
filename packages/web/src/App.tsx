@@ -5,15 +5,11 @@ import { fetchWorlds } from './api';
 import { languageOptions } from './i18n';
 import { clearMeshCache, getMeshCacheStats } from './meshCache';
 import { Viewer, type CameraPositionRequest } from './render/Viewer';
+import { EMPTY_CHUNK_SCHEDULER_STATS, type ChunkSchedulerStats } from './render/chunkScheduler';
 
 interface WorldInfo { id: string; dimensions: string[] }
 type Axis = 'x' | 'y' | 'z';
-interface ViewerStats {
-  nbt: number;
-  lodReady: number;
-  lodRendered: number;
-  fullReady: number;
-  fullRendered: number;
+interface ViewerStats extends ChunkSchedulerStats {
   pos: [number, number, number];
 }
 
@@ -83,6 +79,11 @@ function formatBytes(bytes: number): string {
   return `${value >= 10 || unit === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
 }
 
+function formatMs(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '0 ms';
+  return `${ms >= 10 ? ms.toFixed(0) : ms.toFixed(1)} ms`;
+}
+
 export default function App() {
   const { t, i18n } = useTranslation();
   const [worlds, setWorlds] = useState<WorldInfo[]>([]);
@@ -93,18 +94,11 @@ export default function App() {
   const [fastMoveMultiplier, setFastMoveMultiplier] = useState(() => numberSetting('fastMoveMultiplier', 4));
   const [timeOfDay, setTimeOfDay] = useState(() => numberSetting('timeOfDay', 0));
   const [panelCollapsed, setPanelCollapsed] = useState(() => localStorage.getItem(PANEL_STORAGE_KEY) === 'true');
-  const [stats, setStats] = useState<ViewerStats>({
-    nbt: 0,
-    lodReady: 0,
-    lodRendered: 0,
-    fullReady: 0,
-    fullRendered: 0,
-    pos: [0, 0, 0],
-  });
+  const [stats, setStats] = useState<ViewerStats>({ ...EMPTY_CHUNK_SCHEDULER_STATS, pos: [0, 0, 0] });
   const [panelTab, setPanelTab] = useState('view');
   const [cacheStats, setCacheStats] = useState({ entries: 0, bytes: 0 });
   const [coordDirty, setCoordDirty] = useState(false);
-  const [coordDraft, setCoordDraft] = useState<Record<Axis, string>>({ x: '8', y: '120', z: '8' });
+  const [coordDraft, setCoordDraft] = useState<Record<Axis, string>>({ x: '0', y: '80', z: '0' });
   const [cameraTarget, setCameraTarget] = useState<CameraPositionRequest>();
   const [worldsLoaded, setWorldsLoaded] = useState(false);
 
@@ -292,6 +286,22 @@ export default function App() {
                         <Badge color="blue">{t('nbtChunks', { value: stats.nbt })}</Badge>
                         <Badge color="green">{t('lodChunks', { rendered: stats.lodRendered, ready: stats.lodReady })}</Badge>
                         <Badge color="jade">{t('fullChunks', { rendered: stats.fullRendered, ready: stats.fullReady })}</Badge>
+                        <Badge color="gray">{t('queueStats', { hash: stats.hashQueued, fetch: stats.fetchQueued, mesh: stats.meshQueued })}</Badge>
+                        <Badge color="orange">{t('workerStats', {
+                          workers: stats.workerCount,
+                          copies: stats.workerChunkCopies,
+                          active: stats.activeMeshTasks,
+                        })}</Badge>
+                        <Badge color="purple">{t('profileFetch', {
+                          hash: formatMs(stats.hashFetchMsAvg),
+                          chunk: formatMs(stats.chunkFetchMsAvg),
+                        })}</Badge>
+                        <Badge color="pink">{t('profileMesh', {
+                          parse: formatMs(stats.parseMsAvg),
+                          full: formatMs(stats.fullMeshMsAvg),
+                          lod: formatMs(stats.lodMeshMsAvg),
+                        })}</Badge>
+                        <Badge color="amber">{t('meshBytesRendered', { value: formatBytes(stats.displayedMeshBytes) })}</Badge>
                       </Flex>
                       <Flex gap="2" align="end">
                         {(['x', 'y', 'z'] as Axis[]).map((axis) => (

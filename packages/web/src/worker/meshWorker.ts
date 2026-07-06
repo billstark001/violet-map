@@ -1,14 +1,15 @@
 /// <reference lib="webworker" />
 import {
   BlockInfo, ChunkColumn, ChunkNeighborhood, MeshBuffers, MesherResources, ModelBaker,
-  computeColumnLight, hexToRgb, meshLodChunk, meshSection, parseChunkColumn,
+  computeColumnLight, hexToRgb, meshLodChunkSteps, meshSection, parseChunkColumn,
   resolveBiomeColors, sectionVisibilityMask, type BlockStateRef, type Rgb, type TintType,
 } from '@violet-map/core';
 import { parseNbt } from '@violet-map/core/nbt';
-import type { SectionMeshMsg, WorkerRequest, WorkerResponse } from './protocol';
+import type { LodMeshMsg, SectionMeshMsg, WorkerRequest, WorkerResponse } from './protocol';
 
 const DEFAULT_INFO: BlockInfo = { occludes: false, emit: 0, filter: 0, layer: 'cutout', tint: 'none' };
 const WHITE: Rgb = [1, 1, 1];
+const LOD_BATCH_STEPS = [2, 4, 8];
 const SECTION_VISIBILITY_ALL = (() => {
   let mask = 0;
   for (let from = 0; from < 6; from++) {
@@ -157,8 +158,32 @@ function transfersOf(buffers: (MeshBuffers | null | undefined)[]): Transferable[
   for (const b of buffers) {
     if (!b) continue;
     t.push(b.positions.buffer, b.uvs.buffer, b.colors.buffer, b.lights.buffer, b.indices.buffer);
+    if (b.atlasRects) t.push(b.atlasRects.buffer);
   }
   return t;
+}
+
+function meshBytes(b: MeshBuffers | null | undefined): number {
+  if (!b) return 0;
+  return b.positions.byteLength + b.uvs.byteLength + (b.atlasRects?.byteLength ?? 0)
+    + b.colors.byteLength + b.lights.byteLength + b.indices.byteLength;
+}
+
+function sectionBytes(sections: SectionMeshMsg[]): number {
+  let total = 0;
+  for (const section of sections) {
+    for (const buffers of Object.values(section.layers)) total += meshBytes(buffers);
+  }
+  return total;
+}
+
+function lodBatchSteps(target: number): number[] {
+  const step = Math.max(2, Math.floor(target));
+  return LOD_BATCH_STEPS.filter((candidate) => candidate >= step);
+}
+
+function lodBatchBytes(meshes: LodMeshMsg[]): number {
+  return meshes.reduce((sum, entry) => sum + meshBytes(entry.mesh), 0);
 }
 
 function parseChunkPayload(chunk: ArrayBuffer): ChunkColumn {
@@ -181,6 +206,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       break;
     }
     case 'chunk': {
+      const started = performance.now();
       try {
         const col = parseChunkPayload(msg.chunk);
         columns.set(msg.key, {
@@ -190,7 +216,17 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
           litBlock: col.hasStoredBlockLight,
         });
         const surfaceY = col.heightAt(8, 8);
-        post({ type: 'chunkReady', key: msg.key, biome: col.getBiome(8, surfaceY, 8), surfaceY });
+        post({
+          type: 'chunkReady',
+          key: msg.key,
+          biome: col.getBiome(8, surfaceY, 8),
+          surfaceY,
+          profile: {
+            chunkBytes: msg.chunk.byteLength,
+            parseMs: performance.now() - started,
+            storedColumns: columns.size,
+          },
+        });
       } catch (e) {
         post({ type: 'chunkError', key: msg.key, error: (e as Error).message });
       }
@@ -198,10 +234,17 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
     }
     case 'mesh': {
       if (!res) break;
+      const started = performance.now();
       const entry = columns.get(msg.key);
       const hood = neighborhoodOf(msg.key);
       if (!entry || !hood) {
-        post({ type: 'meshResult', key: msg.key, version: msg.version, sections: [] });
+        post({
+          type: 'meshResult',
+          key: msg.key,
+          version: msg.version,
+          sections: [],
+          profile: { meshBytes: 0, meshMs: performance.now() - started, storedColumns: columns.size, sectionCount: 0 },
+        });
         break;
       }
       const { col } = entry;
@@ -212,21 +255,52 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
         const visibility = !s || s.isEmpty ? SECTION_VISIBILITY_ALL : visibilityForSection(s, hood, col.x, sy, col.z);
         if (Object.keys(layers).length || visibility > 0) sections.push({ sy, layers, visibility });
       }
+      const bytes = sectionBytes(sections);
       post(
-        { type: 'meshResult', key: msg.key, version: msg.version, sections },
+        {
+          type: 'meshResult',
+          key: msg.key,
+          version: msg.version,
+          sections,
+          profile: {
+            meshBytes: bytes,
+            meshMs: performance.now() - started,
+            storedColumns: columns.size,
+            sectionCount: sections.length,
+          },
+        },
         transfersOf(sections.flatMap((s) => Object.values(s.layers))),
       );
       break;
     }
     case 'lod': {
+      const started = performance.now();
       const entry = columns.get(msg.key);
       if (!entry) {
-        post({ type: 'lodResult', key: msg.key, version: msg.version, step: msg.step, mesh: null });
+        post({
+          type: 'lodResult',
+          key: msg.key,
+          version: msg.version,
+          step: msg.step,
+          mesh: null,
+          profile: { meshBytes: 0, meshMs: performance.now() - started, storedColumns: columns.size },
+        });
         break;
       }
       const hood = neighborhoodOf(msg.key);
-      const mesh = hood ? meshLodChunk(entry.col, msg.step, topColorOf, entry.hasSkyLight, hood, infoOf) : null;
-      post({ type: 'lodResult', key: msg.key, version: msg.version, step: msg.step, mesh }, transfersOf([mesh]));
+      const meshes = hood
+        ? meshLodChunkSteps(entry.col, lodBatchSteps(msg.step), topColorOf, entry.hasSkyLight, hood, infoOf)
+        : [];
+      const mesh = meshes.find((entry) => entry.step === msg.step)?.mesh ?? null;
+      post({
+        type: 'lodResult',
+        key: msg.key,
+        version: msg.version,
+        step: msg.step,
+        mesh,
+        meshes,
+        profile: { meshBytes: lodBatchBytes(meshes), meshMs: performance.now() - started, storedColumns: columns.size },
+      }, transfersOf(meshes.map((entry) => entry.mesh)));
       break;
     }
     case 'drop':

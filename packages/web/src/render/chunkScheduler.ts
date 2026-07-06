@@ -10,6 +10,7 @@ const MAX_MESH_QUEUE = 256;
 const MAX_IO_QUEUE = 768;
 const IO_QUEUE_RETENTION_MS = 2600;
 const IO_RENDER_SHARE_TARGET = 0.8;
+const MIN_EXISTING_CHUNKS_BEFORE_BALANCE = 64;
 const PREDICT_LOOKAHEAD_SECONDS = 0.9;
 const PREDICT_FORWARD_BLOCKS = 64;
 const PREDICT_MARGIN_CHUNKS = 6;
@@ -44,6 +45,8 @@ export interface MeshTask extends ChunkPriority {
   kind: MeshTaskKind;
   step: LodStep;
 }
+
+type MeshIntent = Pick<MeshTask, 'kind' | 'step'>;
 
 export interface ChunkCandidate extends ChunkPriority {
   key: string;
@@ -85,11 +88,90 @@ export interface SchedulerCandidateDecision {
   removeMesh: boolean;
 }
 
+export interface ChunkRenderStats {
+  nbt: number;
+  lodReady: number;
+  lodRendered: number;
+  fullReady: number;
+  fullRendered: number;
+}
+
+export interface ChunkProfileStats {
+  workerCount: number;
+  activeMeshTasks: number;
+  workerChunkCopies: number;
+  displayedMeshBytes: number;
+  chunkBytesFetched: number;
+  hashFetchMsAvg: number;
+  chunkFetchMsAvg: number;
+  parseMsAvg: number;
+  fullMeshMsAvg: number;
+  lodMeshMsAvg: number;
+  fullCacheHits: number;
+  fullCacheMisses: number;
+  lodCacheHits: number;
+  lodCacheMisses: number;
+}
+
+export interface ChunkSchedulerStats extends ChunkRenderStats, ChunkProfileStats {
+  hashQueued: number;
+  fetchQueued: number;
+  meshQueued: number;
+  trackedPriorities: number;
+}
+
+interface FrameLoadStats {
+  currentFrustumTotal: number;
+  currentFrustumLoaded: number;
+  hasMoreCurrentFrustumChunks: boolean;
+}
+
+const EMPTY_RENDER_STATS: ChunkRenderStats = {
+  nbt: 0,
+  lodReady: 0,
+  lodRendered: 0,
+  fullReady: 0,
+  fullRendered: 0,
+};
+
+const EMPTY_PROFILE_STATS: ChunkProfileStats = {
+  workerCount: 0,
+  activeMeshTasks: 0,
+  workerChunkCopies: 0,
+  displayedMeshBytes: 0,
+  chunkBytesFetched: 0,
+  hashFetchMsAvg: 0,
+  chunkFetchMsAvg: 0,
+  parseMsAvg: 0,
+  fullMeshMsAvg: 0,
+  lodMeshMsAvg: 0,
+  fullCacheHits: 0,
+  fullCacheMisses: 0,
+  lodCacheHits: 0,
+  lodCacheMisses: 0,
+};
+
+export const EMPTY_CHUNK_SCHEDULER_STATS: ChunkSchedulerStats = {
+  ...EMPTY_RENDER_STATS,
+  ...EMPTY_PROFILE_STATS,
+  hashQueued: 0,
+  fetchQueued: 0,
+  meshQueued: 0,
+  trackedPriorities: 0,
+};
+
 export class ChunkScheduler {
   private hashQueue = new Set<string>();
   private fetchQueue = new Set<string>();
   private meshQueue = new Map<string, MeshTask>();
   private priorityByKey = new Map<string, ChunkPriority>();
+  private renderStats: ChunkRenderStats = { ...EMPTY_RENDER_STATS };
+  private profileStats: ChunkProfileStats = { ...EMPTY_PROFILE_STATS };
+  private frameLoadStats: FrameLoadStats = {
+    currentFrustumTotal: 0,
+    currentFrustumLoaded: 0,
+    hasMoreCurrentFrustumChunks: false,
+  };
   private lastCameraPos = new THREE.Vector3();
   private hasCameraSample = false;
   private lastCameraSampleTime = 0;
@@ -104,11 +186,41 @@ export class ChunkScheduler {
   private tmpForward = new THREE.Vector3();
   private tmpBox = new THREE.Box3();
 
+  // #region Lifecycle and options
+
   constructor(private opts: ChunkSchedulerOptions) {}
 
   setOptions(opts: ChunkSchedulerOptions) {
     this.opts = opts;
   }
+
+  syncStats(stats: ChunkRenderStats, profileStats: ChunkProfileStats = EMPTY_PROFILE_STATS): ChunkSchedulerStats {
+    this.renderStats = { ...stats };
+    this.profileStats = { ...profileStats };
+    return this.stats();
+  }
+
+  stats(): ChunkSchedulerStats {
+    return {
+      ...this.renderStats,
+      ...this.profileStats,
+      hashQueued: this.hashQueue.size,
+      fetchQueued: this.fetchQueue.size,
+      meshQueued: this.meshQueue.size,
+      trackedPriorities: this.priorityByKey.size,
+    };
+  }
+
+  clear() {
+    this.hashQueue.clear();
+    this.fetchQueue.clear();
+    this.meshQueue.clear();
+    this.priorityByKey.clear();
+  }
+
+  // #endregion
+
+  // #region Frame planning
 
   planFrame(
     camera: THREE.PerspectiveCamera,
@@ -122,6 +234,7 @@ export class ChunkScheduler {
     this.updateCameraVelocity(camera.position, now, force);
     this.updateFrustums(camera);
     const candidates = this.buildCandidates(camera, viewportHeight, now, keyFor, entryFor);
+    this.updateFrameLoadStats(candidates, entryFor);
     const keepKeys = new Set(candidates.map((candidate) => candidate.key));
     for (const candidate of candidates) this.rememberPriority(candidate.key, candidate);
     return {
@@ -132,10 +245,17 @@ export class ChunkScheduler {
     };
   }
 
+  // #endregion
+
+  // #region Scheduling decisions
+
   scheduleCandidate(candidate: ChunkCandidate, e: ChunkSchedulerEntry): SchedulerCandidateDecision {
     if (e.state === 'absent' || e.state === 'error') return { removeMesh: true };
     if (e.state === 'checking') {
       this.enqueueHash(candidate.key);
+      return { removeMesh: false };
+    }
+    if ((e.state === 'hashed' || e.state === 'fetching') && this.displaySatisfiesTarget(e, candidate.targetStep)) {
       return { removeMesh: false };
     }
     if (e.state === 'hashed' || e.state === 'fetching') {
@@ -144,34 +264,14 @@ export class ChunkScheduler {
     }
     if (e.state !== 'stored') return { removeMesh: false };
 
-    if (candidate.targetStep === 1) {
-      if (!e.pendingFull && (e.displayed !== 'full' || e.dirty)) {
-        this.enqueueMeshTask({ ...candidate, kind: 'full', step: 1 });
-      }
-      return { removeMesh: false };
-    }
-
-    const wantsLod = e.displayed !== 'lod' || e.displayedLodStep !== candidate.targetStep || e.dirty;
-    if (wantsLod && !(e.pendingLod && e.pendingLodStep === candidate.targetStep)) {
-      this.enqueueMeshTask({ ...candidate, kind: 'lod', step: candidate.targetStep });
-    }
+    this.enqueueDesiredMeshTask(candidate.key, e, candidate.targetStep, candidate);
     return { removeMesh: false };
   }
 
-  scheduleStoredFromLastPriority(key: string, e: ChunkSchedulerEntry, now: number) {
+  scheduleStoredFromLastPriority(e: ChunkSchedulerEntry, now: number) {
     if (e.state !== 'stored' || now - e.lastWantedAt > IO_QUEUE_RETENTION_MS) return;
-    const priority = this.priorityByKey.get(key) ?? { tier: e.lastTier, score: e.lastScore, updatedAt: e.lastWantedAt };
-    if (e.lastTargetStep === 1) {
-      if (!e.pendingFull && (e.displayed !== 'full' || e.dirty)) {
-        this.enqueueMeshTask({ key, kind: 'full', step: 1, ...priority });
-      }
-      return;
-    }
-    const step = e.lastTargetStep;
-    const wantsLod = e.displayed !== 'lod' || e.displayedLodStep !== step || e.dirty;
-    if (wantsLod && !(e.pendingLod && e.pendingLodStep === step)) {
-      this.enqueueMeshTask({ key, kind: 'lod', step, ...priority });
-    }
+    const priority = this.priorityByKey.get(e.key) ?? { tier: e.lastTier, score: e.lastScore, updatedAt: e.lastWantedAt };
+    this.enqueueDesiredMeshTask(e.key, e, e.lastTargetStep, priority);
   }
 
   nextMeshTask(entryFor: (key: string) => ChunkSchedulerEntry | null, entries: Iterable<ChunkSchedulerEntry>, now: number): MeshTask | null {
@@ -214,20 +314,30 @@ export class ChunkScheduler {
     return true;
   }
 
+  // #endregion
+
+  // #region Queue operations
+
   nextHashBatch(activeBatches: number, entries: Iterable<ChunkSchedulerEntry>, activeMeshTasks: number): string[] {
-    if (activeBatches >= MAX_HASH_BATCHES) return [];
-    const renderWork = this.renderBacklog(entries, activeMeshTasks);
-    if (!this.shouldLoadMore(renderWork, activeBatches)) return [];
-    const batchSize = renderWork > 0 ? Math.max(12, Math.floor(HASH_BATCH_SIZE / 2)) : HASH_BATCH_SIZE;
-    return this.nextIoBatch(this.hashQueue, batchSize, renderWork > 0 ? 4 : 99);
+    return this.nextLimitedIoBatch(this.hashQueue, {
+      activeBatches,
+      maxBatches: MAX_HASH_BATCHES,
+      batchSize: HASH_BATCH_SIZE,
+      busyBatchFloor: 12,
+      entries,
+      activeMeshTasks,
+    });
   }
 
   nextFetchBatch(activeBatches: number, entries: Iterable<ChunkSchedulerEntry>, activeMeshTasks: number): string[] {
-    if (activeBatches >= MAX_FETCH_BATCHES) return [];
-    const renderWork = this.renderBacklog(entries, activeMeshTasks);
-    if (!this.shouldLoadMore(renderWork, activeBatches)) return [];
-    const batchSize = renderWork > 0 ? Math.max(8, Math.floor(FETCH_BATCH_SIZE / 2)) : FETCH_BATCH_SIZE;
-    return this.nextIoBatch(this.fetchQueue, batchSize, renderWork > 0 ? 4 : 99);
+    return this.nextLimitedIoBatch(this.fetchQueue, {
+      activeBatches,
+      maxBatches: MAX_FETCH_BATCHES,
+      batchSize: FETCH_BATCH_SIZE,
+      busyBatchFloor: 8,
+      entries,
+      activeMeshTasks,
+    });
   }
 
   pruneQueues(keepKeys: Set<string>, now: number) {
@@ -296,15 +406,12 @@ export class ChunkScheduler {
     this.priorityByKey.delete(key);
   }
 
-  clear() {
-    this.hashQueue.clear();
-    this.fetchQueue.clear();
-    this.meshQueue.clear();
-    this.priorityByKey.clear();
-  }
-
   get hasHashWork() { return this.hashQueue.size > 0; }
   get hasFetchWork() { return this.fetchQueue.size > 0; }
+
+  // #endregion
+
+  // #region Camera prediction
 
   private updateCameraVelocity(cameraPos: THREE.Vector3, now: number, force: boolean) {
     if (!this.hasCameraSample || force) {
@@ -346,6 +453,10 @@ export class ChunkScheduler {
     this.frustumMatrix.multiplyMatrices(target.projectionMatrix, target.matrixWorldInverse);
     frustum.setFromProjectionMatrix(this.frustumMatrix);
   }
+
+  // #endregion
+
+  // #region Candidate geometry and LOD
 
   private buildCandidates(
     camera: THREE.PerspectiveCamera,
@@ -487,8 +598,73 @@ export class ChunkScheduler {
     return 5;
   }
 
+  private updateFrameLoadStats(
+    candidates: ChunkCandidate[],
+    entryFor: (key: string) => ChunkSchedulerEntry | null,
+  ) {
+    let currentFrustumTotal = 0;
+    let currentFrustumLoaded = 0;
+    let hasMoreCurrentFrustumChunks = false;
+    for (const candidate of candidates) {
+      if (!candidate.currentFrustum) continue;
+      currentFrustumTotal++;
+      const entry = entryFor(candidate.key);
+      if (this.ioComplete(entry)) {
+        currentFrustumLoaded++;
+      } else if (this.mayLoadChunk(entry)) {
+        hasMoreCurrentFrustumChunks = true;
+      }
+    }
+    this.frameLoadStats = { currentFrustumTotal, currentFrustumLoaded, hasMoreCurrentFrustumChunks };
+  }
+
+  private ioComplete(e: ChunkSchedulerEntry | null): boolean {
+    return !!e && (e.state === 'decoding' || e.state === 'stored' || e.state === 'absent' || e.state === 'error');
+  }
+
+  private mayLoadChunk(e: ChunkSchedulerEntry | null): boolean {
+    return !e || e.state === 'checking' || e.state === 'hashed' || e.state === 'fetching';
+  }
+
+  // #endregion
+
+  // #region Mesh priority
+
   private rememberPriority(key: string, priority: ChunkPriority) {
     this.priorityByKey.set(key, { tier: priority.tier, score: priority.score, updatedAt: priority.updatedAt });
+  }
+
+  private desiredMeshTask(e: ChunkSchedulerEntry, targetStep: LodStep): MeshIntent | null {
+    if (targetStep === 1) return this.wantsFull(e) ? { kind: 'full', step: 1 } : null;
+    return this.wantsLod(e, targetStep) ? { kind: 'lod', step: targetStep } : null;
+  }
+
+  private enqueueDesiredMeshTask(
+    key: string,
+    e: ChunkSchedulerEntry,
+    targetStep: LodStep,
+    priority: ChunkPriority,
+  ) {
+    const intent = this.desiredMeshTask(e, targetStep);
+    if (!intent) return;
+    this.enqueueMeshTask({ key, ...intent, tier: priority.tier, score: priority.score, updatedAt: priority.updatedAt });
+  }
+
+  private wantsFull(e: ChunkSchedulerEntry): boolean {
+    return !e.pendingFull && (e.displayed !== 'full' || e.dirty);
+  }
+
+  private wantsLod(e: ChunkSchedulerEntry, step: LodStep): boolean {
+    const displayedSameLod = e.displayed === 'lod' && e.displayedLodStep === step;
+    return (!displayedSameLod || e.dirty) && !(e.pendingLod && e.pendingLodStep === step);
+  }
+
+  private displaySatisfiesTarget(e: ChunkSchedulerEntry, targetStep: LodStep): boolean {
+    if (e.dirty) return false;
+    if (targetStep === 1) return e.displayed === 'full';
+    if (e.displayed === 'full') return true;
+    if (e.displayed !== 'lod' || e.displayedLodStep <= 0) return false;
+    return e.displayedLodStep <= targetStep;
   }
 
   private comparePriority(a: ChunkPriority, b: ChunkPriority): number {
@@ -506,14 +682,18 @@ export class ChunkScheduler {
   private shouldStartMeshTask(task: MeshTask, e: ChunkSchedulerEntry, now: number): boolean {
     if (!this.priorityFresh(e, now)) return false;
     if (task.kind === 'full') {
-      return e.lastTargetStep === 1 && !e.pendingFull && (e.displayed !== 'full' || e.dirty);
+      return e.lastTargetStep === 1 && this.wantsFull(e);
     }
-    if (e.pendingLod && e.pendingLodStep === task.step) return false;
+    if (!this.wantsLod(e, task.step)) return false;
     if (e.lastTargetStep === 1) return false;
     if (task.step > e.lastTargetStep && e.displayed !== 'none') return false;
     if (e.displayed === 'full' && e.lastTier <= 3 && !e.dirty) return false;
     return true;
   }
+
+  // #endregion
+
+  // #region Backpressure
 
   private renderBacklog(entries: Iterable<ChunkSchedulerEntry>, activeMeshTasks: number): number {
     let waitingStored = 0;
@@ -528,12 +708,49 @@ export class ChunkScheduler {
     return this.hashQueue.size + this.fetchQueue.size + activeIoBatches;
   }
 
-  private shouldLoadMore(renderWork: number, activeIoBatches: number): boolean {
+  private shouldLoadMore(activeIoBatches: number): boolean {
     const loadWork = this.loadBacklog(activeIoBatches);
     if (loadWork <= 0) return false;
-    if (renderWork <= 0) return true;
-    const renderShare = renderWork / (renderWork + loadWork);
-    return renderShare >= IO_RENDER_SHARE_TARGET;
+    if (this.currentFrustumLoaded()) return false;
+    if (this.shouldPrioritizeInitialLoad()) return true;
+    if (this.renderStats.nbt <= 0) return false;
+    return this.readyShare() >= IO_RENDER_SHARE_TARGET;
+  }
+
+  private nextLimitedIoBatch(
+    queue: Set<string>,
+    opts: {
+      activeBatches: number;
+      maxBatches: number;
+      batchSize: number;
+      busyBatchFloor: number;
+      entries: Iterable<ChunkSchedulerEntry>;
+      activeMeshTasks: number;
+    },
+  ): string[] {
+    if (opts.activeBatches >= opts.maxBatches) return [];
+    const renderWork = this.renderBacklog(opts.entries, opts.activeMeshTasks);
+    const prioritizeLoad = this.shouldPrioritizeInitialLoad();
+    if (!this.shouldLoadMore(opts.activeBatches)) return [];
+    const batchSize = prioritizeLoad || renderWork <= 0
+      ? opts.batchSize
+      : Math.max(opts.busyBatchFloor, Math.floor(opts.batchSize / 2));
+    return this.nextIoBatch(queue, batchSize, renderWork > 0 ? 4 : 99);
+  }
+
+  private currentFrustumLoaded(): boolean {
+    const { currentFrustumTotal, currentFrustumLoaded } = this.frameLoadStats;
+    return currentFrustumTotal <= 0 || currentFrustumLoaded >= currentFrustumTotal;
+  }
+
+  private shouldPrioritizeInitialLoad(): boolean {
+    return this.renderStats.nbt < MIN_EXISTING_CHUNKS_BEFORE_BALANCE
+      && this.frameLoadStats.hasMoreCurrentFrustumChunks;
+  }
+
+  private readyShare(): number {
+    if (this.renderStats.nbt <= 0) return 0;
+    return (this.renderStats.lodReady + this.renderStats.fullReady) / this.renderStats.nbt;
   }
 
   private shouldBiasFull(entries: Iterable<ChunkSchedulerEntry>): boolean {
@@ -549,6 +766,10 @@ export class ChunkScheduler {
     const share = sf / Math.max(1, sf + sl);
     return share < MIN_FULL_LOD_SHARE;
   }
+
+  // #endregion
+
+  // #region Queue ordering and limits
 
   private nextIoBatch(queue: Set<string>, batchSize: number, maxTier: number): string[] {
     const out: string[] = [];
@@ -589,4 +810,6 @@ export class ChunkScheduler {
     const total = this.totalRenderRadius() + PREDICT_MARGIN_CHUNKS;
     return Math.max(768, Math.min(9000, Math.round(total * total * 2.1)));
   }
+
+  // #endregion
 }

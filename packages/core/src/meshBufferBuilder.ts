@@ -33,6 +33,16 @@ export class Float32Writer {
     this.length = i + 3;
   }
 
+  push4(a: number, b: number, c: number, d: number) {
+    this.reserve(4);
+    const i = this.length;
+    this.data[i] = a;
+    this.data[i + 1] = b;
+    this.data[i + 2] = c;
+    this.data[i + 3] = d;
+    this.length = i + 4;
+  }
+
   toArray(): Float32Array {
     return this.data.slice(0, this.length);
   }

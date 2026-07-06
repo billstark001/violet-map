@@ -1,6 +1,6 @@
 import { openDB, type DBSchema } from 'idb';
 import type { MeshBuffers, RenderLayer } from '@violet-map/core';
-import type { SectionMeshMsg } from './worker/protocol';
+import type { LodMeshMsg, SectionMeshMsg } from './worker/protocol';
 
 const DB_NAME = 'violet-map-mesh-cache';
 const DB_VERSION = 2;
@@ -73,7 +73,8 @@ function cacheKey(parts: MeshCacheKeyParts): string {
 }
 
 function bufferBytes(b: MeshBuffers): number {
-  return b.positions.byteLength + b.uvs.byteLength + b.colors.byteLength + b.lights.byteLength + b.indices.byteLength;
+  return b.positions.byteLength + b.uvs.byteLength + (b.atlasRects?.byteLength ?? 0)
+    + b.colors.byteLength + b.lights.byteLength + b.indices.byteLength;
 }
 
 function sectionBytes(sections: SectionMeshMsg[]): number {
@@ -148,6 +149,28 @@ export async function putCachedLod(parts: Omit<MeshCacheKeyParts, 'mode'> & { st
     bytes: lod ? bufferBytes(lod) : 0,
     lod,
   });
+  await pruneCache();
+}
+
+export async function putCachedLodBatch(
+  parts: Omit<MeshCacheKeyParts, 'mode' | 'step'>,
+  lods: LodMeshMsg[],
+): Promise<void> {
+  if (!lods.length) return;
+  const now = Date.now();
+  const db = await dbPromise;
+  const tx = db.transaction(STORE, 'readwrite');
+  await Promise.all(lods.map((entry) => tx.store.put({
+    ...parts,
+    key: cacheKey({ ...parts, mode: 'lod', step: entry.step }),
+    mode: 'lod' as const,
+    step: entry.step,
+    createdAt: now,
+    accessedAt: now,
+    bytes: entry.mesh ? bufferBytes(entry.mesh) : 0,
+    lod: entry.mesh,
+  })));
+  await tx.done;
   await pruneCache();
 }
 
