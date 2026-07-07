@@ -369,7 +369,6 @@ function buildHeightMapMesh(
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(data.payload.origin.x, 0, data.payload.origin.z);
   mesh.frustumCulled = false;
-  mesh.renderOrder = -80;
   return mesh;
 }
 
@@ -391,7 +390,6 @@ export class TopMapManager {
 
   constructor(private readonly scene: THREE.Scene, private readonly shared: SharedUniforms) {
     this.heightGroup.visible = false;
-    this.heightGroup.renderOrder = -80;
     scene.add(this.heightGroup);
   }
 
@@ -431,7 +429,7 @@ export class TopMapManager {
     }
 
     const view = this.viewMetrics(camera, options);
-    const step = options.mode === 'top' && view.zoom >= LOD4_ZOOM_THRESHOLD ? 4 : 8;
+    const step = options.mode === 'perspective' || view.zoom >= LOD4_ZOOM_THRESHOLD ? 4 : 8;
     const hasSkyLight = options.hasSkyLight !== false;
     this.latestStep = step;
     this.latestHasSkyLight = hasSkyLight;
