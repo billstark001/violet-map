@@ -27,6 +27,7 @@ const DEFAULT_LOD_RELEASE_STEP: LodStep = 2;
 const LOD_RELEASE_STEP_STORAGE_KEY = 'violet-map:lodReleaseStep';
 const STALE_WORKER_RELEASE_MS = 4000;
 const STALE_MESH_RELEASE_MS = 8000;
+const WORKER_NEIGHBOR_HOLD_MS = 3500;
 const MIN_WORKER_RESIDENT_COLUMNS = 192;
 const MAX_WORKER_RESIDENT_COLUMNS = 1400;
 const WORKER_RESIDENT_FULL_PADDING = 4;
@@ -107,6 +108,7 @@ interface FullSectionRender {
 
 interface ChunkEntry extends ChunkSchedulerEntry {
   workerReadyMask: number;
+  workerKeepUntil: number;
   pendingFullVersion: number;
   pendingLodVersion: number;
   pendingFullCacheParts: MeshCacheBaseParts | null;
@@ -146,6 +148,7 @@ export class ChunkManager {
   private hashTimer: ReturnType<typeof setTimeout> | null = null;
   private fetching = 0;
   private fetchTimer: ReturnType<typeof setTimeout> | null = null;
+  private deferredMeshTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private activeMeshTasks = 0;
   private inFlightMeshVersions = new Set<number>();
   private versionCounter = 0;
@@ -279,11 +282,11 @@ export class ChunkManager {
 
   biomeAt(cx: number, cz: number): string | null {
     const e = this.chunks.get(this.key(cx, cz));
-    return e?.state === 'stored' ? e.biome : null;
+    return e && e.state !== 'absent' && e.state !== 'error' && e.displayed !== 'none' ? e.biome : null;
   }
   surfaceYAt(cx: number, cz: number): number | null {
     const e = this.chunks.get(this.key(cx, cz));
-    return e?.state === 'stored' ? e.surfaceY : null;
+    return e && e.state !== 'absent' && e.state !== 'error' && e.displayed !== 'none' ? e.surfaceY : null;
   }
 
   // #endregion
@@ -331,6 +334,7 @@ export class ChunkManager {
       if (e) this.dropEntry(key, e);
     }
     this.releaseStaleEntries(frame.keepKeys, now);
+    this.releaseDisplayedWorkerData();
     this.releaseWorkerDataOverBudget();
     this.checkDelayedOperations(now);
     this.syncSchedulerStats();
@@ -355,6 +359,7 @@ export class ChunkManager {
       cx, cz,
       state: 'checking',
       workerReadyMask: 0,
+      workerKeepUntil: 0,
       pendingFullVersion: -1,
       pendingLodVersion: -1,
       pendingFull: false,
@@ -451,6 +456,20 @@ export class ChunkManager {
     this.scheduler.enqueueMeshTask({ key: e.key, kind, step, ...priority });
   }
 
+  private deferMesh(e: ChunkEntry, kind: MeshTaskKind, step: LodStep, fallbackTier: number) {
+    const timerKey = `${e.key}\u0000${kind}`;
+    if (this.deferredMeshTimers.has(timerKey)) return;
+    const timer = setTimeout(() => {
+      this.deferredMeshTimers.delete(timerKey);
+      if (this.disposed) return;
+      const current = this.chunks.get(e.key);
+      if (!current || current.state !== 'stored') return;
+      this.requeueMesh(current, kind, step, fallbackTier);
+      this.flushMeshQueue();
+    }, 80);
+    this.deferredMeshTimers.set(timerKey, timer);
+  }
+
   private beginPendingMesh(e: ChunkEntry, kind: MeshTaskKind, step: LodStep, cache: CachePartsResult): number {
     this.activeMeshTasks++;
     const version = ++this.versionCounter;
@@ -478,6 +497,18 @@ export class ChunkManager {
     e.pendingLod = false;
     e.pendingLodStep = 0;
     e.pendingLodCacheParts = null;
+  }
+
+  private recoverMissingWorkerInput(e: ChunkEntry, kind: MeshTaskKind, step: LodStep) {
+    if (e.state === 'stored') {
+      e.workerReadyMask = 0;
+      e.state = 'hashed';
+    }
+    if (e.state === 'checking') this.queueHash(e.key);
+    else if (e.state === 'hashed') this.queueFetch(e.key);
+    else if (e.state === 'fetching') this.flushFetchQueue();
+    this.deferMesh(e, kind, step, kind === 'full' ? 3 : 4);
+    this.reportStats();
   }
 
   private shouldApplyMeshResult(e: ChunkEntry, kind: MeshTaskKind, step: LodStep, version: number): boolean {
@@ -592,6 +623,37 @@ export class ChunkManager {
     return { parts: { ...this.cacheParts(e), contentKey: JSON.stringify(parts) }, stable };
   }
 
+  private keepWorkerData(e: ChunkEntry, now: number) {
+    e.workerKeepUntil = Math.max(e.workerKeepUntil, now + WORKER_NEIGHBOR_HOLD_MS);
+  }
+
+  private neighborNeedsWorkerData(center: ChunkEntry, candidate: ChunkEntry): boolean {
+    return candidate === center
+      || candidate.state === 'stored'
+      || candidate.displayed !== 'none'
+      || candidate.pendingFull
+      || candidate.pendingLod;
+  }
+
+  private ensureNeighborhoodWorkerData(e: ChunkEntry, now: number): boolean {
+    let ready = true;
+    const fetchKeys: string[] = [];
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const n = this.chunks.get(this.key(e.cx + dx, e.cz + dz));
+        if (!n || n.state === 'absent' || n.state === 'error') continue;
+        if (!this.neighborNeedsWorkerData(e, n)) continue;
+        this.keepWorkerData(n, now);
+        if (n.state === 'stored') continue;
+        ready = false;
+        if (n.state === 'checking') this.queueHash(n.key);
+        else if (n.state === 'hashed') fetchKeys.push(n.key);
+      }
+    }
+    if (fetchKeys.length) void this.fetchBatch(fetchKeys);
+    return ready;
+  }
+
   // #endregion
 
   // #region Mesh requests
@@ -599,6 +661,13 @@ export class ChunkManager {
   private requestFull(e: ChunkEntry) {
     if (this.activeMeshTasks >= this.maxActiveMeshTasks()) {
       this.requeueMesh(e, 'full', 1, 3);
+      return;
+    }
+    const now = performance.now();
+    if (!this.ensureNeighborhoodWorkerData(e, now)) {
+      this.deferMesh(e, 'full', 1, 3);
+      this.flushHashQueue();
+      this.flushFetchQueue();
       return;
     }
     const cache = this.neighborhoodCacheParts(e);
@@ -653,6 +722,13 @@ export class ChunkManager {
     }
     if (e.state !== 'stored') {
       this.queueFetch(e.key);
+      return;
+    }
+    const now = performance.now();
+    if (!this.ensureNeighborhoodWorkerData(e, now)) {
+      this.deferMesh(e, 'lod', step, 4);
+      this.flushHashQueue();
+      this.flushFetchQueue();
       return;
     }
     const cache = this.neighborhoodCacheParts(e);
@@ -919,12 +995,28 @@ export class ChunkManager {
     this.releaseWorkerData(e);
   }
 
-  private releaseWorkerData(e: ChunkEntry) {
+  private maybeReleaseDisplayedFullData(e: ChunkEntry) {
     if (e.state !== 'stored') return;
+    if (e.displayed !== 'full' || e.dirty) return;
     if (e.pendingFull || e.pendingLod || !this.contentHash(e)) return;
+    this.releaseWorkerData(e);
+  }
+
+  private releaseDisplayedWorkerData() {
+    for (const e of this.chunks.values()) {
+      this.maybeReleaseDisplayedLodData(e);
+      this.maybeReleaseDisplayedFullData(e);
+    }
+  }
+
+  private releaseWorkerData(e: ChunkEntry): boolean {
+    if (e.state !== 'stored') return false;
+    if (performance.now() < e.workerKeepUntil) return false;
+    if (e.pendingFull || e.pendingLod || !this.contentHash(e)) return false;
     this.broadcast({ type: 'drop', key: e.key });
     e.workerReadyMask = 0;
     e.state = 'hashed';
+    return true;
   }
 
   private displaySatisfiesLastTarget(e: ChunkEntry): boolean {
@@ -950,8 +1042,7 @@ export class ChunkManager {
     let count = resident.length;
     for (const e of victims) {
       if (count <= budget) break;
-      this.releaseWorkerData(e);
-      count--;
+      if (this.releaseWorkerData(e)) count--;
     }
   }
 
@@ -1109,6 +1200,10 @@ export class ChunkManager {
         const dirtyToken = matched ? e.pendingFullDirtyToken : -1;
         if (!e || !matched) return;
         this.clearPendingMesh(e, 'full');
+        if (msg.profile?.missingInput) {
+          this.recoverMissingWorkerInput(e, 'full', 1);
+          return;
+        }
         if (e.state !== 'stored') {
           this.reportStats();
           return;
@@ -1138,6 +1233,10 @@ export class ChunkManager {
           this.clearPendingMesh(e, 'lod');
         }
         if (!e || dirtyToken < 0 || msg.version < e.displayedVersion) return;
+        if (msg.profile?.missingInput) {
+          this.recoverMissingWorkerInput(e, 'lod', step);
+          return;
+        }
         if (e.state !== 'stored') {
           this.reportStats();
           return;
@@ -1186,6 +1285,7 @@ export class ChunkManager {
     const visible = new Set<string>();
     const queue: { section: FullSectionRender; entry: number }[] = [{ section: start, entry: -1 }];
     let head = 0;
+    let incompletePortalGraph = false;
     visible.add(start.key);
 
     while (head < queue.length) {
@@ -1195,10 +1295,19 @@ export class ChunkManager {
         if (entry >= 0 && !this.visibilityAllows(mask, entry, dir)) continue;
         const delta = SECTION_NEIGHBOR[dir];
         const next = this.fullSectionIndex.get(this.sectionKey(section.cx + delta[0], section.sy + delta[1], section.cz + delta[2]));
-        if (!next || visible.has(next.key)) continue;
+        if (!next) {
+          incompletePortalGraph = true;
+          continue;
+        }
+        if (visible.has(next.key)) continue;
         visible.add(next.key);
         queue.push({ section: next, entry: SECTION_OPPOSITE[dir] });
       }
+    }
+
+    if (incompletePortalGraph && visible.size < this.fullSectionIndex.size) {
+      this.setAllFullSectionsVisible(true);
+      return;
     }
 
     for (const section of this.fullSectionIndex.values()) {
@@ -1392,6 +1501,8 @@ export class ChunkManager {
       clearTimeout(this.fetchTimer);
       this.fetchTimer = null;
     }
+    for (const timer of this.deferredMeshTimers.values()) clearTimeout(timer);
+    this.deferredMeshTimers.clear();
     this.scene.remove(this.root);
     this.inFlightMeshVersions.clear();
     this.versionWorker.clear();

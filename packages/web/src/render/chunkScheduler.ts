@@ -10,6 +10,7 @@ const MAX_MESH_QUEUE = 256;
 const MAX_IO_QUEUE = 768;
 const IO_QUEUE_RETENTION_MS = 2600;
 const IO_RENDER_SHARE_TARGET = 0.8;
+const OUTER_IO_RENDER_SHARE_TARGET = 0.45;
 const MIN_EXISTING_CHUNKS_BEFORE_BALANCE = 64;
 const PREDICT_LOOKAHEAD_SECONDS = 0.9;
 const PREDICT_FORWARD_BLOCKS = 64;
@@ -24,6 +25,7 @@ const CHUNK_WORLD_MIN_Y = -80;
 const CHUNK_WORLD_MAX_Y = 384;
 const FULL_HOLD_MARGIN_CHUNKS = 2;
 const MIN_FULL_LOD_SHARE = 0.34;
+const FULL_PREVIEW_LOD_STEP: LodStep = 2;
 
 export const LOD_STEPS = [1, 2, 4, 8] as const;
 export type LodStep = typeof LOD_STEPS[number];
@@ -45,8 +47,6 @@ export interface MeshTask extends ChunkPriority {
   kind: MeshTaskKind;
   step: LodStep;
 }
-
-type MeshIntent = Pick<MeshTask, 'kind' | 'step'>;
 
 export interface ChunkCandidate extends ChunkPriority {
   key: string;
@@ -295,13 +295,17 @@ export class ChunkScheduler {
     const fullBias = this.shouldBiasFull(entries);
     while (this.meshQueue.size > 0) {
       let best: MeshTask | null = null;
-      for (const task of this.meshQueue.values()) {
+      let bestQueueKey: string | null = null;
+      for (const [queueKey, task] of this.meshQueue) {
         const latest = this.priorityByKey.get(task.key);
-        const effective = latest ? { ...task, tier: latest.tier, score: latest.score, updatedAt: latest.updatedAt } : task;
-        if (!best || this.compareMeshTasks(effective, best, fullBias) < 0) best = effective;
+        const effective = latest ? { ...task, score: latest.score, updatedAt: latest.updatedAt } : task;
+        if (!best || this.compareMeshTasks(effective, best, fullBias) < 0) {
+          best = effective;
+          bestQueueKey = queueKey;
+        }
       }
       if (!best) return null;
-      this.meshQueue.delete(best.key);
+      if (bestQueueKey) this.meshQueue.delete(bestQueueKey);
       const e = entryFor(best.key);
       if (!e || e.state !== 'stored') continue;
       if (!this.shouldStartMeshTask(best, e, now)) continue;
@@ -318,14 +322,14 @@ export class ChunkScheduler {
     return now - e.lastWantedAt <= maxAge;
   }
 
-  shouldApplyFullResult(e: ChunkSchedulerEntry, version: number, now: number): boolean {
-    if (version < e.displayedVersion || !this.priorityFresh(e, now)) return false;
+  shouldApplyFullResult(e: ChunkSchedulerEntry, _version: number, now: number): boolean {
+    if (!this.priorityFresh(e, now)) return false;
     return e.lastTargetStep === 1;
   }
 
   shouldApplyLodResult(e: ChunkSchedulerEntry, step: LodStep, version: number, now: number): boolean {
     if (version < e.displayedVersion || !this.priorityFresh(e, now)) return false;
-    if (e.lastTargetStep === 1) return false;
+    if (e.lastTargetStep === 1) return e.displayed === 'none';
     if (step > e.lastTargetStep && e.displayed !== 'none') return false;
     if (e.displayed === 'full' && e.lastTier <= 3 && !e.dirty) return false;
     return true;
@@ -364,7 +368,7 @@ export class ChunkScheduler {
     };
     for (const key of this.hashQueue) if (!keepIo(key)) this.hashQueue.delete(key);
     for (const key of this.fetchQueue) if (!keepIo(key)) this.fetchQueue.delete(key);
-    for (const key of this.meshQueue.keys()) if (!keepKeys.has(key)) this.meshQueue.delete(key);
+    for (const [queueKey, task] of this.meshQueue) if (!keepKeys.has(task.key)) this.meshQueue.delete(queueKey);
     this.trimIoQueue('hash');
     this.trimIoQueue('fetch');
     this.trimMeshQueue();
@@ -410,16 +414,19 @@ export class ChunkScheduler {
   }
 
   enqueueMeshTask(task: MeshTask) {
-    const existing = this.meshQueue.get(task.key);
+    const queueKey = this.meshQueueKey(task);
+    const existing = this.meshQueue.get(queueKey);
     if (existing && this.compareMeshTasks(existing, task, false) <= 0) return;
-    this.meshQueue.set(task.key, task);
+    this.meshQueue.set(queueKey, task);
     this.trimMeshQueue();
   }
 
   deleteKey(key: string) {
     this.hashQueue.delete(key);
     this.fetchQueue.delete(key);
-    this.meshQueue.delete(key);
+    for (const [queueKey, task] of this.meshQueue) {
+      if (task.key === key) this.meshQueue.delete(queueKey);
+    }
     this.priorityByKey.delete(key);
   }
 
@@ -518,6 +525,14 @@ export class ChunkScheduler {
         const distPredicted = this.distanceToChunk(this.predictedCamera.position, cx, cz);
         const sseDistance = currentFrustum || forcedFull ? distCurrent : distPredicted;
         let targetStep = this.selectLodStep(sseDistance, camera, viewportHeight, e, currentCheb, predictedFrustum, movingFast);
+        if (
+          targetStep !== 1
+          && !predictedFrustum
+          && currentCheb <= fullRadius + FULL_HOLD_MARGIN_CHUNKS
+          && this.hasDisplayedFullNeighbor(cx, cz, keyFor, entryFor)
+        ) {
+          targetStep = 1;
+        }
         if (predictedFrustum && !forcedFull) targetStep = Math.max(targetStep, movingFast ? 4 : 2) as LodStep;
         const tier = this.tierForCandidate(e, targetStep, currentFrustum, predictedFrustum, forcedFull);
         const score = (currentFrustum || forcedFull ? distCurrent : distPredicted) - this.screenErrorForStep(targetStep, sseDistance, camera, viewportHeight) * 8;
@@ -535,6 +550,21 @@ export class ChunkScheduler {
     this.tmpBox.min.set(x, CHUNK_WORLD_MIN_Y, z);
     this.tmpBox.max.set(x + 16, CHUNK_WORLD_MAX_Y, z + 16);
     return frustum.intersectsBox(this.tmpBox);
+  }
+
+  private hasDisplayedFullNeighbor(
+    cx: number,
+    cz: number,
+    keyFor: (cx: number, cz: number) => string,
+    entryFor: (key: string) => ChunkSchedulerEntry | null,
+  ): boolean {
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dz) continue;
+        if (entryFor(keyFor(cx + dx, cz + dz))?.displayed === 'full') return true;
+      }
+    }
+    return false;
   }
 
   private distanceToChunk(pos: THREE.Vector3, cx: number, cz: number): number {
@@ -652,9 +682,33 @@ export class ChunkScheduler {
     this.priorityByKey.set(key, { tier: priority.tier, score: priority.score, updatedAt: priority.updatedAt });
   }
 
-  private desiredMeshTask(e: ChunkSchedulerEntry, targetStep: LodStep): MeshIntent | null {
-    if (targetStep === 1) return this.wantsFull(e) ? { kind: 'full', step: 1 } : null;
-    return this.wantsLod(e, targetStep) ? { kind: 'lod', step: targetStep } : null;
+  private desiredMeshTasks(e: ChunkSchedulerEntry, targetStep: LodStep, priority: ChunkPriority): MeshTask[] {
+    const tasks: MeshTask[] = [];
+    if (targetStep === 1) {
+      if (e.displayed === 'none' && this.wantsLod(e, FULL_PREVIEW_LOD_STEP)) {
+        tasks.push({
+          key: e.key,
+          kind: 'lod',
+          step: FULL_PREVIEW_LOD_STEP,
+          tier: Math.min(priority.tier, 0),
+          score: priority.score,
+          updatedAt: priority.updatedAt,
+        });
+      }
+      if (this.wantsFull(e)) {
+        tasks.push({
+          key: e.key,
+          kind: 'full',
+          step: 1,
+          tier: e.displayed === 'none' ? Math.max(priority.tier, 3) : priority.tier,
+          score: priority.score,
+          updatedAt: priority.updatedAt,
+        });
+      }
+      return tasks;
+    }
+    if (this.wantsLod(e, targetStep)) tasks.push({ key: e.key, kind: 'lod', step: targetStep, ...priority });
+    return tasks;
   }
 
   private enqueueDesiredMeshTask(
@@ -663,9 +717,7 @@ export class ChunkScheduler {
     targetStep: LodStep,
     priority: ChunkPriority,
   ) {
-    const intent = this.desiredMeshTask(e, targetStep);
-    if (!intent) return;
-    this.enqueueMeshTask({ key, ...intent, tier: priority.tier, score: priority.score, updatedAt: priority.updatedAt });
+    for (const task of this.desiredMeshTasks(e, targetStep, priority)) this.enqueueMeshTask({ ...task, key });
   }
 
   private wantsFull(e: ChunkSchedulerEntry): boolean {
@@ -706,7 +758,7 @@ export class ChunkScheduler {
       return e.lastTargetStep === 1 && this.wantsFull(e);
     }
     if (!this.wantsLod(e, task.step)) return false;
-    if (e.lastTargetStep === 1) return false;
+    if (e.lastTargetStep === 1) return e.displayed === 'none';
     if (task.step > e.lastTargetStep && e.displayed !== 'none') return false;
     if (e.displayed === 'full' && e.lastTier <= 3 && !e.dirty) return false;
     return true;
@@ -729,13 +781,13 @@ export class ChunkScheduler {
     return this.hashQueue.size + this.fetchQueue.size + activeIoBatches;
   }
 
-  private shouldLoadMore(activeIoBatches: number): boolean {
+  private shouldLoadMore(activeIoBatches: number, renderWork: number): boolean {
     const loadWork = this.loadBacklog(activeIoBatches);
     if (loadWork <= 0) return false;
-    if (this.currentFrustumLoaded()) return false;
     if (this.shouldPrioritizeInitialLoad()) return true;
     if (this.renderStats.nbt <= 0) return false;
-    return this.readyShare() >= IO_RENDER_SHARE_TARGET;
+    const readyTarget = this.currentFrustumLoaded() ? OUTER_IO_RENDER_SHARE_TARGET : IO_RENDER_SHARE_TARGET;
+    return this.readyShare() >= readyTarget || (this.currentFrustumLoaded() && renderWork <= 12);
   }
 
   private nextLimitedIoBatch(
@@ -752,7 +804,7 @@ export class ChunkScheduler {
     if (opts.activeBatches >= opts.maxBatches) return [];
     const renderWork = this.renderBacklog(opts.entries, opts.activeMeshTasks);
     const prioritizeLoad = this.shouldPrioritizeInitialLoad();
-    if (!this.shouldLoadMore(opts.activeBatches)) return [];
+    if (!this.shouldLoadMore(opts.activeBatches, renderWork)) return [];
     const batchSize = prioritizeLoad || renderWork <= 0
       ? opts.batchSize
       : Math.max(opts.busyBatchFloor, Math.floor(opts.batchSize / 2));
@@ -830,8 +882,12 @@ export class ChunkScheduler {
   private trimMeshQueue() {
     if (this.meshQueue.size <= MAX_MESH_QUEUE) return;
     const fullBias = false;
-    const sorted = [...this.meshQueue.values()].sort((a, b) => this.compareMeshTasks(a, b, fullBias));
-    this.meshQueue = new Map(sorted.slice(0, MAX_MESH_QUEUE).map((task) => [task.key, task]));
+    const sorted = [...this.meshQueue.entries()].sort((a, b) => this.compareMeshTasks(a[1], b[1], fullBias));
+    this.meshQueue = new Map(sorted.slice(0, MAX_MESH_QUEUE));
+  }
+
+  private meshQueueKey(task: Pick<MeshTask, 'key' | 'kind'>): string {
+    return `${task.key}\u0000${task.kind}`;
   }
 
   private maxTrackedChunks(): number {

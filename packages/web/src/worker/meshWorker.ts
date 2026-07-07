@@ -244,7 +244,13 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
           key: msg.key,
           version: msg.version,
           sections: [],
-          profile: { meshBytes: 0, meshMs: performance.now() - started, storedColumns: columns.size, sectionCount: 0 },
+          profile: {
+            meshBytes: 0,
+            meshMs: performance.now() - started,
+            storedColumns: columns.size,
+            sectionCount: 0,
+            missingInput: true,
+          },
         });
         break;
       }
@@ -285,7 +291,12 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
           version: msg.version,
           step: msg.step,
           mesh: null,
-          profile: { meshBytes: 0, meshMs: performance.now() - started, storedColumns: columns.size },
+          profile: {
+            meshBytes: 0,
+            meshMs: performance.now() - started,
+            storedColumns: columns.size,
+            missingInput: true,
+          },
         });
         break;
       }

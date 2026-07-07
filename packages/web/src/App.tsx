@@ -169,8 +169,8 @@ export default function App() {
   }, [diagnosticCollapsed]);
 
   useEffect(() => {
-    const diagnosticsNeedCache = diagnosticDetail === 'detailed' && !diagnosticCollapsed;
-    if (panelCollapsed && !diagnosticsNeedCache) return;
+    const cacheStatsVisible = (!panelCollapsed && panelTab === 'settings') || (diagnosticDetail === 'detailed' && !diagnosticCollapsed);
+    if (!cacheStatsVisible) return;
     let cancelled = false;
     const refresh = () => {
       getMeshCacheStats()
@@ -183,7 +183,7 @@ export default function App() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [panelCollapsed, diagnosticDetail, diagnosticCollapsed]);
+  }, [panelCollapsed, panelTab, diagnosticDetail, diagnosticCollapsed]);
 
   const dims = worlds.find((w) => w.id === world)?.dimensions ?? [];
   const draftValues = [Number(coordDraft.x), Number(coordDraft.y), Number(coordDraft.z)] as const;

@@ -33,6 +33,7 @@ export interface WorkerMeshProfile {
   meshMs: number;
   storedColumns: number;
   sectionCount?: number;
+  missingInput?: boolean;
 }
 
 export type WorkerResponse =

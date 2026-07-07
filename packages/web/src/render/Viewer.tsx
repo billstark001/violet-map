@@ -12,7 +12,7 @@ import { createMaterials, createSharedUniforms, SharedUniforms, TerrainMaterials
 import type { WorkerInit } from '../worker/protocol';
 
 const VIEW_STORAGE_KEY = 'violet-map:view';
-const MESH_CACHE_SCHEMA = 'mesh-v6-packed-integer';
+const MESH_CACHE_SCHEMA = 'mesh-v7-neighborhood-resident';
 const SKY_PLANE_FORWARD = new THREE.Vector3(0, 0, 1);
 const celestialFacing = new THREE.Vector3();
 

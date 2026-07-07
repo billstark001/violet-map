@@ -13,6 +13,7 @@ interface LodShape {
   minY: number;
   maxY: number;
   sideMaxY: number;
+  fluidTexture?: string;
 }
 
 interface FaceBucket {
@@ -283,7 +284,7 @@ function shapeOf(state: BlockStateRef, info: BlockInfo): LodShape | null {
 
   minY = Math.min(1, Math.max(0, minY));
   maxY = Math.min(1, Math.max(0, maxY));
-  return maxY - minY > EPS ? { minY, maxY, sideMaxY: info.fluid ? 1 : maxY } : null;
+  return maxY - minY > EPS ? { minY, maxY, sideMaxY: maxY, fluidTexture: info.fluid?.texture } : null;
 }
 
 function makeLocalView(col: ChunkColumn): LodWorldView {
@@ -424,6 +425,13 @@ export function meshLodChunk(
     const state = view.getBlock(wx, wy, wz);
     return cachedShape(state);
   };
+  const sideMaxYAt = (wx: number, wy: number, wz: number, shape: LodShape): number => {
+    if (!shape.fluidTexture) return shape.sideMaxY;
+    const above = view.getBlock(wx, wy + 1, wz);
+    const aboveInfo = cachedInfo(above.name);
+    if (aboveInfo.fluid?.texture === shape.fluidTexture || aboveInfo.occludes) return 1;
+    return shape.maxY;
+  };
   const skyExterior = hasSkyLight && view.getSkyLight
     ? (wx: number, wy: number, wz: number) => view.getSkyLight!(wx, wy, wz) > 0
     : null;
@@ -465,6 +473,7 @@ export function meshLodChunk(
           const z1 = quantCeil(z + 1, lodStep);
           const y0 = wy + shape.minY;
           const y1 = wy + shape.maxY;
+          const sideMaxY = sideMaxYAt(wx, wy, wz, shape);
           const addFace = (dir: Direction, ay: number, by: number, color: Rgb) => {
             switch (dir) {
               case 'up':
@@ -505,17 +514,18 @@ export function meshLodChunk(
               addFace(dir, ay, by, getColor());
             };
             if (!cover) {
-              emit(shape.minY, shape.sideMaxY);
+              emit(shape.minY, sideMaxY);
               return;
             }
+            const coverSideMaxY = sideMaxYAt(wx + nx, wy, wz + nz, cover);
             const c0 = Math.max(shape.minY, cover.minY);
-            const c1 = Math.min(shape.sideMaxY, cover.sideMaxY);
+            const c1 = Math.min(sideMaxY, coverSideMaxY);
             if (c1 <= c0 + EPS) {
-              emit(shape.minY, shape.sideMaxY);
+              emit(shape.minY, sideMaxY);
               return;
             }
             if (c0 > shape.minY + EPS) emit(shape.minY, c0);
-            if (c1 < shape.sideMaxY - EPS) emit(c1, shape.sideMaxY);
+            if (c1 < sideMaxY - EPS) emit(c1, sideMaxY);
           };
 
           side('north', 0, -1, exteriorNorth);
