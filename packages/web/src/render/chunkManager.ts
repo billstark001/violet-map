@@ -1400,11 +1400,19 @@ export class ChunkManager {
       this.setAllFullSectionsVisible(true);
       return;
     }
+    const startEntry = this.chunks.get(this.key(startCx, startCz));
+    if (startEntry && camera.position.y >= startEntry.surfaceY + 2) {
+      this.setAllFullSectionsVisible(true);
+      return;
+    }
+    if (start.visibility === SECTION_VISIBILITY_ALL) {
+      this.setAllFullSectionsVisible(true);
+      return;
+    }
 
     const visible = new Set<string>();
     const queue: { section: FullSectionRender; entry: number }[] = [{ section: start, entry: -1 }];
     let head = 0;
-    let incompletePortalGraph = false;
     visible.add(start.key);
 
     while (head < queue.length) {
@@ -1414,19 +1422,11 @@ export class ChunkManager {
         if (entry >= 0 && !this.visibilityAllows(mask, entry, dir)) continue;
         const delta = SECTION_NEIGHBOR[dir];
         const next = this.fullSectionIndex.get(this.sectionKey(section.cx + delta[0], section.sy + delta[1], section.cz + delta[2]));
-        if (!next) {
-          incompletePortalGraph = true;
-          continue;
-        }
+        if (!next) continue;
         if (visible.has(next.key)) continue;
         visible.add(next.key);
         queue.push({ section: next, entry: SECTION_OPPOSITE[dir] });
       }
-    }
-
-    if (incompletePortalGraph && visible.size < this.fullSectionIndex.size) {
-      this.setAllFullSectionsVisible(true);
-      return;
     }
 
     for (const section of this.fullSectionIndex.values()) {

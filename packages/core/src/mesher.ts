@@ -27,6 +27,9 @@ export class ChunkNeighborhood implements WorldView {
     if (gx < 0 || gx > 2 || gz < 0 || gz > 2) return null;
     return this.grid[gx + gz * 3];
   }
+  columnAtWorld(x: number, z: number): ChunkColumn | null {
+    return this.colAt(x, z);
+  }
   getBlock(x: number, y: number, z: number) { return this.colAt(x, z)?.getBlock(x & 15, y, z & 15) ?? AIR; }
   getBiome(x: number, y: number, z: number) { return this.colAt(x, z)?.getBiome(x & 15, y, z & 15) ?? 'minecraft:plains'; }
   getSkyLight(x: number, y: number, z: number) { return this.colAt(x, z)?.getSkyLight(x & 15, y, z & 15) ?? 15; }
@@ -45,6 +48,7 @@ const SHADE: Record<Direction, number> = { up: 1, down: 0.5, north: 0.8, south: 
 const OCCLUSION_DIRECTIONS: Direction[] = ['down', 'up', 'north', 'south', 'west', 'east'];
 export const SECTION_VISIBILITY_DIRECTIONS: Direction[] = ['down', 'up', 'north', 'south', 'west', 'east'];
 const DIRECTION_INDEX: Record<Direction, number> = { down: 0, up: 1, north: 2, south: 3, west: 4, east: 5 };
+const ALL_DIRECTIONS_OCCLUDED = (1 << SECTION_VISIBILITY_DIRECTIONS.length) - 1;
 const SECTION_VISIBILITY_ALL = (() => {
   let mask = 0;
   for (let from = 0; from < 6; from++) {
@@ -130,9 +134,20 @@ class SectionViewCache implements WorldView {
     sy: number,
     cz: number,
   ) {
+    const neighborhood = base instanceof ChunkNeighborhood ? base : null;
+    const occlusionByState = new WeakMap<BlockStateRef, number>();
+    const occlusionOf = (state: BlockStateRef): number => {
+      const hit = occlusionByState.get(state);
+      if (hit !== undefined) return hit;
+      const value = res.info(state.name).occludes ? 1 : 0;
+      occlusionByState.set(state, value);
+      return value;
+    };
     this.ox = cx * 16;
     this.oy = sy * 16;
     this.oz = cz * 16;
+    const centerCol = neighborhood?.columnAtWorld(this.ox, this.oz) ?? null;
+    const centerSection = centerCol?.sections.get(sy) ?? null;
     for (let y = 0; y < 18; y++) {
       for (let z = 0; z < 18; z++) {
         for (let x = 0; x < 18; x++) {
@@ -140,11 +155,33 @@ class SectionViewCache implements WorldView {
           const wx = this.ox + x - 1;
           const wy = this.oy + y - 1;
           const wz = this.oz + z - 1;
-          const state = base.getBlock(wx, wy, wz);
+          let state: BlockStateRef;
+          if (centerCol && centerSection && x > 0 && x < 17 && y > 0 && y < 17 && z > 0 && z < 17) {
+            const lx = x - 1;
+            const ly = y - 1;
+            const lz = z - 1;
+            const localIndex = (ly << 8) | (lz << 4) | lx;
+            state = centerSection.block(lx, ly, lz);
+            this.sky[i] = centerSection.skyLight ? centerSection.skyLight[localIndex] : centerCol.getSkyLight(lx, wy, lz);
+            this.block[i] = centerSection.blockLight ? centerSection.blockLight[localIndex] : 0;
+          } else if (neighborhood) {
+            const col = neighborhood.columnAtWorld(wx, wz);
+            if (col) {
+              state = col.getBlock(wx & 15, wy, wz & 15);
+              this.sky[i] = col.getSkyLight(wx & 15, wy, wz & 15);
+              this.block[i] = col.getBlockLight(wx & 15, wy, wz & 15);
+            } else {
+              state = AIR;
+              this.sky[i] = 15;
+              this.block[i] = 0;
+            }
+          } else {
+            state = base.getBlock(wx, wy, wz);
+            this.sky[i] = base.getSkyLight(wx, wy, wz);
+            this.block[i] = base.getBlockLight(wx, wy, wz);
+          }
           this.states[i] = state;
-          this.occlusion[i] = res.info(state.name).occludes ? 1 : 0;
-          this.sky[i] = base.getSkyLight(wx, wy, wz);
-          this.block[i] = base.getBlockLight(wx, wy, wz);
+          this.occlusion[i] = occlusionOf(state);
         }
       }
     }
@@ -166,6 +203,19 @@ class SectionViewCache implements WorldView {
 
   blockLocal(x: number, y: number, z: number): BlockStateRef {
     return this.states[this.idx(x + 1, y + 1, z + 1)] ?? AIR;
+  }
+
+  occludesLocal(x: number, y: number, z: number): boolean {
+    return this.occlusion[this.idx(x + 1, y + 1, z + 1)] > 0;
+  }
+
+  fullyOccludedLocal(x: number, y: number, z: number): boolean {
+    return this.occludesLocal(x - 1, y, z)
+      && this.occludesLocal(x + 1, y, z)
+      && this.occludesLocal(x, y - 1, z)
+      && this.occludesLocal(x, y + 1, z)
+      && this.occludesLocal(x, y, z - 1)
+      && this.occludesLocal(x, y, z + 1);
   }
 
   getBlock(x: number, y: number, z: number): BlockStateRef {
@@ -197,12 +247,36 @@ class SectionViewCache implements WorldView {
       : this.res.info(this.base.getBlock(x, y, z).name).occludes;
   }
 
+  isSealedOccluderSection(): boolean {
+    for (let y = 1; y <= 16; y++) {
+      for (let z = 1; z <= 16; z++) {
+        for (let x = 1; x <= 16; x++) {
+          if (!this.occlusion[this.idx(x, y, z)]) return false;
+        }
+      }
+    }
+    for (let y = 1; y <= 16; y++) {
+      for (let z = 1; z <= 16; z++) {
+        if (!this.occlusion[this.idx(0, y, z)] || !this.occlusion[this.idx(17, y, z)]) return false;
+      }
+      for (let x = 1; x <= 16; x++) {
+        if (!this.occlusion[this.idx(x, y, 0)] || !this.occlusion[this.idx(x, y, 17)]) return false;
+      }
+    }
+    for (let z = 1; z <= 16; z++) {
+      for (let x = 1; x <= 16; x++) {
+        if (!this.occlusion[this.idx(x, 0, z)] || !this.occlusion[this.idx(x, 17, z)]) return false;
+      }
+    }
+    return true;
+  }
+
   visibilityMask(): number {
     const total = 16 * 16 * 16;
     const visited = new Uint8Array(total);
     const queue = new Int32Array(total);
-    let passableCount = 0;
     const idxOf = (x: number, y: number, z: number) => (y << 8) | (z << 4) | x;
+    let passableCount = 0;
     for (let y = 0; y < 16; y++) {
       for (let z = 0; z < 16; z++) {
         for (let x = 0; x < 16; x++) {
@@ -350,6 +424,12 @@ class MeshBuilder {
       indices: packIndices(indices, this.verts),
     };
   }
+}
+
+type MeshBuilderStore = Partial<Record<RenderLayer, MeshBuilder>>;
+
+function builderFor(builders: MeshBuilderStore, layer: RenderLayer): MeshBuilder {
+  return builders[layer] ??= new MeshBuilder(layer === 'opaqueTiled');
 }
 
 function atlasUv(rect: AtlasRect, u: number, v: number): [number, number] {
@@ -633,11 +713,11 @@ function fullyOccluded(res: MesherResources, view: WorldView, wx: number, wy: nu
 }
 
 function emitFluid(
-  res: MesherResources, view: WorldView, builders: Record<RenderLayer, MeshBuilder>,
+  res: MesherResources, view: WorldView, builders: MeshBuilderStore,
   fluid: NonNullable<BlockInfo['fluid']>, state: BlockStateRef,
   lx: number, ly: number, lz: number, wx: number, wy: number, wz: number,
 ) {
-  const builder = builders[fluid.layer ?? 'translucent'];
+  const builder = builderFor(builders, fluid.layer ?? 'translucent');
   const rect = res.atlas[fluid.texture] ?? res.atlas[MISSING_TEXTURE];
   const tint = res.tint(fluid.tint, undefined, view.getBiome(wx, wy, wz), state);
   const above = view.getBlock(wx, wy + 1, wz);
@@ -765,6 +845,7 @@ export function meshSection(
   };
   const localRes: MesherResources = { ...res, info: cachedInfo };
   const cachedView = new SectionViewCache(localRes, view, cx, sy, cz);
+  if (cachedView.isSealedOccluderSection()) return { layers: {}, visibility: 0 };
   const textureIds = new Map<string, number>();
   const textureKeyOf = (texture: string): number => {
     let id = textureIds.get(texture);
@@ -795,12 +876,7 @@ export function meshSection(
     }
     return hit;
   };
-  const builders: Record<RenderLayer, MeshBuilder> = {
-    opaque: new MeshBuilder(),
-    opaqueTiled: new MeshBuilder(true),
-    cutout: new MeshBuilder(),
-    translucent: new MeshBuilder(),
-  };
+  const builders: MeshBuilderStore = {};
   const greedyGrids = new Array<GreedyGrid | null>(6 * 17).fill(null);
   const ox = cx * 16, oy = sy * 16, oz = cz * 16;
   for (let y = 0; y < 16; y++) {
@@ -820,6 +896,15 @@ export function meshSection(
           const water = cachedInfo('minecraft:water').fluid;
           if (water) emitFluid(localRes, cachedView, builders, water, { name: 'minecraft:water', properties: { level: '0' } }, x, y, z, wx, wy, wz);
         }
+        let occludedFaceMask = -1;
+        if (!waterlogged && bi.occludes) {
+          occludedFaceMask = 0;
+          for (const dir of SECTION_VISIBILITY_DIRECTIONS) {
+            const d = DIR_VEC[dir];
+            if (cachedView.occludesLocal(x + d[0], y + d[1], z + d[2])) occludedFaceMask |= 1 << DIRECTION_INDEX[dir];
+          }
+          if (occludedFaceMask === ALL_DIRECTIONS_OCCLUDED) continue;
+        }
 
         const quads = localRes.baker.getQuads(state, hash3(wx, wy, wz));
         const simple = meta.simpleEligible ? cachedSimpleCube(quads, localRes.textureHasAlpha) : null;
@@ -827,40 +912,43 @@ export function meshSection(
           for (const dir of SECTION_VISIBILITY_DIRECTIONS) {
             const q = simple[dir];
             const d = DIR_VEC[dir];
-            if (blockOccludes(localRes, cachedView, wx + d[0], wy + d[1], wz + d[2])) continue;
+            if (occludedFaceMask >= 0
+              ? (occludedFaceMask & (1 << DIRECTION_INDEX[dir])) !== 0
+              : cachedView.occludesLocal(x + d[0], y + d[1], z + d[2])) continue;
             const cell = greedyCellForQuad(localRes, cachedView, q, textureKeyOf(q.texture), wx, wy, wz, smoothLighting);
             if (cell) {
               const coord = greedyCoords(dir, x, y, z);
               addGreedyCell(greedyGrids, dir, coord.slice, coord.u, coord.v, cell);
             } else {
-              emitQuad(localRes, cachedView, builders.opaque, q, x, y, z, wx, wy, wz, WHITE, smoothLighting);
+              emitQuad(localRes, cachedView, builderFor(builders, 'opaque'), q, x, y, z, wx, wy, wz, WHITE, smoothLighting);
             }
           }
           continue;
         }
 
-        if (!waterlogged && bi.occludes && fullyOccluded(localRes, cachedView, wx, wy, wz)) continue;
-
         for (const q of quads) {
           if (q.cullFace) {
             const d = DIR_VEC[q.cullFace];
-            const n = cachedView.getBlock(wx + d[0], wy + d[1], wz + d[2]);
-            if (blockOccludes(localRes, cachedView, wx + d[0], wy + d[1], wz + d[2])) continue;
+            if (occludedFaceMask >= 0
+              ? (occludedFaceMask & (1 << DIRECTION_INDEX[q.cullFace])) !== 0
+              : cachedView.occludesLocal(x + d[0], y + d[1], z + d[2])) continue;
+            const n = cachedView.blockLocal(x + d[0], y + d[1], z + d[2]);
             if (bi.layer === 'translucent' && n.name === state.name) continue;
           }
           const tint = q.tintIndex >= 0
             ? localRes.tint(bi.tint, bi.fixedTint, cachedView.getBiome(wx, wy, wz), state)
             : WHITE;
           const layer = blockLayer === 'opaque' && localRes.textureHasAlpha?.[q.texture] ? 'cutout' : blockLayer;
-          emitQuad(localRes, cachedView, builders[layer], q, x, y, z, wx, wy, wz, tint, smoothLighting);
+          emitQuad(localRes, cachedView, builderFor(builders, layer), q, x, y, z, wx, wy, wz, tint, smoothLighting);
         }
       }
     }
   }
-  flushGreedyGrids(greedyGrids, builders.opaqueTiled);
+  if (greedyGrids.some(Boolean)) flushGreedyGrids(greedyGrids, builderFor(builders, 'opaqueTiled'));
   const layers: SectionMeshes = {};
   for (const layer of ['opaque', 'opaqueTiled', 'cutout', 'translucent'] as RenderLayer[]) {
-    if (!builders[layer].empty) layers[layer] = builders[layer].build();
+    const builder = builders[layer];
+    if (builder && !builder.empty) layers[layer] = builder.build();
   }
   return { layers, visibility: cachedView.visibilityMask() };
 }
