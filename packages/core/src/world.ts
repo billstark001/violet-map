@@ -77,8 +77,8 @@ export class ChunkColumn {
   readonly sections = new Map<number, ChunkSection>();
   minSectionY = 0;
   maxSectionY = -1;
-  heightmap: BitArray | null = null;
-  heightmapOffset = 0;
+  heightMap: BitArray | null = null;
+  heightMapOffset = 0;
   hasStoredLight = false;
   hasStoredBlockLight = false;
   hasStoredSkyLight = false;
@@ -118,7 +118,7 @@ export class ChunkColumn {
   }
   /** 最高非空气方块上方一格的 y（无方块返回 minY）。 */
   heightAt(x: number, z: number): number {
-    if (this.heightmap) return this.heightmap.get((z << 4) | x) + this.heightmapOffset;
+    if (this.heightMap) return this.heightMap.get((z << 4) | x) + this.heightMapOffset;
     return this.scanHeightAt(x, z);
   }
   /** 保证 [minSectionY, maxSectionY] 范围内每个 section 存在（光照引擎需要空气 section 承载亮度）。 */
@@ -145,8 +145,8 @@ function hasAnyLight(a: Uint8Array | null): boolean {
   return false;
 }
 
-function calibrateHeightmap(col: ChunkColumn) {
-  if (!col.heightmap) return;
+function calibrateHeightMap(col: ChunkColumn) {
+  if (!col.heightMap) return;
   const offsets = Array.from(new Set([0, 1, col.minY, col.minY + 1]));
   const samples: [number, number][] = [[0, 0], [4, 4], [8, 8], [12, 12], [15, 15], [0, 15], [15, 0], [8, 3], [3, 8]];
   let bestOffset = 0;
@@ -154,7 +154,7 @@ function calibrateHeightmap(col: ChunkColumn) {
   for (const offset of offsets) {
     let score = 0;
     for (const [x, z] of samples) {
-      const raw = col.heightmap.get((z << 4) | x);
+      const raw = col.heightMap.get((z << 4) | x);
       score += Math.min(64, Math.abs(raw + offset - col.scanHeightAt(x, z)));
     }
     if (score < bestScore) {
@@ -162,7 +162,7 @@ function calibrateHeightmap(col: ChunkColumn) {
       bestOffset = offset;
     }
   }
-  col.heightmapOffset = bestOffset;
+  col.heightMapOffset = bestOffset;
 }
 
 /** 解析 1.18+ 区块 NBT（simplify 后的对象）。 */
@@ -196,12 +196,12 @@ export function parseChunkColumn(root: any): ChunkColumn {
     if (first) { col.minSectionY = sy; col.maxSectionY = sy; first = false; }
     else { col.minSectionY = Math.min(col.minSectionY, sy); col.maxSectionY = Math.max(col.maxSectionY, sy); }
   }
-  const hm = r.Heightmaps?.WORLD_SURFACE;
+  const hm = r.HeightMaps?.WORLD_SURFACE;
   if (hm) {
     const height = col.maxY - col.minY;
     if (height > 0) {
-      col.heightmap = new BitArray(Math.ceil(Math.log2(height + 1)), toLongs(hm));
-      calibrateHeightmap(col);
+      col.heightMap = new BitArray(Math.ceil(Math.log2(height + 1)), toLongs(hm));
+      calibrateHeightMap(col);
     }
   }
   return col;

@@ -15,13 +15,13 @@ export const fetchDimensions = () => json<DimensionMap>('/api/data/dimensions');
 
 export interface DimensionCapabilities {
   hasTopMap: boolean;
-  hasHeightmap: boolean;
+  hasHeightMap: boolean;
 }
 
 export interface WorldCapabilities {
   world: string;
   hasTopMap: boolean;
-  hasHeightmap: boolean;
+  hasHeightMap: boolean;
   dimensions: Record<string, DimensionCapabilities>;
 }
 
@@ -48,10 +48,10 @@ export interface TopMapTileSetManifest {
 export interface TopMapDimensionManifest extends DimensionCapabilities {
   world: string;
   dimension: string;
-  heightmap?: TopMapTileSetManifest;
+  heightMap?: TopMapTileSetManifest;
 }
 
-export interface HeightmapTilePayload {
+export interface HeightMapTilePayload {
   schema: 5;
   kind: 'heightmap-region';
   dimension: string;
@@ -153,15 +153,15 @@ export const fetchTopMapManifest = (world: string, dim: string) =>
     `/api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/top-map/manifest`,
   );
 
-export async function fetchTopMapHeightmapTile(
+export async function fetchTopMapHeightMapTile(
   world: string,
   dim: string,
   rx: number,
   rz: number,
-): Promise<HeightmapTilePayload> {
+): Promise<HeightMapTilePayload> {
   const res = await fetch(`/api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/top-map/heightmap/${rx}/${rz}`, {
     headers: { accept: 'application/msgpack' },
   });
   if (!res.ok) throw new Error(`top-map heightmap fetch failed: ${res.status}`);
-  return decode(new Uint8Array(await res.arrayBuffer())) as HeightmapTilePayload;
+  return decode(new Uint8Array(await res.arrayBuffer())) as HeightMapTilePayload;
 }

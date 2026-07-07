@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import {
-  fetchTopMapHeightmapTile,
+  fetchTopMapHeightMapTile,
   fetchTopMapManifest,
-  type HeightmapTilePayload,
+  type HeightMapTilePayload,
 } from '../api';
 import { debugLog } from '../logger';
 import { createTopMapMaterial, type SharedUniforms } from './materials';
@@ -18,6 +18,10 @@ const FAILED_TILE_RETRY_MS = 12000;
 const FULL_TILE_CHUNKS = 32 * 32;
 const FULL_COVERAGE_KEY = '*';
 
+const CELL_STATUS_ABSENT = 0;
+const CELL_STATUS_PRESENT = 1;
+const CELL_STATUS_ONLINE_BOUNDARY = 2;
+
 export interface TopMapUpdateOptions {
   mode: 'perspective' | 'top';
   radiusBlocks?: number;
@@ -25,15 +29,15 @@ export interface TopMapUpdateOptions {
   hasSkyLight?: boolean;
 }
 
-interface HeightmapData {
-  payload: HeightmapTilePayload;
+interface HeightMapData {
+  payload: HeightMapTilePayload;
   heights: Int16Array;
   texture: THREE.DataTexture;
 }
 
-interface HeightmapTile {
+interface HeightMapTile {
   key: string;
-  data: HeightmapData;
+  data: HeightMapData;
   mesh: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> | null;
   step: number;
   coverageKey: string;
@@ -63,7 +67,7 @@ function decodeInt16Le(bytes: Uint8Array, count: number): Int16Array {
   return out;
 }
 
-function prepareHeightmap(payload: HeightmapTilePayload): HeightmapData {
+function prepareHeightMap(payload: HeightMapTilePayload): HeightMapData {
   const heightPixels = payload.size.samples * payload.size.samples;
   const colorPixels = payload.size.colorSamples * payload.size.colorSamples;
   if (
@@ -106,7 +110,7 @@ function prepareHeightmap(payload: HeightmapTilePayload): HeightmapData {
   };
 }
 
-function sampleIndex(data: HeightmapData, x: number, z: number): number {
+function sampleIndex(data: HeightMapData, x: number, z: number): number {
   const stride = data.payload.sampleStride;
   const samples = data.payload.size.samples;
   const sx = clamp(Math.floor(x / stride), 0, samples - 1);
@@ -114,7 +118,7 @@ function sampleIndex(data: HeightmapData, x: number, z: number): number {
   return sz * samples + sx;
 }
 
-function sampleHeight(data: HeightmapData, x: number, z: number): number {
+function sampleHeight(data: HeightMapData, x: number, z: number): number {
   return data.heights[sampleIndex(data, x, z)];
 }
 
@@ -122,10 +126,10 @@ function cellIndex(cellCount: number, x: number, z: number): number {
   return z * cellCount + x;
 }
 
-function cellHeight(cellHeights: Int16Array, hasCell: Uint8Array, cellCount: number, x: number, z: number): number | null {
+function cellHeight(cellHeights: Int16Array, cellStatus: Uint8Array, cellCount: number, x: number, z: number): number | null {
   if (x < 0 || z < 0 || x >= cellCount || z >= cellCount) return null;
   const i = cellIndex(cellCount, x, z);
-  return hasCell[i] ? cellHeights[i] : null;
+  return cellStatus[i] !== CELL_STATUS_ABSENT ? cellHeights[i] : null;
 }
 
 function uvX(x: number, size: number): number {
@@ -191,7 +195,7 @@ function addWall(
   ], shade, light);
 }
 
-function chunkKeyForLocal(data: HeightmapData, x: number, z: number): string {
+function chunkKeyForLocal(data: HeightMapData, x: number, z: number): string {
   const wx = data.payload.origin.x + x;
   const wz = data.payload.origin.z + z;
   return `${Math.floor(wx / 16)},${Math.floor(wz / 16)}`;
@@ -222,62 +226,103 @@ function coverageChunkCount(coverageKey: string): number {
 }
 
 function buildCells(
-  data: HeightmapData,
+  data: HeightMapData,
   step: number,
   onlineChunks: ReadonlySet<string> | undefined,
-): { cellCount: number; cellHeights: Int16Array; hasCell: Uint8Array } {
+): { cellCount: number; cellHeights: Int16Array; cellStatus: Uint8Array } {
   const size = data.payload.size.blocks;
   const cellCount = Math.floor(size / step);
   const cellHeights = new Int16Array(cellCount * cellCount);
-  const hasCell = new Uint8Array(cellCount * cellCount);
+  const cellStatus = new Uint8Array(cellCount * cellCount);
+
   cellHeights.fill(MISSING_HEIGHT);
+
+  const isOnlineCell = (cx: number, cz: number): boolean => {
+    if (!onlineChunks) return false;
+
+    // 边界外视为 onlineChunks 不存在
+    if (cx < 0 || cz < 0 || cx >= cellCount || cz >= cellCount) {
+      return false;
+    }
+
+    return onlineChunks.has(chunkKeyForLocal(data, cx * step, cz * step));
+  };
+
+  const hasOfflineNeighbor = (cx: number, cz: number): boolean => {
+    return (
+      !isOnlineCell(cx - 1, cz) ||
+      !isOnlineCell(cx + 1, cz) ||
+      !isOnlineCell(cx, cz - 1) ||
+      !isOnlineCell(cx, cz + 1)
+    );
+  };
+
   for (let cz = 0; cz < cellCount; cz++) {
     for (let cx = 0; cx < cellCount; cx++) {
       const index = cellIndex(cellCount, cx, cz);
       const x0 = cx * step;
       const z0 = cz * step;
-      if (onlineChunks?.has(chunkKeyForLocal(data, x0, z0))) continue;
+
+      const currentOnline = isOnlineCell(cx, cz);
+      const onlineBoundaryCell =
+        onlineChunks !== undefined && currentOnline && hasOfflineNeighbor(cx, cz);
+
+      // onlineChunks 中的非边界格子仍然跳过
+      if (currentOnline && !onlineBoundaryCell) continue;
+
       const x1 = Math.min(size, x0 + step);
       const z1 = Math.min(size, z0 + step);
-      let height = MISSING_HEIGHT;
+
+      let height = 0;
+      let sampleCount = 0;
+
       for (let z = z0; z < z1; z += data.payload.sampleStride) {
         for (let x = x0; x < x1; x += data.payload.sampleStride) {
-          height = Math.max(height, sampleHeight(data, x, z));
+          if (sampleCount === 0) {
+            height = sampleHeight(data, x, z);
+          } else if (onlineBoundaryCell) {
+            height = Math.min(height, sampleHeight(data, x, z));
+          } else {
+            height += sampleHeight(data, x, z);
+          }
+          sampleCount++;
         }
       }
-      if (height > MISSING_HEIGHT) {
-        hasCell[index] = 1;
-        cellHeights[index] = height;
+
+      if (sampleCount > 0) {
+        cellStatus[index] = onlineBoundaryCell ? CELL_STATUS_ONLINE_BOUNDARY : CELL_STATUS_PRESENT;
+        cellHeights[index] = onlineBoundaryCell ? height : height / sampleCount;
       }
     }
   }
-  return { cellCount, cellHeights, hasCell };
+
+  return { cellCount, cellHeights, cellStatus };
 }
 
-function topShade(cellHeights: Int16Array, hasCell: Uint8Array, cellCount: number, cx: number, cz: number, h: number): number {
-  const north = cellHeight(cellHeights, hasCell, cellCount, cx, cz - 1) ?? h;
-  const south = cellHeight(cellHeights, hasCell, cellCount, cx, cz + 1) ?? h;
-  const west = cellHeight(cellHeights, hasCell, cellCount, cx - 1, cz) ?? h;
-  const east = cellHeight(cellHeights, hasCell, cellCount, cx + 1, cz) ?? h;
+function topShade(cellHeights: Int16Array, cellStatus: Uint8Array, cellCount: number, cx: number, cz: number, h: number): number {
+  const north = cellHeight(cellHeights, cellStatus, cellCount, cx, cz - 1) ?? h;
+  const south = cellHeight(cellHeights, cellStatus, cellCount, cx, cz + 1) ?? h;
+  const west = cellHeight(cellHeights, cellStatus, cellCount, cx - 1, cz) ?? h;
+  const east = cellHeight(cellHeights, cellStatus, cellCount, cx + 1, cz) ?? h;
   return clamp(0.94 + (south - north) * 0.004 + (west - east) * 0.0025, 0.72, 1.08);
 }
 
-function buildHeightmapMesh(
-  data: HeightmapData,
+function buildHeightMapMesh(
+  data: HeightMapData,
   step: number,
   onlineChunks: ReadonlySet<string> | undefined,
   shared: SharedUniforms,
   light: readonly [number, number],
 ): THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> | null {
   const size = data.payload.size.blocks;
-  const { cellCount, cellHeights, hasCell } = buildCells(data, step, onlineChunks);
+  const { cellCount, cellHeights, cellStatus } = buildCells(data, step, onlineChunks);
   const skirtBaseY = data.payload.minY - 16;
   const builder: MeshBuilder = { positions: [], uvs: [], colors: [], lights: [], indices: [] };
 
   for (let cz = 0; cz < cellCount; cz++) {
     for (let cx = 0; cx < cellCount; cx++) {
       const index = cellIndex(cellCount, cx, cz);
-      if (!hasCell[index]) continue;
+      if (cellStatus[index] !== CELL_STATUS_PRESENT) continue;
       const h = cellHeights[index];
       const x0 = cx * step;
       const z0 = cz * step;
@@ -289,12 +334,12 @@ function buildHeightmapMesh(
         [x1, h, z0],
         [x1, h, z1],
         [x0, h, z1],
-      ], topShade(cellHeights, hasCell, cellCount, cx, cz, h), light);
+      ], topShade(cellHeights, cellStatus, cellCount, cx, cz, h), light);
 
-      const north = cellHeight(cellHeights, hasCell, cellCount, cx, cz - 1);
-      const south = cellHeight(cellHeights, hasCell, cellCount, cx, cz + 1);
-      const west = cellHeight(cellHeights, hasCell, cellCount, cx - 1, cz);
-      const east = cellHeight(cellHeights, hasCell, cellCount, cx + 1, cz);
+      const north = cellHeight(cellHeights, cellStatus, cellCount, cx, cz - 1);
+      const south = cellHeight(cellHeights, cellStatus, cellCount, cx, cz + 1);
+      const west = cellHeight(cellHeights, cellStatus, cellCount, cx - 1, cz);
+      const east = cellHeight(cellHeights, cellStatus, cellCount, cx + 1, cz);
       if (north !== null) addWall(builder, size, x1, z0, x0, z0, h, north, 0.62, light);
       if (south !== null) addWall(builder, size, x0, z1, x1, z1, h, south, 0.76, light);
       if (west !== null) addWall(builder, size, x0, z0, x0, z1, h, west, 0.55, light);
@@ -330,11 +375,11 @@ function buildHeightmapMesh(
 
 export class TopMapManager {
   private readonly heightGroup = new THREE.Group();
-  private readonly heightTiles = new Map<string, HeightmapTile>();
+  private readonly heightTiles = new Map<string, HeightMapTile>();
   private readonly pendingHeight = new Set<string>();
   private world = '';
   private dimension = '';
-  private heightmapEnabled = false;
+  private heightMapEnabled = false;
   private manifestLoaded = false;
   private manifestSeq = 0;
   private heightRegionKeys = new Set<string>();
@@ -350,33 +395,33 @@ export class TopMapManager {
     scene.add(this.heightGroup);
   }
 
-  configure(world: string, dimension: string, heightmapEnabled: boolean) {
+  configure(world: string, dimension: string, heightMapEnabled: boolean) {
     if (
       this.world === world
       && this.dimension === dimension
-      && this.heightmapEnabled === heightmapEnabled
+      && this.heightMapEnabled === heightMapEnabled
     ) return;
     this.world = world;
     this.dimension = dimension;
-    this.heightmapEnabled = heightmapEnabled;
-    this.manifestLoaded = !heightmapEnabled;
+    this.heightMapEnabled = heightMapEnabled;
+    this.manifestLoaded = !heightMapEnabled;
     this.manifestSeq++;
     this.heightRegionKeys.clear();
-    this.heightGroup.visible = heightmapEnabled;
+    this.heightGroup.visible = heightMapEnabled;
     this.pendingHeight.clear();
     this.failedHeight.clear();
     this.wantedHeight.clear();
     this.latestOnlineChunks = undefined;
     this.latestHasSkyLight = true;
     this.clearHeightTiles();
-    debugLog('top-map', 'configure', { world, dimension, heightmapEnabled });
-    if (heightmapEnabled) void this.loadManifest(world, dimension, this.manifestSeq);
+    debugLog('top-map', 'configure', { world, dimension, heightMapEnabled: heightMapEnabled });
+    if (heightMapEnabled) void this.loadManifest(world, dimension, this.manifestSeq);
   }
 
   update(camera: THREE.Camera, now: number, options: TopMapUpdateOptions) {
-    const heightmapAllowed = this.heightmapEnabled
+    const heightMapAllowed = this.heightMapEnabled
       && (!this.manifestLoaded || this.heightRegionKeys.size > 0);
-    if (!heightmapAllowed || !this.world) {
+    if (!heightMapAllowed || !this.world) {
       this.heightGroup.visible = false;
       return;
     }
@@ -461,13 +506,13 @@ export class TopMapManager {
     try {
       const manifest = await fetchTopMapManifest(world, dimension);
       if (seq !== this.manifestSeq || world !== this.world || dimension !== this.dimension) return;
-      this.heightRegionKeys = new Set((manifest.hasHeightmap ? manifest.heightmap?.regions ?? [] : []).map((region) => `${region.x},${region.z}`));
+      this.heightRegionKeys = new Set((manifest.hasHeightMap ? manifest.heightMap?.regions ?? [] : []).map((region) => `${region.x},${region.z}`));
       this.manifestLoaded = true;
       debugLog('top-map', 'manifest-loaded', {
         world,
         dimension,
         heightTiles: this.heightRegionKeys.size,
-        heightmapEnabled: this.heightmapEnabled && this.heightRegionKeys.size > 0,
+        heightMapEnabled: this.heightMapEnabled && this.heightRegionKeys.size > 0,
       });
     } catch (error) {
       if (seq !== this.manifestSeq || world !== this.world || dimension !== this.dimension) return;
@@ -486,16 +531,16 @@ export class TopMapManager {
     hasSkyLight: boolean,
     onlineChunks: ReadonlySet<string> | undefined,
   ) {
-    if (this.pendingHeight.has(key) || this.heightTiles.has(key) || !this.heightmapEnabled || !this.heightRegionKeys.has(key)) return;
+    if (this.pendingHeight.has(key) || this.heightTiles.has(key) || !this.heightMapEnabled || !this.heightRegionKeys.has(key)) return;
     this.pendingHeight.add(key);
     const world = this.world;
     const dimension = this.dimension;
     try {
-      const payload = await fetchTopMapHeightmapTile(world, dimension, rx, rz);
-      if (world !== this.world || dimension !== this.dimension || !this.heightmapEnabled) return;
-      const tile: HeightmapTile = {
+      const payload = await fetchTopMapHeightMapTile(world, dimension, rx, rz);
+      if (world !== this.world || dimension !== this.dimension || !this.heightMapEnabled) return;
+      const tile: HeightMapTile = {
         key,
-        data: prepareHeightmap(payload),
+        data: prepareHeightMap(payload),
         mesh: null,
         step: 0,
         coverageKey: '',
@@ -520,7 +565,7 @@ export class TopMapManager {
   }
 
   private ensureTileMesh(
-    tile: HeightmapTile,
+    tile: HeightMapTile,
     step: number,
     coverageKey: string,
     hasSkyLight: boolean,
@@ -532,7 +577,7 @@ export class TopMapManager {
     tile.step = step;
     tile.coverageKey = coverageKey;
     tile.lightKey = lightKey;
-    tile.mesh = buildHeightmapMesh(tile.data, step, onlineChunks, this.shared, hasSkyLight ? [1, 0] : [0, 1]);
+    tile.mesh = buildHeightMapMesh(tile.data, step, onlineChunks, this.shared, hasSkyLight ? [1, 0] : [0, 1]);
     if (tile.mesh) this.heightGroup.add(tile.mesh);
     debugLog('top-map', 'height-tile-mesh', {
       key: tile.key,
@@ -542,7 +587,7 @@ export class TopMapManager {
     });
   }
 
-  private updateTileVisibility(tile: HeightmapTile) {
+  private updateTileVisibility(tile: HeightMapTile) {
     if (!tile.mesh) return;
     tile.mesh.visible = true;
   }
@@ -572,7 +617,7 @@ export class TopMapManager {
     for (const key of [...this.heightTiles.keys()]) this.removeHeightTile(key);
   }
 
-  private disposeTileMesh(tile: HeightmapTile) {
+  private disposeTileMesh(tile: HeightMapTile) {
     if (!tile.mesh) return;
     this.heightGroup.remove(tile.mesh);
     tile.mesh.geometry.dispose();

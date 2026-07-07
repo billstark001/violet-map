@@ -48,8 +48,8 @@ interface TileSetManifest {
 
 interface DimensionManifest {
   hasTopMap: boolean;
-  hasHeightmap: boolean;
-  heightmap?: TileSetManifest;
+  hasHeightMap: boolean;
+  heightMap?: TileSetManifest;
 }
 
 interface TopMapManifest {
@@ -137,9 +137,9 @@ function updateDimensionManifest(
   dim: string,
   patch: Partial<DimensionManifest>,
 ) {
-  const previous = manifest.dimensions[dim] ?? { hasTopMap: false, hasHeightmap: false };
+  const previous = manifest.dimensions[dim] ?? { hasTopMap: false, hasHeightMap: false };
   const next = { ...previous, ...patch };
-  next.hasTopMap = next.hasHeightmap;
+  next.hasTopMap = next.hasHeightMap;
   manifest.dimensions[dim] = next;
 }
 
@@ -191,7 +191,7 @@ interface BakeRegionResult {
   empty: boolean;
 }
 
-async function bakeHeightmapRegion(
+async function bakeHeightMapRegion(
   region: RegionFile,
   opts: BakeOptions,
   colorOf: ((state: BlockStateRef, biome: string) => Rgb) | null,
@@ -339,7 +339,7 @@ async function selectRegions(opts: BakeOptions): Promise<RegionFile[]> {
   return Number.isFinite(opts.limit) ? regions.slice(0, opts.limit) : regions;
 }
 
-export async function runBakeHeightmap(args: string[]) {
+export async function runBakeHeightMap(args: string[]) {
   if (args.includes('--help') || args.includes('-h')) {
     console.log(usage());
     return;
@@ -354,15 +354,15 @@ export async function runBakeHeightmap(args: string[]) {
   console.log(`  assets=${opts.assetDirs.join(', ')}`);
   console.log(`  biome colors=${biomeColors ? 'enabled' : 'fallback'}`);
   const manifest = await readManifest(opts.out, opts.world);
-  const previousHeightmap = manifest.dimensions[opts.dim]?.heightmap;
-  const force = previousHeightmap?.format !== 'msgpack'
-    || previousHeightmap.tileSizeBlocks !== TILE_BLOCKS
-    || previousHeightmap.sampleStride !== opts.sampleStride
-    || previousHeightmap.colorStride !== opts.colorStride
-    || previousHeightmap.colorVersion !== HEIGHTMAP_COLOR_VERSION;
-  const previousByKey = new Map<string, RegionManifestEntry>((force ? [] : previousHeightmap?.regions ?? [])
+  const previousHeightMap = manifest.dimensions[opts.dim]?.heightMap;
+  const force = previousHeightMap?.format !== 'msgpack'
+    || previousHeightMap.tileSizeBlocks !== TILE_BLOCKS
+    || previousHeightMap.sampleStride !== opts.sampleStride
+    || previousHeightMap.colorStride !== opts.colorStride
+    || previousHeightMap.colorVersion !== HEIGHTMAP_COLOR_VERSION;
+  const previousByKey = new Map<string, RegionManifestEntry>((force ? [] : previousHeightMap?.regions ?? [])
     .map((region) => [`${region.x},${region.z}`, region] as const));
-  const previousSources = previousHeightmap?.sources ?? [];
+  const previousSources = previousHeightMap?.sources ?? [];
   const previousSourceByKey = new Map<string, RegionSourceEntry>((force ? [] : previousSources)
     .map((region) => [`${region.x},${region.z}`, region] as const));
   const currentKeys = new Set<string>(regions.map((region) => `${region.rx},${region.rz}`));
@@ -374,7 +374,7 @@ export async function runBakeHeightmap(args: string[]) {
   let removed = 0;
 
   await ensureDir(dimOutDir(opts.out, opts.dim));
-  for (const previous of previousSources.length ? previousSources : previousHeightmap?.regions ?? []) {
+  for (const previous of previousSources.length ? previousSources : previousHeightMap?.regions ?? []) {
     const key = `${previous.x},${previous.z}`;
     if (!force && currentKeys.has(key)) continue;
     await fs.rm(tileFile(opts.out, opts.dim, previous.x, previous.z), { force: true });
@@ -382,7 +382,7 @@ export async function runBakeHeightmap(args: string[]) {
   }
   for (const [index, region] of regions.entries()) {
     const key = `${region.rx},${region.rz}`;
-    const result = await bakeHeightmapRegion(
+    const result = await bakeHeightMapRegion(
       region,
       opts,
       colorOf,
@@ -400,8 +400,8 @@ export async function runBakeHeightmap(args: string[]) {
     console.log(`  ${index + 1}/${regions.length} ${action} r.${region.rx}.${region.rz}`);
   }
   updateDimensionManifest(manifest, opts.dim, {
-    hasHeightmap: nextRegions.length > 0,
-    heightmap: {
+    hasHeightMap: nextRegions.length > 0,
+    heightMap: {
       tileSizeBlocks: TILE_BLOCKS,
       sampleStride: opts.sampleStride,
       colorStride: opts.colorStride,

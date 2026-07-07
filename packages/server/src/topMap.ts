@@ -26,8 +26,8 @@ export interface TopMapTileSetManifest {
 
 export interface TopMapDimensionManifest {
   hasTopMap: boolean;
-  hasHeightmap: boolean;
-  heightmap?: TopMapTileSetManifest;
+  hasHeightMap: boolean;
+  heightMap?: TopMapTileSetManifest;
 }
 
 export interface TopMapManifest {
@@ -40,10 +40,10 @@ export interface TopMapManifest {
 export interface WorldCapabilities {
   world: string;
   hasTopMap: boolean;
-  hasHeightmap: boolean;
+  hasHeightMap: boolean;
   dimensions: Record<string, {
     hasTopMap: boolean;
-    hasHeightmap: boolean;
+    hasHeightMap: boolean;
   }>;
 }
 
@@ -78,14 +78,14 @@ function toCapabilities(world: string, manifest: TopMapManifest | null): WorldCa
   for (const [dim, value] of Object.entries(manifest?.dimensions ?? {})) {
     dimensions[dim] = {
       hasTopMap: value.hasTopMap,
-      hasHeightmap: value.hasHeightmap,
+      hasHeightMap: value.hasHeightMap,
     };
   }
   const values = Object.values(dimensions);
   return {
     world,
     hasTopMap: values.some((d) => d.hasTopMap),
-    hasHeightmap: values.some((d) => d.hasHeightmap),
+    hasHeightMap: values.some((d) => d.hasHeightMap),
     dimensions,
   };
 }
@@ -131,8 +131,8 @@ export async function readTopMapTile(
   const manifest = await getTopMapManifest(world);
   const dimension = manifest?.dimensions[dim];
   if (!dimension) return null;
-  if (!dimension.hasHeightmap) return null;
-  if (!dimension.heightmap?.regions.some((region) => region.x === rx && region.z === rz)) return null;
+  if (!dimension.hasHeightMap) return null;
+  if (!dimension.heightMap?.regions.some((region) => region.x === rx && region.z === rz)) return null;
   return worldStorage.read(tilePath(world, dim, rx, rz));
 }
 

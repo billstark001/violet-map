@@ -119,7 +119,7 @@ pnpm --filter @violet-map/assets dev --help
 
 - Chunk payloads are served as MessagePack. The single-chunk endpoint is available at `/api/worlds/:world/:dim/chunk/:cx/:cz`, and the viewer uses `/api/worlds/:world/:dim/chunk-hashes` before incrementally requesting changed or evicted chunks from `/api/worlds/:world/:dim/chunks`.
 - Chunk responses include the source file hash (`hash`/`fileHash`), source type (`region` or `chunk`), and chunk NBT hash (`nbtHash`). For chunks inside `.mca` files, the source hash is the whole region file hash.
-- Top-map capabilities are exposed at `/api/worlds/:world/capabilities` with `hasTopMap`, `hasLod8`, and `hasHeightmap` flags. Offline tiles are served from `/api/worlds/:world/:dim/top-map/:kind/:rx/:rz`.
+- Top-map capabilities are exposed at `/api/worlds/:world/capabilities` with `hasTopMap`, `hasLod8`, and `hasHeightMap` flags. Offline tiles are served from `/api/worlds/:world/:dim/top-map/:kind/:rx/:rz`.
 - Texture loading supports both individual PNG requests and a generated atlas mode. The viewer first requests `/api/assets/atlas` and falls back to individual textures if atlas generation fails.
 - The worker receives transferable binary chunk buffers and builds typed-array mesh buffers for return to the main thread.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { assetsUsage, runAssetsCommand } from './commands/assets.js';
-import { runBakeHeightmap } from './commands/bake.js';
+import { runBakeHeightMap } from './commands/bake.js';
 import { runProfileMca } from './commands/profileMca.js';
 
 function usage(): string {
@@ -28,7 +28,7 @@ async function main() {
       await runProfileMca(args);
       break;
     case 'bake-heightmap':
-      await runBakeHeightmap(args);
+      await runBakeHeightMap(args);
       break;
     default:
       throw new Error(`unknown command: ${command}`);
