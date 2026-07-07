@@ -2,7 +2,8 @@
   "name": "violet-map",
   "private": true,
   "scripts": {
-    "dev": "pnpm --parallel -r run dev",
+    "dev": "pnpm --filter=@violet-map/server --filter=@violet-map/web --parallel -r run dev",
+    "dev:full": "pnpm --filter=!@violet-map/assets --parallel -r run dev",
     "build": "pnpm -r run build",
     "typecheck": "pnpm -r run typecheck"
   },
