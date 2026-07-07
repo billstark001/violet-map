@@ -1,7 +1,7 @@
 import { AIR, AIR_NAMES, ChunkColumn } from './world.js';
 import { BlockInfo, BlockStateRef, Direction, MeshBuffers } from './types.js';
 import type { Rgb } from './colors.js';
-import { Float32Writer, Uint32Writer } from './meshBufferBuilder.js';
+import { Float32Writer, Uint32Writer } from './utils.js';
 
 interface LodWorldView {
   getBlock(x: number, y: number, z: number): BlockStateRef;

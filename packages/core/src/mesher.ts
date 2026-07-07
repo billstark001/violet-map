@@ -5,7 +5,7 @@ import {
   SectionMeshes, TextureAlphaMap, TintType,
 } from './types.js';
 import type { Rgb } from './colors.js';
-import { Float32Writer, Uint32Writer } from './meshBufferBuilder.js';
+import { Float32Writer, Uint32Writer } from './utils.js';
 
 export interface WorldView {
   getBlock(x: number, y: number, z: number): BlockStateRef;
