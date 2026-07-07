@@ -100,6 +100,17 @@ export interface ChunkSchedulerEntry {
   lastForcedFull: boolean;
 }
 
+export interface SchedulerRecord {
+  key: string;
+  cx: number;
+  cz: number;
+  lastWantedAt: number;
+  lastTier: number;
+  lastScore: number;
+  lastTargetStep: LodStep;
+  lastForcedFull: boolean;
+}
+
 export interface SchedulerFramePlan {
   candidates: ChunkCandidate[];
   keepKeys: Set<string>;
@@ -109,6 +120,72 @@ export interface SchedulerFramePlan {
 
 export interface SchedulerCandidateDecision {
   removeMesh: boolean;
+}
+
+export interface SchedulerEntryUpdate extends SchedulerRecord {}
+
+export type SchedulerAction =
+  | { type: 'wantChunk'; key: string; cx: number; cz: number }
+  | { type: 'removeMesh'; key: string }
+  | { type: 'dropChunk'; key: string };
+
+export interface SchedulerTickInput {
+  camera: ChunkSchedulerCamera;
+  now: number;
+  force: boolean;
+  viewportHeight: number;
+  topDownView?: boolean;
+  options: ChunkSchedulerOptions;
+  keyFor: (cx: number, cz: number) => string;
+  entryFor: (key: string) => ChunkSchedulerEntry | null;
+  entries: Iterable<ChunkSchedulerEntry>;
+}
+
+export interface SchedulerTickResult {
+  actions: SchedulerAction[];
+  entryUpdates: SchedulerEntryUpdate[];
+  keepKeys: Set<string>;
+  centerCx: number;
+  centerCz: number;
+  candidateCount: number;
+  evictedCount: number;
+}
+
+export interface SchedulerWorkInput {
+  now: number;
+  activeHashBatches: number;
+  activeFetchBatches: number;
+  activeMeshTasks: number;
+  maxMeshTasks: number;
+  entries: Iterable<ChunkSchedulerEntry>;
+  entryFor: (key: string) => ChunkSchedulerEntry | null;
+  includeHash?: boolean;
+  includeFetch?: boolean;
+  includeMesh?: boolean;
+}
+
+export interface SchedulerWorkBatch {
+  hashBatches: string[][];
+  fetchBatches: string[][];
+  meshTasks: MeshTask[];
+  hasHashWork: boolean;
+  hasFetchWork: boolean;
+}
+
+export type SchedulerEvent =
+  | { type: 'hashNeeded'; key: string }
+  | { type: 'fetchNeeded'; key: string }
+  | { type: 'meshDeferred'; key: string; kind: MeshTaskKind; step: LodStep; fallbackTier: number; now: number }
+  | { type: 'chunkStored'; entry: ChunkSchedulerEntry; now: number }
+  | { type: 'meshDisplayed'; entry: ChunkSchedulerEntry; kind: MeshTaskKind; step: LodStep; version: number; now: number }
+  | { type: 'chunkDropped'; key: string };
+
+export interface SchedulerMeshResult {
+  entry: ChunkSchedulerEntry;
+  kind: MeshTaskKind;
+  step: LodStep;
+  version: number;
+  now: number;
 }
 
 export interface ChunkRenderStats {
@@ -260,6 +337,7 @@ export class ChunkScheduler {
   private fetchQueue = new Set<string>();
   private meshQueue = new Map<string, MeshTask>();
   private priorityByKey = new Map<string, ChunkPriority>();
+  private recordByKey = new Map<string, SchedulerRecord>();
   private renderStats: ChunkRenderStats = { ...EMPTY_RENDER_STATS };
   private profileStats: ChunkProfileStats = { ...EMPTY_PROFILE_STATS };
   private frameLoadStats: FrameLoadStats = {
@@ -291,7 +369,7 @@ export class ChunkScheduler {
 
   constructor(private opts: ChunkSchedulerOptions) {}
 
-  setOptions(opts: ChunkSchedulerOptions) {
+  private setOptions(opts: ChunkSchedulerOptions) {
     this.opts = opts;
   }
 
@@ -317,13 +395,124 @@ export class ChunkScheduler {
     this.fetchQueue.clear();
     this.meshQueue.clear();
     this.priorityByKey.clear();
+    this.recordByKey.clear();
+  }
+
+  tick(input: SchedulerTickInput): SchedulerTickResult {
+    this.setOptions(input.options);
+    const frame = this.planFrame(
+      input.camera,
+      input.now,
+      input.force,
+      input.viewportHeight,
+      input.keyFor,
+      input.entryFor,
+      input.topDownView ?? false,
+    );
+    const actions: SchedulerAction[] = [];
+    const entryUpdates: SchedulerEntryUpdate[] = [];
+
+    for (const candidate of frame.candidates) {
+      const update = this.rememberRecord(candidate);
+      entryUpdates.push(update);
+      const entry = input.entryFor(candidate.key);
+      if (!entry) {
+        this.enqueueHash(candidate.key);
+        actions.push({ type: 'wantChunk', key: candidate.key, cx: candidate.cx, cz: candidate.cz });
+        continue;
+      }
+      const decision = this.scheduleCandidate(candidate, entry);
+      if (decision.removeMesh) actions.push({ type: 'removeMesh', key: candidate.key });
+    }
+
+    this.pruneQueues(frame.keepKeys, input.now);
+    this.expirePriorities(input.now);
+    const evictedKeys = this.evictKeys(frame.centerCx, frame.centerCz, frame.keepKeys, input.entries, input.now);
+    for (const key of evictedKeys) actions.push({ type: 'dropChunk', key });
+
+    return {
+      actions,
+      entryUpdates,
+      keepKeys: frame.keepKeys,
+      centerCx: frame.centerCx,
+      centerCz: frame.centerCz,
+      candidateCount: frame.candidates.length,
+      evictedCount: evictedKeys.length,
+    };
+  }
+
+  nextWork(input: SchedulerWorkInput): SchedulerWorkBatch {
+    const entries = [...input.entries];
+    const includeHash = input.includeHash ?? true;
+    const includeFetch = input.includeFetch ?? true;
+    const includeMesh = input.includeMesh ?? true;
+    const hashBatches: string[][] = [];
+    const fetchBatches: string[][] = [];
+    const meshTasks: MeshTask[] = [];
+
+    if (includeHash) {
+      const hashBatch = this.nextHashBatch(input.activeHashBatches, entries, input.activeMeshTasks);
+      if (hashBatch.length) hashBatches.push(hashBatch);
+    }
+    if (includeFetch) {
+      const fetchBatch = this.nextFetchBatch(input.activeFetchBatches, entries, input.activeMeshTasks);
+      if (fetchBatch.length) fetchBatches.push(fetchBatch);
+    }
+    if (includeMesh) {
+      while (input.activeMeshTasks + meshTasks.length < input.maxMeshTasks) {
+        const task = this.nextMeshTask(input.entryFor, entries, input.now);
+        if (!task) break;
+        meshTasks.push(task);
+      }
+    }
+
+    return {
+      hashBatches,
+      fetchBatches,
+      meshTasks,
+      hasHashWork: this.hashQueue.size > 0,
+      hasFetchWork: this.fetchQueue.size > 0,
+    };
+  }
+
+  notify(event: SchedulerEvent): void {
+    switch (event.type) {
+      case 'hashNeeded':
+        this.enqueueHash(event.key);
+        return;
+      case 'fetchNeeded':
+        this.enqueueFetch(event.key);
+        return;
+      case 'meshDeferred': {
+        const priority = this.priorityByKey.get(event.key) ?? { tier: event.fallbackTier, score: 0, updatedAt: event.now };
+        this.enqueueMeshTask({ key: event.key, kind: event.kind, step: event.step, ...priority });
+        return;
+      }
+      case 'chunkStored':
+        this.scheduleStoredFromLastPriority(event.entry, event.now);
+        return;
+      case 'meshDisplayed':
+        if (event.kind === 'lod' && this.lastTargetStep(event.entry) === 1) {
+          this.scheduleStoredFromLastPriority(event.entry, event.now);
+        }
+        return;
+      case 'chunkDropped':
+        this.deleteKey(event.key);
+        return;
+    }
+  }
+
+  shouldAcceptMeshResult(result: SchedulerMeshResult): boolean {
+    return result.kind === 'full'
+      ? this.shouldApplyFullResult(result.entry, result.version, result.now)
+      : this.shouldApplyLodResult(result.entry, result.step, result.version, result.now);
   }
 
   // #endregion
 
   // #region Frame planning
 
-  planFrame(
+  private planFrame(
     camera: ChunkSchedulerCamera,
     now: number,
     force: boolean,
@@ -370,7 +559,7 @@ export class ChunkScheduler {
 
   // #region Scheduling decisions
 
-  scheduleCandidate(candidate: ChunkCandidate, e: ChunkSchedulerEntry): SchedulerCandidateDecision {
+  private scheduleCandidate(candidate: ChunkCandidate, e: ChunkSchedulerEntry): SchedulerCandidateDecision {
     if (e.state === 'absent' || e.state === 'error') return { removeMesh: true };
     if (e.state === 'checking') {
       this.enqueueHash(candidate.key);
@@ -389,13 +578,14 @@ export class ChunkScheduler {
     return { removeMesh: false };
   }
 
-  scheduleStoredFromLastPriority(e: ChunkSchedulerEntry, now: number) {
-    if (e.state !== 'stored' || now - e.lastWantedAt > IO_QUEUE_RETENTION_MS) return;
-    const priority = this.priorityByKey.get(e.key) ?? { tier: e.lastTier, score: e.lastScore, updatedAt: e.lastWantedAt };
-    this.enqueueDesiredMeshTask(e.key, e, e.lastTargetStep, priority);
+  private scheduleStoredFromLastPriority(e: ChunkSchedulerEntry, now: number) {
+    const record = this.recordFor(e);
+    if (e.state !== 'stored' || !record || now - record.lastWantedAt > IO_QUEUE_RETENTION_MS) return;
+    const priority = this.priorityByKey.get(e.key) ?? { tier: record.lastTier, score: record.lastScore, updatedAt: record.lastWantedAt };
+    this.enqueueDesiredMeshTask(e.key, e, record.lastTargetStep, priority);
   }
 
-  nextMeshTask(entryFor: (key: string) => ChunkSchedulerEntry | null, entries: Iterable<ChunkSchedulerEntry>, now: number): MeshTask | null {
+  private nextMeshTask(entryFor: (key: string) => ChunkSchedulerEntry | null, entries: Iterable<ChunkSchedulerEntry>, now: number): MeshTask | null {
     const fullBias = this.shouldBiasFull(entries);
     while (this.meshQueue.size > 0) {
       let best: MeshTask | null = null;
@@ -418,24 +608,22 @@ export class ChunkScheduler {
     return null;
   }
 
-  priorityFor(key: string, fallback: ChunkPriority): ChunkPriority {
-    return this.priorityByKey.get(key) ?? fallback;
+  private priorityFresh(e: ChunkSchedulerEntry, now: number, maxAge = IO_QUEUE_RETENTION_MS): boolean {
+    const record = this.recordFor(e);
+    return !!record && now - record.lastWantedAt <= maxAge;
   }
 
-  priorityFresh(e: ChunkSchedulerEntry, now: number, maxAge = IO_QUEUE_RETENTION_MS): boolean {
-    return now - e.lastWantedAt <= maxAge;
-  }
-
-  shouldApplyFullResult(e: ChunkSchedulerEntry, _version: number, now: number): boolean {
+  private shouldApplyFullResult(e: ChunkSchedulerEntry, _version: number, now: number): boolean {
     if (!this.priorityFresh(e, now)) return false;
-    return e.lastTargetStep === 1;
+    return this.lastTargetStep(e) === 1;
   }
 
-  shouldApplyLodResult(e: ChunkSchedulerEntry, step: LodStep, version: number, now: number): boolean {
+  private shouldApplyLodResult(e: ChunkSchedulerEntry, step: LodStep, version: number, now: number): boolean {
     if (version < e.displayedVersion || !this.priorityFresh(e, now)) return false;
-    if (e.lastTargetStep === 1) return e.displayed === 'none';
-    if (step > e.lastTargetStep && e.displayed !== 'none') return false;
-    if (e.displayed === 'full' && e.lastTier <= 3 && !e.dirty) return false;
+    const targetStep = this.lastTargetStep(e);
+    if (targetStep === 1) return e.displayed === 'none';
+    if (step > targetStep && e.displayed !== 'none') return false;
+    if (e.displayed === 'full' && this.lastTier(e) <= 3 && !e.dirty) return false;
     return true;
   }
 
@@ -443,7 +631,7 @@ export class ChunkScheduler {
 
   // #region Queue operations
 
-  nextHashBatch(activeBatches: number, entries: Iterable<ChunkSchedulerEntry>, activeMeshTasks: number): string[] {
+  private nextHashBatch(activeBatches: number, entries: Iterable<ChunkSchedulerEntry>, activeMeshTasks: number): string[] {
     return this.nextLimitedIoBatch(this.hashQueue, {
       activeBatches,
       maxBatches: MAX_HASH_BATCHES,
@@ -454,7 +642,7 @@ export class ChunkScheduler {
     });
   }
 
-  nextFetchBatch(activeBatches: number, entries: Iterable<ChunkSchedulerEntry>, activeMeshTasks: number): string[] {
+  private nextFetchBatch(activeBatches: number, entries: Iterable<ChunkSchedulerEntry>, activeMeshTasks: number): string[] {
     return this.nextLimitedIoBatch(this.fetchQueue, {
       activeBatches,
       maxBatches: MAX_FETCH_BATCHES,
@@ -465,7 +653,7 @@ export class ChunkScheduler {
     });
   }
 
-  pruneQueues(keepKeys: Set<string>, now: number) {
+  private pruneQueues(keepKeys: Set<string>, now: number) {
     const keepIo = (key: string) => {
       const priority = this.priorityByKey.get(key);
       return keepKeys.has(key) || (!!priority && now - priority.updatedAt < IO_QUEUE_RETENTION_MS);
@@ -478,13 +666,13 @@ export class ChunkScheduler {
     this.trimMeshQueue();
   }
 
-  expirePriorities(now: number) {
+  private expirePriorities(now: number) {
     for (const [key, priority] of this.priorityByKey) {
       if (now - priority.updatedAt > IO_QUEUE_RETENTION_MS) this.priorityByKey.delete(key);
     }
   }
 
-  evictKeys(ccx: number, ccz: number, keepKeys: Set<string>, entries: Iterable<ChunkSchedulerEntry>, now: number): string[] {
+  private evictKeys(ccx: number, ccz: number, keepKeys: Set<string>, entries: Iterable<ChunkSchedulerEntry>, now: number): string[] {
     const out: string[] = [];
     const limits = this.activeLimits();
     const unloadDistance = limits.unloadDistanceChunks;
@@ -500,11 +688,11 @@ export class ChunkScheduler {
     const already = new Set(out);
     const victims = all
       .filter((e) => !keepKeys.has(e.key) && !already.has(e.key))
-      .sort((a, b) => a.lastWantedAt - b.lastWantedAt || b.lastScore - a.lastScore);
+      .sort((a, b) => this.lastWantedAt(a) - this.lastWantedAt(b) || this.lastScore(b) - this.lastScore(a));
     let tracked = all.length - out.length;
     for (const e of victims) {
       if (tracked <= limits.softTrackedChunks) break;
-      if (tracked <= limits.hardTrackedChunks && now - e.lastWantedAt < 1000) continue;
+      if (tracked <= limits.hardTrackedChunks && now - this.lastWantedAt(e) < 1000) continue;
       out.push(e.key);
       tracked--;
     }
@@ -521,15 +709,15 @@ export class ChunkScheduler {
     return out;
   }
 
-  enqueueHash(key: string) {
+  private enqueueHash(key: string) {
     this.hashQueue.add(key);
   }
 
-  enqueueFetch(key: string) {
+  private enqueueFetch(key: string) {
     this.fetchQueue.add(key);
   }
 
-  enqueueMeshTask(task: MeshTask) {
+  private enqueueMeshTask(task: MeshTask) {
     const queueKey = this.meshQueueKey(task);
     const existing = this.meshQueue.get(queueKey);
     if (existing && this.compareMeshTasks(existing, task, false) <= 0) return;
@@ -537,17 +725,15 @@ export class ChunkScheduler {
     this.trimMeshQueue();
   }
 
-  deleteKey(key: string) {
+  private deleteKey(key: string) {
     this.hashQueue.delete(key);
     this.fetchQueue.delete(key);
     for (const [queueKey, task] of this.meshQueue) {
       if (task.key === key) this.meshQueue.delete(queueKey);
     }
     this.priorityByKey.delete(key);
+    this.recordByKey.delete(key);
   }
-
-  get hasHashWork() { return this.hashQueue.size > 0; }
-  get hasFetchWork() { return this.fetchQueue.size > 0; }
 
   // #endregion
 
@@ -855,6 +1041,56 @@ export class ChunkScheduler {
 
   // #region Mesh priority
 
+  private rememberRecord(candidate: ChunkCandidate): SchedulerRecord {
+    const record: SchedulerRecord = {
+      key: candidate.key,
+      cx: candidate.cx,
+      cz: candidate.cz,
+      lastWantedAt: candidate.updatedAt,
+      lastTier: candidate.tier,
+      lastScore: candidate.score,
+      lastTargetStep: candidate.targetStep,
+      lastForcedFull: candidate.forcedFull,
+    };
+    this.recordByKey.set(candidate.key, record);
+    this.rememberPriority(candidate.key, candidate);
+    return record;
+  }
+
+  private recordFor(e: ChunkSchedulerEntry): SchedulerRecord | null {
+    const record = this.recordByKey.get(e.key);
+    if (record) return record;
+    if (Number.isFinite(e.lastWantedAt)) {
+      return {
+        key: e.key,
+        cx: e.cx,
+        cz: e.cz,
+        lastWantedAt: e.lastWantedAt,
+        lastTier: e.lastTier,
+        lastScore: e.lastScore,
+        lastTargetStep: e.lastTargetStep,
+        lastForcedFull: e.lastForcedFull,
+      };
+    }
+    return null;
+  }
+
+  private lastWantedAt(e: ChunkSchedulerEntry): number {
+    return this.recordFor(e)?.lastWantedAt ?? 0;
+  }
+
+  private lastTier(e: ChunkSchedulerEntry): number {
+    return this.recordFor(e)?.lastTier ?? 99;
+  }
+
+  private lastScore(e: ChunkSchedulerEntry): number {
+    return this.recordFor(e)?.lastScore ?? Infinity;
+  }
+
+  private lastTargetStep(e: ChunkSchedulerEntry): LodStep {
+    return this.recordFor(e)?.lastTargetStep ?? 8;
+  }
+
   private rememberPriority(key: string, priority: ChunkPriority) {
     this.priorityByKey.set(key, { tier: priority.tier, score: priority.score, updatedAt: priority.updatedAt });
   }
@@ -932,12 +1168,13 @@ export class ChunkScheduler {
   private shouldStartMeshTask(task: MeshTask, e: ChunkSchedulerEntry, now: number): boolean {
     if (!this.priorityFresh(e, now)) return false;
     if (task.kind === 'full') {
-      return e.lastTargetStep === 1 && this.wantsFull(e);
+      return this.lastTargetStep(e) === 1 && this.wantsFull(e);
     }
     if (!this.wantsLod(e, task.step)) return false;
-    if (e.lastTargetStep === 1) return e.displayed === 'none';
-    if (task.step > e.lastTargetStep && e.displayed !== 'none') return false;
-    if (e.displayed === 'full' && e.lastTier <= 3 && !e.dirty) return false;
+    const targetStep = this.lastTargetStep(e);
+    if (targetStep === 1) return e.displayed === 'none';
+    if (task.step > targetStep && e.displayed !== 'none') return false;
+    if (e.displayed === 'full' && this.lastTier(e) <= 3 && !e.dirty) return false;
     return true;
   }
 
@@ -948,7 +1185,7 @@ export class ChunkScheduler {
   private renderBacklog(entries: Iterable<ChunkSchedulerEntry>, activeMeshTasks: number): number {
     let waitingStored = 0;
     for (const e of entries) {
-      if (e.state !== 'stored' || e.lastTier > 4) continue;
+      if (e.state !== 'stored' || this.lastTier(e) > 4) continue;
       if (e.displayed === 'none' || e.dirty || e.pendingFull || e.pendingLod) waitingStored++;
     }
     return this.meshQueue.size + activeMeshTasks + waitingStored;
