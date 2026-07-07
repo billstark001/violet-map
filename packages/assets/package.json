@@ -8,14 +8,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli.ts",
-    "list-versions": "tsx src/cli.ts list-versions",
-    "extract": "tsx src/cli.ts extract",
-    "extract-all": "tsx src/cli.ts extract-all",
-    "generate-biomes": "tsx src/cli.ts generate-biomes",
-    "generate-dimensions": "tsx src/cli.ts generate-dimensions",
+    "assets": "tsx src/cli.ts assets",
+    "profile-mca": "tsx src/cli.ts profile-mca",
+    "bake-lod": "tsx src/cli.ts bake-lod",
+    "bake-heightmap": "tsx src/cli.ts bake-heightmap",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@violet-map/core": "workspace:*",
     "minecraft-data": "^3.111.0"
   },
   "devDependencies": {

@@ -23,8 +23,8 @@ Violet Map is a pnpm workspace for inspecting Minecraft Java worlds in a browser
    Recommended: extract assets with the CLI:
 
    ```bash
-   pnpm --filter @violet-map/assets dev list-versions
-   pnpm --filter @violet-map/assets dev extract --version 1.21.4 --output packages/server/data/assets
+   pnpm --filter @violet-map/assets dev assets list
+   pnpm --filter @violet-map/assets dev assets extract --version 1.21.4 --output packages/server/data/assets
    ```
 
    Manual alternative: extract assets from a local client jar. Minecraft assets are copyrighted and should only be used locally.
@@ -86,6 +86,8 @@ The viewer URL supports camera parameters such as `?x=&y=&z=&yaw=&pitch=`.
 | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | | S3 credentials when not supplied by the environment. |
 | `S3_FORCE_PATH_STYLE` | `true` | Set to `false` for virtual-hosted-style buckets. |
 | `ADMIN_TOKENS` | `dev-admin-token:admin,dev-ci-token:ci` | Comma-separated hardcoded tokens and roles. Roles are `admin`, `ci`, and `viewer`; `admin` includes `ci`. |
+| `REGION_CACHE_BYTES` | `268435456` | Byte cap for full `.mca` region cache. |
+| `CHUNK_NBT_CACHE_BYTES` | `134217728` | Byte cap for decompressed chunk NBT cache. |
 
 When running from the repository root with the bundled sample layout, use absolute paths or paths relative to the server package working directory. For example:
 
@@ -104,16 +106,20 @@ pnpm --filter @violet-map/assets dev --help
 
 | Command | Description |
 | --- | --- |
-| `list-versions` | List available Minecraft release versions. |
-| `extract --version <id> --output <dir>` | Download a Mojang client jar and extract blockstates, models, and textures. |
-| `extract-all --min-version <id>` | Extract assets for every release at or above a version. |
-| `generate-biomes --version <id>` | Generate `biomes.json` with sky, fog, water, grass, and foliage color data. |
-| `generate-dimensions --version <id>` | Generate `dimensions.json` for the standard dimensions. |
+| `assets list` | List available Minecraft release versions. |
+| `assets extract --version <id> --output <dir>` | Download a Mojang client jar and extract blockstates, models, and textures. |
+| `assets extract-all --min-version <id>` | Extract assets for every release at or above a version. |
+| `assets generate-biomes --version <id>` | Generate `biomes.json` with sky, fog, water, grass, and foliage color data. |
+| `assets generate-dimensions --version <id>` | Generate `dimensions.json` for the standard dimensions. |
+| `profile-mca <file.mca>` | Profile parse, height, full mesh, and LOD mesh work for one region file. |
+| `bake-lod <world>` | Bake region-scoped LOD mesh tiles and update `.violet-map/top-map/manifest.json`. |
+| `bake-heightmap <world>` | Bake top-view height/color tiles and update `.violet-map/top-map/manifest.json`. |
 
 ## Runtime APIs
 
 - Chunk payloads are served as MessagePack. The single-chunk endpoint is available at `/api/worlds/:world/:dim/chunk/:cx/:cz`, and the viewer uses `/api/worlds/:world/:dim/chunk-hashes` before incrementally requesting changed or evicted chunks from `/api/worlds/:world/:dim/chunks`.
 - Chunk responses include the source file hash (`hash`/`fileHash`), source type (`region` or `chunk`), and chunk NBT hash (`nbtHash`). For chunks inside `.mca` files, the source hash is the whole region file hash.
+- Top-map capabilities are exposed at `/api/worlds/:world/capabilities` with `hasTopMap`, `hasLod8`, and `hasHeightmap` flags. Offline tiles are served from `/api/worlds/:world/:dim/top-map/:kind/:rx/:rz`.
 - Texture loading supports both individual PNG requests and a generated atlas mode. The viewer first requests `/api/assets/atlas` and falls back to individual textures if atlas generation fails.
 - The worker receives transferable binary chunk buffers and builds typed-array mesh buffers for return to the main thread.
 

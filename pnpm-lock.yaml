@@ -48,6 +48,9 @@ importers:
 
   packages/assets:
     dependencies:
+      '@violet-map/core':
+        specifier: workspace:*
+        version: link:../core
       minecraft-data:
         specifier: ^3.111.0
         version: 3.111.0
