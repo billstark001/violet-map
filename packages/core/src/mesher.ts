@@ -409,12 +409,12 @@ class MeshBuilder {
     this.idx.push6(b, b + 2, b + 1, b, b + 3, b + 2);
   }
   build(): MeshBuffers {
-    const positions = this.pos.toArray();
-    const uvs = this.uv.toArray();
-    const atlasRects = this.atlas?.toArray();
-    const colors = this.col.toArray();
-    const lights = this.light.toArray();
-    const indices = this.idx.toArray();
+    const positions = this.pos.view();
+    const uvs = this.uv.view();
+    const atlasRects = this.atlas?.view();
+    const colors = this.col.view();
+    const lights = this.light.view();
+    const indices = this.idx.view();
     return {
       positions: packSectionPositions(positions),
       uvs: this.atlas ? packUint16(uvs) : packNormalizedUint16(uvs),

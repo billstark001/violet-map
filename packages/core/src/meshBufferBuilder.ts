@@ -46,6 +46,10 @@ export class Float32Writer {
   toArray(): Float32Array {
     return this.data.slice(0, this.length);
   }
+
+  view(): Float32Array {
+    return this.data.subarray(0, this.length);
+  }
 }
 
 export class Uint32Writer {
@@ -80,5 +84,9 @@ export class Uint32Writer {
 
   toArray(): Uint32Array {
     return this.data.slice(0, this.length);
+  }
+
+  view(): Uint32Array {
+    return this.data.subarray(0, this.length);
   }
 }
