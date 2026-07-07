@@ -81,7 +81,12 @@ const chunkNbtCache = new Map<string, ChunkCacheEntry>();
 const MAX_REGION_CACHE = 16;
 const MAX_REGION_HEADER_CACHE = 256;
 const MAX_CHUNK_NBT_CACHE = 512;
+const MAX_FILE_HASH_CACHE = 4096;
+const MAX_REGION_CACHE_BYTES = Number(process.env.REGION_CACHE_BYTES ?? 256 * 1024 * 1024);
+const MAX_CHUNK_NBT_CACHE_BYTES = Number(process.env.CHUNK_NBT_CACHE_BYTES ?? 128 * 1024 * 1024);
 const REGION_LOCATION_BYTES = 4096;
+let regionCacheBytes = 0;
+let chunkNbtCacheBytes = 0;
 
 export function assertWorldName(world: string) {
   if (!WORLD_RE.test(world)) throw new Error('invalid world name');
@@ -111,22 +116,67 @@ function rememberLru<K, V>(map: Map<K, V>, key: K, value: V, max: number): V {
   return value;
 }
 
+function touchLru<K, V>(map: Map<K, V>, key: K, value: V) {
+  map.delete(key);
+  map.set(key, value);
+}
+
+function rememberRegionCache(key: string, value: RegionCacheEntry): RegionCacheEntry {
+  const previous = regionCache.get(key);
+  if (previous) regionCacheBytes -= previous.bytes.byteLength;
+  touchLru(regionCache, key, value);
+  regionCacheBytes += value.bytes.byteLength;
+  while (regionCache.size > MAX_REGION_CACHE || regionCacheBytes > MAX_REGION_CACHE_BYTES) {
+    const oldestKey = regionCache.keys().next().value;
+    if (!oldestKey) break;
+    deleteRegionCache(oldestKey);
+  }
+  return value;
+}
+
+function deleteRegionCache(key: string) {
+  const hit = regionCache.get(key);
+  if (!hit) return;
+  regionCacheBytes -= hit.bytes.byteLength;
+  regionCache.delete(key);
+}
+
+function rememberChunkNbtCache(key: string, value: ChunkCacheEntry): ChunkCacheEntry {
+  const previous = chunkNbtCache.get(key);
+  if (previous) chunkNbtCacheBytes -= previous.data.byteLength;
+  touchLru(chunkNbtCache, key, value);
+  chunkNbtCacheBytes += value.data.byteLength;
+  while (chunkNbtCache.size > MAX_CHUNK_NBT_CACHE || chunkNbtCacheBytes > MAX_CHUNK_NBT_CACHE_BYTES) {
+    const oldestKey = chunkNbtCache.keys().next().value;
+    if (!oldestKey) break;
+    deleteChunkNbtCache(oldestKey);
+  }
+  return value;
+}
+
+function deleteChunkNbtCache(key: string) {
+  const hit = chunkNbtCache.get(key);
+  if (!hit) return;
+  chunkNbtCacheBytes -= hit.data.byteLength;
+  chunkNbtCache.delete(key);
+}
+
 function invalidatePath(filePath: string) {
   const clean = cleanStoragePath(filePath);
   fileHashCache.delete(clean);
-  regionCache.delete(clean);
+  deleteRegionCache(clean);
   regionHeaderCache.delete(clean);
   regionReadInflight.delete(clean);
   regionHeaderInflight.delete(clean);
   for (const [key, entry] of chunkNbtCache) {
-    if (entry.sourcePath === clean) chunkNbtCache.delete(key);
+    if (entry.sourcePath === clean) deleteChunkNbtCache(key);
   }
 }
 
 function clearChunkCacheFor(world: string, dim?: string) {
   const prefix = dim ? `${world}|${dim}|` : `${world}|`;
-  for (const key of chunkNbtCache.keys()) {
-    if (key.startsWith(prefix)) chunkNbtCache.delete(key);
+  for (const key of [...chunkNbtCache.keys()]) {
+    if (key.startsWith(prefix)) deleteChunkNbtCache(key);
   }
 }
 
@@ -138,7 +188,7 @@ async function hashFileInfo(info: StoredFileInfo): Promise<string> {
   const bytes = await worldStorage.read(clean);
   if (!bytes) throw new Error(`file disappeared while hashing: ${clean}`);
   const hash = sha256(bytes);
-  fileHashCache.set(clean, { validator: v, hash });
+  rememberLru(fileHashCache, clean, { validator: v, hash }, MAX_FILE_HASH_CACHE);
   return hash;
 }
 
@@ -225,7 +275,7 @@ async function readRegionFile(filePath: string): Promise<RegionCacheEntry | null
         header: bytes.subarray(0, REGION_LOCATION_BYTES).slice(),
       }, MAX_REGION_HEADER_CACHE);
     }
-    return rememberLru(regionCache, clean, { validator: v, hash, bytes }, MAX_REGION_CACHE);
+    return rememberRegionCache(clean, { validator: v, hash, bytes });
   })();
   regionReadInflight.set(clean, load);
   try {
@@ -443,8 +493,7 @@ export async function getChunksNbtWithMetaBatch(
     const cacheKey = chunkCacheKey(world, dim, meta.cx, meta.cz);
     const hit = chunkNbtCache.get(cacheKey);
     if (hit?.sourcePath === meta.sourcePath && hit.fileHash === meta.fileHash) {
-      chunkNbtCache.delete(cacheKey);
-      chunkNbtCache.set(cacheKey, hit);
+      touchLru(chunkNbtCache, cacheKey, hit);
       out[index] = { ...meta, data: hit.data, nbtHash: hit.nbtHash } as ChunkReadResult;
       return;
     }
@@ -454,7 +503,7 @@ export async function getChunksNbtWithMetaBatch(
       const data = bytes ? decompress(bytes) : null;
       if (!data) return;
       const nbtHash = sha256(data);
-      rememberLru(chunkNbtCache, cacheKey, { sourcePath: meta.sourcePath, fileHash: meta.fileHash, data, nbtHash }, MAX_CHUNK_NBT_CACHE);
+      rememberChunkNbtCache(cacheKey, { sourcePath: meta.sourcePath, fileHash: meta.fileHash, data, nbtHash });
       out[index] = { ...meta, data, nbtHash } as ChunkReadResult;
       return;
     }
@@ -472,12 +521,12 @@ export async function getChunksNbtWithMetaBatch(
       const data = getRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31);
       if (!data) continue;
       const nbtHash = sha256(data);
-      rememberLru(chunkNbtCache, chunkCacheKey(world, dim, meta.cx, meta.cz), {
+      rememberChunkNbtCache(chunkCacheKey(world, dim, meta.cx, meta.cz), {
         sourcePath: meta.sourcePath,
         fileHash: meta.fileHash,
         data,
         nbtHash,
-      }, MAX_CHUNK_NBT_CACHE);
+      });
       out[index] = { ...meta, data, nbtHash } as ChunkReadResult;
     }
   }));
@@ -515,12 +564,12 @@ export async function saveChunkNbt(world: string, dim: string, bytes: Uint8Array
   invalidatePath(filePath);
   const info = await worldStorage.stat(filePath);
   const fileHash = info ? sourceHashForInfo(info) : sha256(data);
-  rememberLru(chunkNbtCache, chunkCacheKey(world, dim, x, z), {
+  rememberChunkNbtCache(chunkCacheKey(world, dim, x, z), {
     sourcePath: filePath,
     fileHash,
     data,
     nbtHash: sha256(data),
-  }, MAX_CHUNK_NBT_CACHE);
+  });
   await ensureLevelDat(world, world, [dim]);
   return { x, z };
 }

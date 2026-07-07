@@ -176,47 +176,67 @@ export interface TerrainMaterials {
   all: THREE.ShaderMaterial[];
 }
 
-export function createMaterials(atlas: THREE.Texture, shared: SharedUniforms): TerrainMaterials {
-  const make = (opts: {
-    alphaTest?: number;
-    transparent?: boolean;
-    opacity?: number;
-    map?: THREE.Texture;
-    tiled?: boolean;
-    colorOnly?: boolean;
-    positionScale?: THREE.Vector3;
-    positionOffset?: THREE.Vector3;
-  }) => {
-    const transparent = opts.transparent ?? false;
-    return new THREE.ShaderMaterial({
-      vertexShader: opts.colorOnly ? COLOR_VERT : opts.tiled ? TILED_VERT : VERT,
-      fragmentShader: opts.colorOnly ? COLOR_FRAG : opts.tiled ? TILED_FRAG : FRAG,
-      uniforms: {
-        ...(opts.colorOnly ? {} : {
-          map: { value: opts.map ?? atlas },
-          alphaTest: { value: opts.alphaTest ?? 0 },
-          opacity: { value: opts.opacity ?? 1 },
-        }),
-        positionScale: { value: opts.positionScale ?? new THREE.Vector3(18, 18, 18) },
-        positionOffset: { value: opts.positionOffset ?? new THREE.Vector3(-1, -1, -1) },
-        ...shared,
-      },
-      transparent,
-      depthWrite: !transparent,
-      side: THREE.FrontSide,
-    });
-  };
+interface TerrainMaterialOptions {
+  alphaTest?: number;
+  transparent?: boolean;
+  opacity?: number;
+  map?: THREE.Texture;
+  tiled?: boolean;
+  colorOnly?: boolean;
+  positionScale?: THREE.Vector3;
+  positionOffset?: THREE.Vector3;
+  polygonOffset?: boolean;
+  polygonOffsetFactor?: number;
+  polygonOffsetUnits?: number;
+}
 
+function makeTerrainMaterial(atlas: THREE.Texture, shared: SharedUniforms, opts: TerrainMaterialOptions): THREE.ShaderMaterial {
+  const transparent = opts.transparent ?? false;
+  return new THREE.ShaderMaterial({
+    vertexShader: opts.colorOnly ? COLOR_VERT : opts.tiled ? TILED_VERT : VERT,
+    fragmentShader: opts.colorOnly ? COLOR_FRAG : opts.tiled ? TILED_FRAG : FRAG,
+    uniforms: {
+      ...(opts.colorOnly ? {} : {
+        map: { value: opts.map ?? atlas },
+        alphaTest: { value: opts.alphaTest ?? 0 },
+        opacity: { value: opts.opacity ?? 1 },
+      }),
+      positionScale: { value: opts.positionScale ?? new THREE.Vector3(18, 18, 18) },
+      positionOffset: { value: opts.positionOffset ?? new THREE.Vector3(-1, -1, -1) },
+      ...shared,
+    },
+    transparent,
+    depthWrite: !transparent,
+    side: THREE.FrontSide,
+    polygonOffset: opts.polygonOffset ?? false,
+    polygonOffsetFactor: opts.polygonOffsetFactor ?? 0,
+    polygonOffsetUnits: opts.polygonOffsetUnits ?? 0,
+  });
+}
+
+export function createMaterials(atlas: THREE.Texture, shared: SharedUniforms): TerrainMaterials {
   const materials = {
-    opaque: make({ alphaTest: 0.001 }),
-    opaqueTiled: make({ alphaTest: 0.001, tiled: true }),
-    cutout: make({ alphaTest: 0.5 }),
-    translucent: make({ alphaTest: 0.01, transparent: true }),
-    lod: make({
+    opaque: makeTerrainMaterial(atlas, shared, { alphaTest: 0.001 }),
+    opaqueTiled: makeTerrainMaterial(atlas, shared, { alphaTest: 0.001, tiled: true }),
+    cutout: makeTerrainMaterial(atlas, shared, { alphaTest: 0.5 }),
+    translucent: makeTerrainMaterial(atlas, shared, { alphaTest: 0.01, transparent: true }),
+    lod: makeTerrainMaterial(atlas, shared, {
       colorOnly: true,
       positionScale: new THREE.Vector3(16, 4096, 16),
       positionOffset: new THREE.Vector3(0, -2048, 0),
     }),
   };
   return { ...materials, all: Object.values(materials) };
+}
+
+export function createTopMapMaterial(map: THREE.Texture, shared: SharedUniforms): THREE.ShaderMaterial {
+  return makeTerrainMaterial(map, shared, {
+    map,
+    alphaTest: 0.05,
+    positionScale: new THREE.Vector3(1, 1, 1),
+    positionOffset: new THREE.Vector3(0, 0, 0),
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 2,
+  });
 }

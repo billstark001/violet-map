@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { debugLog, isDebugLoggingEnabled } from '../logger';
 
 export type ChunkState = 'checking' | 'hashed' | 'fetching' | 'decoding' | 'stored' | 'absent' | 'error';
 
@@ -8,6 +9,8 @@ const MAX_FETCH_BATCHES = 3;
 const FETCH_BATCH_SIZE = 24;
 const MAX_MESH_QUEUE = 256;
 const MAX_IO_QUEUE = 768;
+const TOP_DOWN_MAX_MESH_QUEUE = 384;
+const TOP_DOWN_MAX_IO_QUEUE = 768;
 const IO_QUEUE_RETENTION_MS = 2600;
 const IO_RENDER_SHARE_TARGET = 0.8;
 const OUTER_IO_RENDER_SHARE_TARGET = 0.45;
@@ -15,8 +18,11 @@ const MIN_EXISTING_CHUNKS_BEFORE_BALANCE = 64;
 const PREDICT_LOOKAHEAD_SECONDS = 0.9;
 const PREDICT_FORWARD_BLOCKS = 64;
 const PREDICT_MARGIN_CHUNKS = 6;
+const TOP_DOWN_OFFLINE_PREDICT_MARGIN_CHUNKS = 3;
 const UNLOAD_MARGIN_CHUNKS = 8;
+const TOP_DOWN_OFFLINE_UNLOAD_MARGIN_CHUNKS = 3;
 const LOAD_FRUSTUM_EXTRA_DEGREES = 18;
+const LOAD_ORTHO_EXTRA_BLOCKS = 64;
 const SSE_TARGET_PX = 5.5;
 const SSE_REFINE_PX = 6.8;
 const SSE_COARSEN_PX = 3.2;
@@ -30,10 +36,27 @@ const FULL_PREVIEW_LOD_STEP: LodStep = 2;
 export const LOD_STEPS = [1, 2, 4, 8] as const;
 export type LodStep = typeof LOD_STEPS[number];
 export type MeshTaskKind = 'full' | 'lod';
+export type ChunkSchedulerCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
+export type ChunkSchedulerViewMode = 'perspective' | 'topDown';
 
 export interface ChunkSchedulerOptions {
   viewDistance: number;
   lodDistance: number;
+}
+
+export interface SchedulerLimits {
+  softTrackedChunks: number;
+  hardTrackedChunks: number;
+  maxCandidates: number;
+  maxIoQueue: number;
+  maxMeshQueue: number;
+  unloadDistanceChunks: number;
+}
+
+export interface ChunkSchedulingStrategy {
+  readonly mode: ChunkSchedulerViewMode;
+  readonly circularEviction: boolean;
+  limits(opts: ChunkSchedulerOptions): SchedulerLimits;
 }
 
 export interface ChunkPriority {
@@ -141,6 +164,62 @@ interface FrameLoadStats {
   hasMoreCurrentFrustumChunks: boolean;
 }
 
+interface TopDownBounds {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+function fullRadiusForOptions(opts: ChunkSchedulerOptions): number {
+  return Math.max(0, Math.floor(opts.viewDistance));
+}
+
+function totalRenderRadiusForOptions(opts: ChunkSchedulerOptions): number {
+  return Math.max(0, fullRadiusForOptions(opts) + Math.max(0, Math.floor(opts.lodDistance)));
+}
+
+class PerspectiveChunkSchedulingStrategy implements ChunkSchedulingStrategy {
+  readonly mode = 'perspective' as const;
+  readonly circularEviction = false;
+
+  limits(opts: ChunkSchedulerOptions): SchedulerLimits {
+    const scanRadius = totalRenderRadiusForOptions(opts) + PREDICT_MARGIN_CHUNKS;
+    const hardTrackedChunks = Math.max(1536, Math.min(9000, Math.round(scanRadius * scanRadius * 2.1)));
+    const softTrackedChunks = Math.max(1280, Math.round(hardTrackedChunks * 0.78));
+    return {
+      softTrackedChunks,
+      hardTrackedChunks,
+      maxCandidates: hardTrackedChunks,
+      maxIoQueue: MAX_IO_QUEUE,
+      maxMeshQueue: MAX_MESH_QUEUE,
+      unloadDistanceChunks: scanRadius + UNLOAD_MARGIN_CHUNKS,
+    };
+  }
+}
+
+class TopDownChunkSchedulingStrategy implements ChunkSchedulingStrategy {
+  readonly mode = 'topDown' as const;
+  readonly circularEviction = true;
+
+  limits(opts: ChunkSchedulerOptions): SchedulerLimits {
+    const offlineBacked = Math.max(0, Math.floor(opts.lodDistance)) === 0;
+    const predictMargin = offlineBacked ? TOP_DOWN_OFFLINE_PREDICT_MARGIN_CHUNKS : PREDICT_MARGIN_CHUNKS;
+    const scanRadius = totalRenderRadiusForOptions(opts) + predictMargin;
+    const circleArea = scanRadius * scanRadius * Math.PI;
+    const hardTrackedChunks = Math.max(offlineBacked ? 768 : 2560, Math.min(8192, Math.round(circleArea * 1.15)));
+    const softTrackedChunks = Math.max(offlineBacked ? 512 : 1536, Math.min(hardTrackedChunks, Math.round(circleArea * 0.9)));
+    return {
+      softTrackedChunks,
+      hardTrackedChunks,
+      maxCandidates: hardTrackedChunks,
+      maxIoQueue: offlineBacked ? Math.min(384, TOP_DOWN_MAX_IO_QUEUE) : TOP_DOWN_MAX_IO_QUEUE,
+      maxMeshQueue: offlineBacked ? Math.min(192, TOP_DOWN_MAX_MESH_QUEUE) : TOP_DOWN_MAX_MESH_QUEUE,
+      unloadDistanceChunks: scanRadius + (offlineBacked ? TOP_DOWN_OFFLINE_UNLOAD_MARGIN_CHUNKS : UNLOAD_MARGIN_CHUNKS),
+    };
+  }
+}
+
 const EMPTY_RENDER_STATS: ChunkRenderStats = {
   nbt: 0,
   lodReady: 0,
@@ -195,13 +274,18 @@ export class ChunkScheduler {
   private frustumMatrix = new THREE.Matrix4();
   private currentFrustum = new THREE.Frustum();
   private predictedFrustum = new THREE.Frustum();
-  private predictedCamera = new THREE.PerspectiveCamera();
-  private loadCamera = new THREE.PerspectiveCamera();
-  private predictedLoadCamera = new THREE.PerspectiveCamera();
+  private predictedCameraPosition = new THREE.Vector3();
+  private loadPerspectiveCamera = new THREE.PerspectiveCamera();
+  private loadOrthographicCamera = new THREE.OrthographicCamera();
   private predictedOffset = new THREE.Vector3();
   private tmpForward = new THREE.Vector3();
   private tmpVelocity = new THREE.Vector3();
   private tmpBox = new THREE.Box3();
+  private readonly perspectiveStrategy = new PerspectiveChunkSchedulingStrategy();
+  private readonly topDownStrategy = new TopDownChunkSchedulingStrategy();
+  private activeStrategy: ChunkSchedulingStrategy = this.perspectiveStrategy;
+  private lastMeshTrimLogAt = 0;
+  private lastIoTrimLogAt: Record<'hash' | 'fetch', number> = { hash: 0, fetch: 0 };
 
   // #region Lifecycle and options
 
@@ -240,18 +324,38 @@ export class ChunkScheduler {
   // #region Frame planning
 
   planFrame(
-    camera: THREE.PerspectiveCamera,
+    camera: ChunkSchedulerCamera,
     now: number,
     force: boolean,
     viewportHeight: number,
     keyFor: (cx: number, cz: number) => string,
     entryFor: (key: string) => ChunkSchedulerEntry | null,
+    topDownView = false,
   ): SchedulerFramePlan {
+    this.activeStrategy = topDownView ? this.topDownStrategy : this.perspectiveStrategy;
     camera.updateMatrixWorld(true);
     this.updateCameraVelocity(camera.position, now, force);
     this.updateFrustums(camera);
-    const candidates = this.buildCandidates(camera, viewportHeight, now, keyFor, entryFor);
+    const candidates = this.buildCandidates(camera, viewportHeight, now, keyFor, entryFor, topDownView);
     this.updateFrameLoadStats(candidates, entryFor);
+    if (isDebugLoggingEnabled()) {
+      const limits = this.activeLimits();
+      debugLog('scheduler', 'frame', {
+        mode: this.activeStrategy.mode,
+        center: [Math.floor(camera.position.x / 16), Math.floor(camera.position.z / 16)],
+        candidates: candidates.length,
+        currentFrustumTotal: this.frameLoadStats.currentFrustumTotal,
+        currentFrustumLoaded: this.frameLoadStats.currentFrustumLoaded,
+        currentFrustumLoadShare: this.currentFrustumLoadShare(),
+        hasMoreCurrentFrustumChunks: this.frameLoadStats.hasMoreCurrentFrustumChunks,
+        hashQueued: this.hashQueue.size,
+        fetchQueued: this.fetchQueue.size,
+        meshQueued: this.meshQueue.size,
+        trackedPriorities: this.priorityByKey.size,
+        softTrackedChunks: limits.softTrackedChunks,
+        hardTrackedChunks: limits.hardTrackedChunks,
+      });
+    }
     const keepKeys = new Set(candidates.map((candidate) => candidate.key));
     for (const candidate of candidates) this.rememberPriority(candidate.key, candidate);
     return {
@@ -382,25 +486,37 @@ export class ChunkScheduler {
 
   evictKeys(ccx: number, ccz: number, keepKeys: Set<string>, entries: Iterable<ChunkSchedulerEntry>, now: number): string[] {
     const out: string[] = [];
-    const unloadDistance = this.totalRenderRadius() + PREDICT_MARGIN_CHUNKS + UNLOAD_MARGIN_CHUNKS;
+    const limits = this.activeLimits();
+    const unloadDistance = limits.unloadDistanceChunks;
     const all = [...entries];
     for (const e of all) {
-      const d = Math.max(Math.abs(e.cx - ccx), Math.abs(e.cz - ccz));
+      const d = this.activeStrategy.circularEviction
+        ? Math.hypot(e.cx - ccx, e.cz - ccz)
+        : Math.max(Math.abs(e.cx - ccx), Math.abs(e.cz - ccz));
       if (!keepKeys.has(e.key) && d > unloadDistance) out.push(e.key);
     }
 
-    const maxTracked = this.maxTrackedChunks();
-    if (all.length - out.length <= maxTracked) return out;
+    if (all.length - out.length <= limits.softTrackedChunks) return out;
     const already = new Set(out);
     const victims = all
       .filter((e) => !keepKeys.has(e.key) && !already.has(e.key))
       .sort((a, b) => a.lastWantedAt - b.lastWantedAt || b.lastScore - a.lastScore);
     let tracked = all.length - out.length;
     for (const e of victims) {
-      if (tracked <= maxTracked) break;
-      if (now - e.lastWantedAt < 1000) continue;
+      if (tracked <= limits.softTrackedChunks) break;
+      if (tracked <= limits.hardTrackedChunks && now - e.lastWantedAt < 1000) continue;
       out.push(e.key);
       tracked--;
+    }
+    if (out.length) {
+      debugLog('scheduler', 'evict', {
+        mode: this.activeStrategy.mode,
+        evicted: out.length,
+        trackedBefore: all.length,
+        trackedAfter: all.length - out.length,
+        softTrackedChunks: limits.softTrackedChunks,
+        hardTrackedChunks: limits.hardTrackedChunks,
+      });
     }
     return out;
   }
@@ -455,24 +571,40 @@ export class ChunkScheduler {
     this.lastCameraSampleTime = now;
   }
 
-  private updateFrustums(camera: THREE.PerspectiveCamera) {
-    this.setLoadFrustum(camera, this.loadCamera, this.currentFrustum);
+  private updateFrustums(camera: ChunkSchedulerCamera) {
+    this.setLoadFrustum(camera, this.currentFrustum);
     camera.getWorldDirection(this.tmpForward);
     this.predictedOffset.copy(this.cameraVelocity).multiplyScalar(PREDICT_LOOKAHEAD_SECONDS);
-    const forwardBoost = Math.min(
-      Math.max(PREDICT_FORWARD_BLOCKS, this.cameraVelocity.length() * 0.35),
-      (this.totalRenderRadius() + PREDICT_MARGIN_CHUNKS) * 16,
-    );
-    this.predictedOffset.addScaledVector(this.tmpForward, forwardBoost);
-    this.predictedCamera.copy(camera);
-    this.predictedCamera.position.add(this.predictedOffset);
-    this.predictedCamera.updateMatrixWorld(true);
-    this.setLoadFrustum(this.predictedCamera, this.predictedLoadCamera, this.predictedFrustum);
+    if (camera instanceof THREE.PerspectiveCamera) {
+      const forwardBoost = Math.min(
+        Math.max(PREDICT_FORWARD_BLOCKS, this.cameraVelocity.length() * 0.35),
+        (this.totalRenderRadius() + PREDICT_MARGIN_CHUNKS) * 16,
+      );
+      this.predictedOffset.addScaledVector(this.tmpForward, forwardBoost);
+    }
+    this.predictedCameraPosition.copy(camera.position).add(this.predictedOffset);
+    if (camera instanceof THREE.PerspectiveCamera) {
+      this.loadPerspectiveCamera.copy(camera);
+      this.loadPerspectiveCamera.position.copy(this.predictedCameraPosition);
+      this.setLoadFrustum(this.loadPerspectiveCamera, this.predictedFrustum);
+    } else {
+      this.loadOrthographicCamera.copy(camera);
+      this.loadOrthographicCamera.position.copy(this.predictedCameraPosition);
+      this.setLoadFrustum(this.loadOrthographicCamera, this.predictedFrustum);
+    }
   }
 
-  private setLoadFrustum(source: THREE.PerspectiveCamera, target: THREE.PerspectiveCamera, frustum: THREE.Frustum) {
-    target.copy(source);
-    target.fov = Math.min(120, source.fov + LOAD_FRUSTUM_EXTRA_DEGREES);
+  private setLoadFrustum(source: ChunkSchedulerCamera, frustum: THREE.Frustum) {
+    const target = source instanceof THREE.PerspectiveCamera ? this.loadPerspectiveCamera : this.loadOrthographicCamera;
+    target.copy(source as never);
+    if (target instanceof THREE.PerspectiveCamera) {
+      target.fov = Math.min(120, source instanceof THREE.PerspectiveCamera ? source.fov + LOAD_FRUSTUM_EXTRA_DEGREES : target.fov);
+    } else {
+      target.left -= LOAD_ORTHO_EXTRA_BLOCKS;
+      target.right += LOAD_ORTHO_EXTRA_BLOCKS;
+      target.top += LOAD_ORTHO_EXTRA_BLOCKS;
+      target.bottom -= LOAD_ORTHO_EXTRA_BLOCKS;
+    }
     target.updateProjectionMatrix();
     target.updateMatrixWorld(true);
     this.frustumMatrix.multiplyMatrices(target.projectionMatrix, target.matrixWorldInverse);
@@ -484,11 +616,12 @@ export class ChunkScheduler {
   // #region Candidate geometry and LOD
 
   private buildCandidates(
-    camera: THREE.PerspectiveCamera,
+    camera: ChunkSchedulerCamera,
     viewportHeight: number,
     now: number,
     keyFor: (cx: number, cz: number) => string,
     entryFor: (key: string) => ChunkSchedulerEntry | null,
+    topDownView: boolean,
   ): ChunkCandidate[] {
     const ccx = Math.floor(camera.position.x / 16);
     const ccz = Math.floor(camera.position.z / 16);
@@ -498,37 +631,48 @@ export class ChunkScheduler {
     const pcz = Math.floor(predictedZ / 16);
     const fullRadius = this.fullRadius();
     const total = this.totalRenderRadius();
-    const scanRadius = total + PREDICT_MARGIN_CHUNKS;
+    const scanRadius = total + (
+      topDownView && this.totalRenderRadius() === this.fullRadius()
+        ? TOP_DOWN_OFFLINE_PREDICT_MARGIN_CHUNKS
+        : PREDICT_MARGIN_CHUNKS
+    );
     const movingFast = this.cameraVelocity.length() > FAST_MOVE_BLOCKS_PER_SECOND;
     const minCx = Math.min(ccx, pcx) - scanRadius;
     const maxCx = Math.max(ccx, pcx) + scanRadius;
     const minCz = Math.min(ccz, pcz) - scanRadius;
     const maxCz = Math.max(ccz, pcz) + scanRadius;
+    const topBounds = topDownView ? this.topDownBounds(camera) : null;
     const out: ChunkCandidate[] = [];
 
     for (let cz = minCz; cz <= maxCz; cz++) {
       for (let cx = minCx; cx <= maxCx; cx++) {
-        const currentCheb = Math.max(Math.abs(cx - ccx), Math.abs(cz - ccz));
-        const predictedCheb = Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz));
-        const forcedFull = currentCheb <= fullRadius;
-        if (!forcedFull && currentCheb > total && predictedCheb > total + PREDICT_MARGIN_CHUNKS) continue;
+        const currentRadius = topDownView
+          ? this.chunkDistanceInChunks(camera.position, cx, cz)
+          : Math.max(Math.abs(cx - ccx), Math.abs(cz - ccz));
+        const predictedRadius = topDownView
+          ? this.chunkDistanceInChunks(this.predictedCameraPosition, cx, cz)
+          : Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz));
+        const forcedFull = currentRadius <= fullRadius;
+        if (!forcedFull && currentRadius > total && predictedRadius > total + PREDICT_MARGIN_CHUNKS) continue;
 
-        const currentFrustum = currentCheb <= total && (forcedFull || this.chunkIntersectsFrustum(this.currentFrustum, cx, cz));
+        const currentFrustum = topDownView
+          ? currentRadius <= total && (forcedFull || this.chunkIntersectsTopDownBounds(topBounds, cx, cz))
+          : currentRadius <= total && (forcedFull || this.chunkIntersectsFrustum(this.currentFrustum, cx, cz));
         const predictedFrustum = !currentFrustum
-          && predictedCheb <= total + PREDICT_MARGIN_CHUNKS
-          && this.chunkIntersectsFrustum(this.predictedFrustum, cx, cz);
+          && predictedRadius <= total + PREDICT_MARGIN_CHUNKS
+          && (topDownView || this.chunkIntersectsFrustum(this.predictedFrustum, cx, cz));
         if (!forcedFull && !currentFrustum && !predictedFrustum) continue;
 
         const key = keyFor(cx, cz);
         const e = entryFor(key) ?? undefined;
         const distCurrent = this.distanceToChunk(camera.position, cx, cz);
-        const distPredicted = this.distanceToChunk(this.predictedCamera.position, cx, cz);
+        const distPredicted = this.distanceToChunk(this.predictedCameraPosition, cx, cz);
         const sseDistance = currentFrustum || forcedFull ? distCurrent : distPredicted;
-        let targetStep = this.selectLodStep(sseDistance, camera, viewportHeight, e, currentCheb, predictedFrustum, movingFast);
+        let targetStep = this.selectLodStep(sseDistance, camera, viewportHeight, e, currentRadius, predictedFrustum, movingFast);
         if (
           targetStep !== 1
           && !predictedFrustum
-          && currentCheb <= fullRadius + FULL_HOLD_MARGIN_CHUNKS
+          && currentRadius <= fullRadius + FULL_HOLD_MARGIN_CHUNKS
           && this.hasDisplayedFullNeighbor(cx, cz, keyFor, entryFor)
         ) {
           targetStep = 1;
@@ -541,7 +685,7 @@ export class ChunkScheduler {
     }
 
     out.sort((a, b) => a.tier - b.tier || a.score - b.score);
-    return out;
+    return this.limitCandidates(out);
   }
 
   private chunkIntersectsFrustum(frustum: THREE.Frustum, cx: number, cz: number): boolean {
@@ -550,6 +694,32 @@ export class ChunkScheduler {
     this.tmpBox.min.set(x, CHUNK_WORLD_MIN_Y, z);
     this.tmpBox.max.set(x + 16, CHUNK_WORLD_MAX_Y, z + 16);
     return frustum.intersectsBox(this.tmpBox);
+  }
+
+  private topDownBounds(camera: ChunkSchedulerCamera): TopDownBounds {
+    let width = 1024;
+    let height = 1024;
+    if (camera instanceof THREE.OrthographicCamera) {
+      width = (camera.right - camera.left) / Math.max(1e-3, camera.zoom);
+      height = (camera.top - camera.bottom) / Math.max(1e-3, camera.zoom);
+    } else if (camera instanceof THREE.PerspectiveCamera) {
+      height = 2 * Math.max(1, camera.position.y) * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
+      width = height * camera.aspect;
+    }
+    const margin = LOAD_ORTHO_EXTRA_BLOCKS;
+    return {
+      minX: camera.position.x - width / 2 - margin,
+      maxX: camera.position.x + width / 2 + margin,
+      minZ: camera.position.z - height / 2 - margin,
+      maxZ: camera.position.z + height / 2 + margin,
+    };
+  }
+
+  private chunkIntersectsTopDownBounds(bounds: TopDownBounds | null, cx: number, cz: number): boolean {
+    if (!bounds) return true;
+    const x = cx * 16;
+    const z = cz * 16;
+    return x + 16 >= bounds.minX && x <= bounds.maxX && z + 16 >= bounds.minZ && z <= bounds.maxZ;
   }
 
   private hasDisplayedFullNeighbor(
@@ -578,22 +748,29 @@ export class ChunkScheduler {
     return Math.max(1, Math.sqrt(dx * dx + dy * dy + dz * dz));
   }
 
+  private chunkDistanceInChunks(pos: THREE.Vector3, cx: number, cz: number): number {
+    const dx = cx + 0.5 - pos.x / 16;
+    const dz = cz + 0.5 - pos.z / 16;
+    return Math.sqrt(dx * dx + dz * dz);
+  }
+
   private fullRadius(): number {
-    return Math.max(0, Math.floor(this.opts.viewDistance));
+    return fullRadiusForOptions(this.opts);
   }
 
   private totalRenderRadius(): number {
-    return Math.max(0, this.fullRadius() + Math.max(0, Math.floor(this.opts.lodDistance)));
+    return totalRenderRadiusForOptions(this.opts);
   }
 
-  private screenErrorForStep(step: LodStep, distance: number, camera: THREE.PerspectiveCamera, viewportHeight: number): number {
-    const fov = THREE.MathUtils.degToRad(camera.fov);
-    const pixelsPerBlock = Math.max(1, viewportHeight) / (2 * Math.tan(fov * 0.5) * Math.max(1, distance));
+  private screenErrorForStep(step: LodStep, distance: number, camera: ChunkSchedulerCamera, viewportHeight: number): number {
+    const pixelsPerBlock = camera instanceof THREE.OrthographicCamera
+      ? Math.max(1, viewportHeight) / Math.max(1e-3, (camera.top - camera.bottom) / camera.zoom)
+      : Math.max(1, viewportHeight) / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5) * Math.max(1, distance));
     const geometricError = step <= 1 ? 0.5 : step * 0.75;
     return geometricError * pixelsPerBlock;
   }
 
-  private baseLodStep(distance: number, camera: THREE.PerspectiveCamera, viewportHeight: number): LodStep {
+  private baseLodStep(distance: number, camera: ChunkSchedulerCamera, viewportHeight: number): LodStep {
     if (this.screenErrorForStep(2, distance, camera, viewportHeight) > SSE_TARGET_PX) return 1;
     if (this.screenErrorForStep(4, distance, camera, viewportHeight) > SSE_TARGET_PX) return 2;
     if (this.screenErrorForStep(8, distance, camera, viewportHeight) > SSE_TARGET_PX) return 4;
@@ -608,7 +785,7 @@ export class ChunkScheduler {
 
   private selectLodStep(
     distance: number,
-    camera: THREE.PerspectiveCamera,
+    camera: ChunkSchedulerCamera,
     viewportHeight: number,
     e: ChunkSchedulerEntry | undefined,
     currentCheb: number,
@@ -786,6 +963,17 @@ export class ChunkScheduler {
     if (loadWork <= 0) return false;
     if (this.shouldPrioritizeInitialLoad()) return true;
     if (this.renderStats.nbt <= 0) return false;
+    if (
+      this.activeStrategy.mode === 'topDown'
+      && this.frameLoadStats.hasMoreCurrentFrustumChunks
+      && (
+        this.currentFrustumLoadShare() < 0.25
+        || renderWork <= this.activeLimits().maxMeshQueue
+        || this.readyShare() >= 0.35
+      )
+    ) {
+      return true;
+    }
     const readyTarget = this.currentFrustumLoaded() ? OUTER_IO_RENDER_SHARE_TARGET : IO_RENDER_SHARE_TARGET;
     return this.readyShare() >= readyTarget || (this.currentFrustumLoaded() && renderWork <= 12);
   }
@@ -804,16 +992,48 @@ export class ChunkScheduler {
     if (opts.activeBatches >= opts.maxBatches) return [];
     const renderWork = this.renderBacklog(opts.entries, opts.activeMeshTasks);
     const prioritizeLoad = this.shouldPrioritizeInitialLoad();
-    if (!this.shouldLoadMore(opts.activeBatches, renderWork)) return [];
-    const batchSize = prioritizeLoad || renderWork <= 0
+    if (!this.shouldLoadMore(opts.activeBatches, renderWork)) {
+      debugLog('scheduler', 'io-paused', {
+        mode: this.activeStrategy.mode,
+        queue: queue.size,
+        activeBatches: opts.activeBatches,
+        renderWork,
+        currentFrustumLoadShare: this.currentFrustumLoadShare(),
+        readyShare: this.readyShare(),
+        renderStats: this.renderStats,
+        frameLoadStats: this.frameLoadStats,
+      });
+      return [];
+    }
+    const limits = this.activeLimits();
+    const baseBatchSize = prioritizeLoad || renderWork <= 0
       ? opts.batchSize
       : Math.max(opts.busyBatchFloor, Math.floor(opts.batchSize / 2));
-    return this.nextIoBatch(queue, batchSize, renderWork > 0 ? 4 : 99);
+    const batchSize = this.priorityByKey.size > limits.softTrackedChunks && !prioritizeLoad
+      ? Math.max(opts.busyBatchFloor, Math.floor(baseBatchSize / 2))
+      : baseBatchSize;
+    const maxTier = renderWork > 0 ? 4 : 99;
+    const batch = this.nextIoBatch(queue, batchSize, maxTier);
+    debugLog('scheduler', 'io-batch', {
+      mode: this.activeStrategy.mode,
+      count: batch.length,
+      batchSize,
+      maxTier,
+      queueRemaining: queue.size,
+      renderWork,
+      readyShare: this.readyShare(),
+    });
+    return batch;
   }
 
   private currentFrustumLoaded(): boolean {
     const { currentFrustumTotal, currentFrustumLoaded } = this.frameLoadStats;
     return currentFrustumTotal <= 0 || currentFrustumLoaded >= currentFrustumTotal;
+  }
+
+  private currentFrustumLoadShare(): number {
+    const { currentFrustumTotal, currentFrustumLoaded } = this.frameLoadStats;
+    return currentFrustumTotal <= 0 ? 1 : currentFrustumLoaded / currentFrustumTotal;
   }
 
   private shouldPrioritizeInitialLoad(): boolean {
@@ -873,26 +1093,42 @@ export class ChunkScheduler {
 
   private trimIoQueue(kind: 'hash' | 'fetch') {
     const queue = kind === 'hash' ? this.hashQueue : this.fetchQueue;
-    if (queue.size <= MAX_IO_QUEUE) return;
-    const sorted = this.sortKeys(queue).slice(0, MAX_IO_QUEUE);
+    const limit = this.activeLimits().maxIoQueue;
+    if (queue.size <= limit) return;
+    const sorted = this.sortKeys(queue).slice(0, limit);
+    const now = performance.now();
+    if (now - this.lastIoTrimLogAt[kind] > 500) {
+      this.lastIoTrimLogAt[kind] = now;
+      debugLog('scheduler', 'trim-io-queue', { kind, before: queue.size, after: sorted.length, limit });
+    }
     if (kind === 'hash') this.hashQueue = new Set(sorted);
     else this.fetchQueue = new Set(sorted);
   }
 
   private trimMeshQueue() {
-    if (this.meshQueue.size <= MAX_MESH_QUEUE) return;
+    const limit = this.activeLimits().maxMeshQueue;
+    if (this.meshQueue.size <= limit) return;
     const fullBias = false;
     const sorted = [...this.meshQueue.entries()].sort((a, b) => this.compareMeshTasks(a[1], b[1], fullBias));
-    this.meshQueue = new Map(sorted.slice(0, MAX_MESH_QUEUE));
+    const now = performance.now();
+    if (now - this.lastMeshTrimLogAt > 500) {
+      this.lastMeshTrimLogAt = now;
+      debugLog('scheduler', 'trim-mesh-queue', { before: this.meshQueue.size, after: Math.min(sorted.length, limit), limit });
+    }
+    this.meshQueue = new Map(sorted.slice(0, limit));
   }
 
   private meshQueueKey(task: Pick<MeshTask, 'key' | 'kind'>): string {
     return `${task.key}\u0000${task.kind}`;
   }
 
-  private maxTrackedChunks(): number {
-    const total = this.totalRenderRadius() + PREDICT_MARGIN_CHUNKS;
-    return Math.max(768, Math.min(9000, Math.round(total * total * 2.1)));
+  private limitCandidates(candidates: ChunkCandidate[]): ChunkCandidate[] {
+    const limit = this.activeLimits().maxCandidates;
+    return candidates.length > limit ? candidates.slice(0, limit) : candidates;
+  }
+
+  private activeLimits(): SchedulerLimits {
+    return this.activeStrategy.limits(this.opts);
   }
 
   // #endregion

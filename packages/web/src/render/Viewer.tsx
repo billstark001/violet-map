@@ -3,18 +3,33 @@ import * as THREE from 'three';
 import { useTranslation } from 'react-i18next';
 import type { BiomeMap, DimensionMap } from '@violet-map/core';
 import { hexToRgb } from '@violet-map/core';
-import { fetchBiomes, fetchBlockInfo, fetchBundle, fetchDimensions, textureUrl } from '../api';
+import {
+  fetchBiomes,
+  fetchBlockInfo,
+  fetchBundle,
+  fetchDimensions,
+  fetchWorldCapabilities,
+  textureUrl,
+  type WorldCapabilities,
+} from '../api';
 import { buildAtlas, collectTextureIds, loadColormap } from '../atlas';
-import { ChunkManager } from './chunkManager';
+import { ChunkManager, type TopClipRange } from './chunkManager';
 import { EMPTY_CHUNK_SCHEDULER_STATS, type ChunkSchedulerStats } from './chunkScheduler';
-import { FlyControls, type FlyView } from './controls';
+import { FlyControls, TopDownControls, type FlyView } from './controls';
 import { createMaterials, createSharedUniforms, SharedUniforms, TerrainMaterials } from './materials';
+import { TopMapManager } from './topMapManager';
 import type { WorkerInit } from '../worker/protocol';
 
 const VIEW_STORAGE_KEY = 'violet-map:view';
 const MESH_CACHE_SCHEMA = 'mesh-v7-neighborhood-resident';
 const SKY_PLANE_FORWARD = new THREE.Vector3(0, 0, 1);
+const TOP_CAMERA_HEIGHT = 1024;
+const TOP_ORTHO_HEIGHT = 512;
+const TOP_PERSPECTIVE_FOV = 50;
 const celestialFacing = new THREE.Vector3();
+const cameraDirection = new THREE.Vector3();
+
+export type ViewMode = 'perspective' | 'topPerspective' | 'topOrthographic';
 
 export interface CameraPositionRequest {
   x: number;
@@ -29,16 +44,32 @@ export interface ViewerProps {
   viewDistance: number;
   lodDistance: number;
   fastMoveMultiplier: number;
+  inertiaEnabled: boolean;
+  viewMode: ViewMode;
+  topClipRange: TopClipRange;
   timeOfDay: number; // 0=正午, 0.5=午夜
   cameraTarget?: CameraPositionRequest;
-  onStats?: (s: ChunkSchedulerStats & { pos: [number, number, number] }) => void;
+  onStats?: (s: ViewerStatsPayload) => void;
 }
+
+export type ViewerStatsPayload = ChunkSchedulerStats & {
+  pos: [number, number, number];
+  yaw: number;
+  pitch: number;
+  viewMode: ViewMode;
+};
 
 interface Engine {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
-  camera: THREE.PerspectiveCamera;
-  controls: FlyControls;
+  perspectiveCamera: THREE.PerspectiveCamera;
+  topPerspectiveCamera: THREE.PerspectiveCamera;
+  topOrthographicCamera: THREE.OrthographicCamera;
+  activeCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
+  flyControls: FlyControls;
+  topPerspectiveControls: TopDownControls;
+  topOrthographicControls: TopDownControls;
+  topMap: TopMapManager;
   materials: TerrainMaterials;
   terrainTexture: THREE.Texture;
   shared: SharedUniforms;
@@ -118,6 +149,69 @@ function persistView(view: FlyView, updateUrl: boolean) {
   params.delete('lookAtY');
   params.delete('lookAtZ');
   history.replaceState(null, '', `${location.pathname}?${params.toString()}${location.hash}`);
+}
+
+function cameraView(camera: THREE.Camera, yaw: number, pitch: number): FlyView {
+  return {
+    x: camera.position.x,
+    y: camera.position.y,
+    z: camera.position.z,
+    yaw,
+    pitch,
+  };
+}
+
+function resizeTopCamera(camera: THREE.OrthographicCamera, width: number, height: number) {
+  const aspect = width / Math.max(1, height);
+  camera.left = -TOP_ORTHO_HEIGHT * aspect / 2;
+  camera.right = TOP_ORTHO_HEIGHT * aspect / 2;
+  camera.top = TOP_ORTHO_HEIGHT / 2;
+  camera.bottom = -TOP_ORTHO_HEIGHT / 2;
+  camera.updateProjectionMatrix();
+}
+
+function isTopViewMode(mode: ViewMode): boolean {
+  return mode === 'topPerspective' || mode === 'topOrthographic';
+}
+
+function cameraForMode(engine: Engine, mode: ViewMode): THREE.PerspectiveCamera | THREE.OrthographicCamera {
+  if (mode === 'topPerspective') return engine.topPerspectiveCamera;
+  if (mode === 'topOrthographic') return engine.topOrthographicCamera;
+  return engine.perspectiveCamera;
+}
+
+function setControlsEnabled(engine: Engine, mode: ViewMode) {
+  engine.flyControls.setEnabled(mode === 'perspective');
+  engine.topPerspectiveControls.setEnabled(mode === 'topPerspective');
+  engine.topOrthographicControls.setEnabled(mode === 'topOrthographic');
+}
+
+function cameraOrientation(camera: THREE.Camera): { yaw: number; pitch: number } {
+  camera.getWorldDirection(cameraDirection);
+  return {
+    yaw: Math.atan2(-cameraDirection.x, -cameraDirection.z),
+    pitch: Math.asin(THREE.MathUtils.clamp(cameraDirection.y, -1, 1)),
+  };
+}
+
+function orientationForMode(camera: THREE.Camera, viewMode: ViewMode): { yaw: number; pitch: number } {
+  if (isTopViewMode(viewMode)) return { yaw: 0, pitch: -Math.PI / 2 };
+  return cameraOrientation(camera);
+}
+
+function statsForCamera(s: ChunkSchedulerStats, camera: THREE.Camera, viewMode: ViewMode): ViewerStatsPayload {
+  const orientation = orientationForMode(camera, viewMode);
+  return {
+    ...s,
+    pos: [camera.position.x, camera.position.y, camera.position.z],
+    yaw: orientation.yaw,
+    pitch: orientation.pitch,
+    viewMode,
+  };
+}
+
+function heightmapAvailable(capabilities: WorldCapabilities | null, dimension: string): boolean {
+  return capabilities?.dimensions[dimension]?.hasHeightmap === true;
 }
 
 function hashString(input: string, seed = 2166136261): number {
@@ -394,8 +488,27 @@ export function Viewer(props: ViewerProps) {
   const latestStatsRef = useRef<ChunkSchedulerStats>({ ...EMPTY_CHUNK_SCHEDULER_STATS });
   const propsRef = useRef(props);
   propsRef.current = props;
+  const capabilitiesRef = useRef<WorldCapabilities | null>(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    capabilitiesRef.current = null;
+    if (!props.world) return;
+    fetchWorldCapabilities(props.world)
+      .then((next) => {
+        if (cancelled) return;
+        capabilitiesRef.current = next;
+      })
+      .catch(() => {
+        if (cancelled) return;
+        capabilitiesRef.current = null;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [props.world]);
 
   // 一次性初始化：GL、资源、图集
   useEffect(() => {
@@ -421,18 +534,37 @@ export function Viewer(props: ViewerProps) {
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x78a7ff);
         const skyObjects = createSkyObjects(scene);
-        const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 2000);
+        const perspectiveCamera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 2000);
         const initialView = readInitialView();
         const params = new URLSearchParams(location.search);
-        camera.rotation.order = 'YXZ';
-        camera.position.set(initialView.x, initialView.y, initialView.z);
+        perspectiveCamera.rotation.order = 'YXZ';
+        perspectiveCamera.position.set(initialView.x, initialView.y, initialView.z);
         if (!initialView.hasAngles && (params.has('lookAtX') || params.has('lookAtY') || params.has('lookAtZ'))) {
-          camera.lookAt(
-            Number(params.get('lookAtX') ?? camera.position.x),
-            Number(params.get('lookAtY') ?? camera.position.y),
-            Number(params.get('lookAtZ') ?? camera.position.z - 1),
+          perspectiveCamera.lookAt(
+            Number(params.get('lookAtX') ?? perspectiveCamera.position.x),
+            Number(params.get('lookAtY') ?? perspectiveCamera.position.y),
+            Number(params.get('lookAtZ') ?? perspectiveCamera.position.z - 1),
           );
         }
+        const topPerspectiveCamera = new THREE.PerspectiveCamera(
+          TOP_PERSPECTIVE_FOV,
+          container.clientWidth / Math.max(1, container.clientHeight),
+          1,
+          6000,
+        );
+        topPerspectiveCamera.rotation.order = 'YXZ';
+        topPerspectiveCamera.position.set(initialView.x, Math.max(TOP_CAMERA_HEIGHT, initialView.y), initialView.z);
+        topPerspectiveCamera.rotation.set(-Math.PI / 2, 0, 0);
+        topPerspectiveCamera.updateProjectionMatrix();
+
+        const topOrthographicCamera = new THREE.OrthographicCamera();
+        resizeTopCamera(topOrthographicCamera, container.clientWidth, container.clientHeight);
+        topOrthographicCamera.near = -2000;
+        topOrthographicCamera.far = 3000;
+        topOrthographicCamera.position.set(initialView.x, Math.max(TOP_CAMERA_HEIGHT, initialView.y), initialView.z);
+        topOrthographicCamera.rotation.order = 'YXZ';
+        topOrthographicCamera.rotation.set(-Math.PI / 2, 0, 0);
+        topOrthographicCamera.updateProjectionMatrix();
 
         const texture = new THREE.CanvasTexture(atlas.canvas);
         texture.flipY = false;
@@ -446,14 +578,28 @@ export function Viewer(props: ViewerProps) {
 
         const shared = createSharedUniforms();
         const materials = createMaterials(texture, shared);
-        const controls = new FlyControls(
+        const flyControls = new FlyControls(
           renderer.domElement,
-          camera,
+          perspectiveCamera,
           initialView.hasAngles ? { yaw: initialView.yaw, pitch: initialView.pitch } : undefined,
         );
-
-        engineRef.current = {
-          renderer, scene, camera, controls, materials, terrainTexture: texture, shared, sky: skyObjects, biomes, dimensions,
+        flyControls.setFastMultiplier(propsRef.current.fastMoveMultiplier);
+        flyControls.setInertiaEnabled(propsRef.current.inertiaEnabled);
+        const topPerspectiveControls = new TopDownControls(renderer.domElement, topPerspectiveCamera);
+        topPerspectiveControls.setFastMultiplier(propsRef.current.fastMoveMultiplier);
+        const topOrthographicControls = new TopDownControls(renderer.domElement, topOrthographicCamera);
+        topOrthographicControls.setFastMultiplier(propsRef.current.fastMoveMultiplier);
+        const topMap = new TopMapManager(scene, shared);
+        const activeCamera = propsRef.current.viewMode === 'topPerspective'
+          ? topPerspectiveCamera
+          : propsRef.current.viewMode === 'topOrthographic'
+            ? topOrthographicCamera
+            : perspectiveCamera;
+        const engine: Engine = {
+          renderer, scene, perspectiveCamera, topPerspectiveCamera, topOrthographicCamera,
+          activeCamera,
+          flyControls, topPerspectiveControls, topOrthographicControls, topMap,
+          materials, terrainTexture: texture, shared, sky: skyObjects, biomes, dimensions,
           renderKey,
           initPayload: {
             bundle, blockInfo, biomes,
@@ -462,10 +608,15 @@ export function Viewer(props: ViewerProps) {
             grassColormap: grassMap, foliageColormap: foliageMap,
           },
         };
+        setControlsEnabled(engine, propsRef.current.viewMode);
+        engineRef.current = engine;
 
         onResize = () => {
-          camera.aspect = container.clientWidth / container.clientHeight;
-          camera.updateProjectionMatrix();
+          perspectiveCamera.aspect = container.clientWidth / container.clientHeight;
+          perspectiveCamera.updateProjectionMatrix();
+          topPerspectiveControls.resize(container.clientWidth / Math.max(1, container.clientHeight), TOP_ORTHO_HEIGHT);
+          resizeTopCamera(topOrthographicCamera, container.clientWidth, container.clientHeight);
+          topOrthographicControls.resize(container.clientWidth / Math.max(1, container.clientHeight), TOP_ORTHO_HEIGHT);
           renderer.setSize(container.clientWidth, container.clientHeight);
         };
         window.addEventListener('resize', onResize);
@@ -476,17 +627,53 @@ export function Viewer(props: ViewerProps) {
         let lastStatsReport = 0;
         let lastPersist = 0;
         let lastUrlPersist = 0;
+        let activeViewMode: ViewMode = propsRef.current.viewMode;
         renderer.setAnimationLoop(() => {
           const dt = Math.min(clock.getDelta(), 0.1);
           const now = performance.now();
           const p = propsRef.current;
-          controls.update(dt);
+          const e = engineRef.current!;
+          if (p.viewMode !== activeViewMode) {
+            const source = e.activeCamera;
+            if (isTopViewMode(p.viewMode)) {
+              const targetControls = p.viewMode === 'topPerspective' ? e.topPerspectiveControls : e.topOrthographicControls;
+              targetControls.setPosition(source.position.x, Math.max(TOP_CAMERA_HEIGHT, source.position.y), source.position.z);
+              e.activeCamera = cameraForMode(e, p.viewMode);
+            } else {
+              e.flyControls.setPosition(source.position.x, e.perspectiveCamera.position.y, source.position.z);
+              e.activeCamera = e.perspectiveCamera;
+            }
+            setControlsEnabled(e, p.viewMode);
+            activeViewMode = p.viewMode;
+          }
+          const camera = e.activeCamera;
+          if (p.viewMode === 'topPerspective') e.topPerspectiveControls.update(dt);
+          else if (p.viewMode === 'topOrthographic') e.topOrthographicControls.update(dt);
+          else e.flyControls.update(dt);
+
           const manager = managerRef.current;
-          manager?.update(camera, now, false, renderer.domElement.clientHeight || window.innerHeight);
+          const topView = isTopViewMode(p.viewMode);
+          const dimDef = e.dimensions[p.dimension];
+          const offlineHeightmap = heightmapAvailable(capabilitiesRef.current, p.dimension);
+          e.topMap.configure(p.world, p.dimension, offlineHeightmap);
+          if (manager) manager.root.visible = true;
+          manager?.update(
+            camera,
+            now,
+            false,
+            renderer.domElement.clientHeight || window.innerHeight,
+            topView,
+            p.topClipRange,
+            topView && offlineHeightmap ? 0 : undefined,
+          );
+          e.topMap.update(camera, now, {
+            mode: topView ? 'top' : 'perspective',
+            radiusBlocks: Math.max(1024, (p.viewDistance + p.lodDistance + 32) * 16),
+            onlineChunks: manager?.displayedChunkKeys(),
+            hasSkyLight: dimDef?.hasSkyLight ?? true,
+          });
 
           // 天空/雾：数据驱动（群系 + 维度）
-          const e = engineRef.current!;
-          const dimDef = e.dimensions[p.dimension];
           const ccx = Math.floor(camera.position.x / 16), ccz = Math.floor(camera.position.z / 16);
           const biomeName = manager?.biomeAt(ccx, ccz) ?? dimDef?.defaultBiome ?? 'minecraft:plains';
           const biome = e.biomes[biomeName] ?? e.biomes['default'];
@@ -498,8 +685,14 @@ export function Viewer(props: ViewerProps) {
           e.shared.ambient.value = dimDef?.ambientLight ?? 0.18;
           const viewBlocks = p.viewDistance * 16;
           const dense = dimDef?.sky !== 'normal';
-          e.shared.fogNear.value = dense ? viewBlocks * 0.1 : viewBlocks * 0.6;
-          e.shared.fogFar.value = (p.viewDistance + p.lodDistance) * 16 * (dense ? 0.6 : 0.95);
+          if (topView) {
+            e.shared.fogNear.value = 1e9;
+            e.shared.fogFar.value = 1e9 + 1;
+            e.shared.envFogDensity.value = 0;
+          } else {
+            e.shared.fogNear.value = dense ? viewBlocks * 0.1 : viewBlocks * 0.6;
+            e.shared.fogFar.value = (p.viewDistance + p.lodDistance) * 16 * (dense ? 0.6 : 0.95);
+          }
           if (biome) {
             const fog = hexToRgb(biome.effects.fog_color);
             const dimensionSky = dimDef?.sky ?? 'normal';
@@ -519,18 +712,22 @@ export function Viewer(props: ViewerProps) {
             e.shared.fogColor.value.copy(horizonColor)
               .lerp(scene.background as THREE.Color, dense ? 0.15 : 0.45);
             e.shared.envFogColor.value.copy(e.shared.fogColor.value).lerp(scene.background as THREE.Color, dimensionSky === 'normal' ? 0.35 : 0.1);
-            e.shared.envFogDensity.value = dimensionSky === 'normal' ? 0.0016 : dimensionSky === 'nether' ? 0.009 : 0.0035;
-            updateSkyObjects(e.sky, camera, t, dayFactor, dimensionSky === 'normal', skyColor, horizonColor);
+            if (!topView) e.shared.envFogDensity.value = dimensionSky === 'normal' ? 0.0016 : dimensionSky === 'nether' ? 0.009 : 0.0035;
+            updateSkyObjects(e.sky, camera, t, dayFactor, !topView && p.viewMode === 'perspective' && dimensionSky === 'normal', skyColor, horizonColor);
           }
 
           if (now - lastStatsReport > 250) {
             const s = latestStatsRef.current;
-            propsRef.current.onStats?.({ ...s, pos: [camera.position.x, camera.position.y, camera.position.z] });
+            propsRef.current.onStats?.(statsForCamera(s, camera, p.viewMode));
             lastStatsReport = now;
           }
           if (now - lastPersist > 500) {
             const updateUrl = now - lastUrlPersist > 1500;
-            persistView(controls.getView(), updateUrl);
+            const flyView = e.flyControls.getView();
+            const view = isTopViewMode(p.viewMode)
+              ? cameraView(camera, flyView.yaw, flyView.pitch)
+              : flyView;
+            persistView(view, updateUrl);
             lastPersist = now;
             if (updateUrl) lastUrlPersist = now;
           }
@@ -548,7 +745,10 @@ export function Viewer(props: ViewerProps) {
       if (onResize) window.removeEventListener('resize', onResize);
       if (e) {
         e.renderer.setAnimationLoop(null);
-        e.controls.dispose();
+        e.flyControls.dispose();
+        e.topPerspectiveControls.dispose();
+        e.topOrthographicControls.dispose();
+        e.topMap.dispose();
         e.sky.dispose();
         for (const material of e.materials.all) material.dispose();
         e.terrainTexture.dispose();
@@ -575,7 +775,8 @@ export function Viewer(props: ViewerProps) {
     });
     manager.onStats = (s) => {
       latestStatsRef.current = s;
-      propsRef.current.onStats?.({ ...s, pos: [e.camera.position.x, e.camera.position.y, e.camera.position.z] });
+      const camera = e.activeCamera;
+      propsRef.current.onStats?.(statsForCamera(s, camera, propsRef.current.viewMode));
     };
     managerRef.current = manager;
     return () => {
@@ -594,19 +795,46 @@ export function Viewer(props: ViewerProps) {
   }, [props.viewDistance, props.lodDistance]);
 
   useEffect(() => {
-    engineRef.current?.controls.setFastMultiplier(props.fastMoveMultiplier);
+    const e = engineRef.current;
+    e?.flyControls.setFastMultiplier(props.fastMoveMultiplier);
+    e?.topPerspectiveControls.setFastMultiplier(props.fastMoveMultiplier);
+    e?.topOrthographicControls.setFastMultiplier(props.fastMoveMultiplier);
   }, [props.fastMoveMultiplier]);
+
+  useEffect(() => {
+    engineRef.current?.flyControls.setInertiaEnabled(props.inertiaEnabled);
+  }, [props.inertiaEnabled]);
 
   // 外部手动设置坐标
   useEffect(() => {
     const e = engineRef.current;
     const target = props.cameraTarget;
     if (!ready || !e || !target) return;
-    e.controls.setPosition(target.x, target.y, target.z);
-    persistView(e.controls.getView(), true);
+    if (props.viewMode === 'topPerspective') {
+      e.topPerspectiveControls.setPosition(target.x, Math.max(TOP_CAMERA_HEIGHT, target.y), target.z);
+      e.activeCamera = e.topPerspectiveCamera;
+    } else if (props.viewMode === 'topOrthographic') {
+      e.topOrthographicControls.setPosition(target.x, Math.max(TOP_CAMERA_HEIGHT, target.y), target.z);
+      e.activeCamera = e.topOrthographicCamera;
+    } else {
+      e.flyControls.setPosition(target.x, target.y, target.z);
+      e.activeCamera = e.perspectiveCamera;
+    }
+    setControlsEnabled(e, props.viewMode);
+    const flyView = e.flyControls.getView();
+    persistView(isTopViewMode(props.viewMode) ? cameraView(e.activeCamera, flyView.yaw, flyView.pitch) : flyView, true);
     const s = latestStatsRef.current;
-    propsRef.current.onStats?.({ ...s, pos: [e.camera.position.x, e.camera.position.y, e.camera.position.z] });
-    managerRef.current?.update(e.camera, performance.now(), true, e.renderer.domElement.clientHeight || window.innerHeight);
+    const camera = e.activeCamera;
+    propsRef.current.onStats?.(statsForCamera(s, camera, props.viewMode));
+    managerRef.current?.update(
+      camera,
+      performance.now(),
+      true,
+      e.renderer.domElement.clientHeight || window.innerHeight,
+      isTopViewMode(props.viewMode),
+      props.topClipRange,
+      isTopViewMode(props.viewMode) && heightmapAvailable(capabilitiesRef.current, props.dimension) ? 0 : undefined,
+    );
   }, [ready, props.cameraTarget?.seq]);
 
   return (

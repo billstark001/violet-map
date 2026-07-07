@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { DimensionDef, MeshBuffers, RenderLayer } from '@violet-map/core';
 import { fetchChunkHashes, fetchChunks, type ChunkHashPayload, type ChunkPayload } from '../api';
+import { debugLog, isDebugLoggingEnabled } from '../logger';
 import { chunkKey, type SectionMeshMsg, WorkerInit, WorkerRequest, WorkerResponse } from '../worker/protocol';
 import { getCachedFull, getCachedLod, putCachedFull, putCachedLod, type MeshCacheKeyParts } from '../meshCache';
 import type { TerrainMaterials } from './materials';
@@ -11,6 +12,7 @@ import {
   type ChunkDiagnosticEvent,
   type ChunkDiagnosticOp,
   type ChunkRenderStats,
+  type ChunkSchedulerCamera,
   type ChunkSchedulerEntry,
   type ChunkSchedulerStats,
   type ChunkState,
@@ -31,6 +33,8 @@ const WORKER_NEIGHBOR_HOLD_MS = 3500;
 const MIN_WORKER_RESIDENT_COLUMNS = 192;
 const MAX_WORKER_RESIDENT_COLUMNS = 1400;
 const WORKER_RESIDENT_FULL_PADDING = 4;
+const CHUNK_WORLD_MIN_Y = -80;
+const CHUNK_WORLD_MAX_Y = 384;
 const DIAGNOSTIC_HISTORY_LIMIT = 32;
 const DIAGNOSTIC_MIN_SAMPLES = 8;
 const DIAGNOSTIC_STDDEV_FACTOR = 3;
@@ -75,6 +79,11 @@ interface CachePartsResult {
   stable: boolean;
 }
 
+export interface TopClipRange {
+  minY: number;
+  maxY: number;
+}
+
 type IoQueueKind = 'hash' | 'fetch';
 
 interface ProfileSample {
@@ -95,6 +104,15 @@ interface ActiveDiagnosticOperation {
 
 function profileSample(): ProfileSample {
   return { total: 0, count: 0, mean: 0, m2: 0 };
+}
+
+function normalizeTopClipRange(range?: TopClipRange): TopClipRange {
+  const minY = Number.isFinite(range?.minY) ? range!.minY : CHUNK_WORLD_MIN_Y;
+  const maxY = Number.isFinite(range?.maxY) ? range!.maxY : CHUNK_WORLD_MAX_Y;
+  return {
+    minY: Math.max(CHUNK_WORLD_MIN_Y, Math.min(CHUNK_WORLD_MAX_Y, Math.min(minY, maxY))),
+    maxY: Math.max(CHUNK_WORLD_MIN_Y, Math.min(CHUNK_WORLD_MAX_Y, Math.max(minY, maxY))),
+  };
 }
 
 interface FullSectionRender {
@@ -198,6 +216,8 @@ export class ChunkManager {
   private lastUpdate = 0;
   private lodReleaseStep: LodStep = DEFAULT_LOD_RELEASE_STEP;
   private disposed = false;
+  private topDownView = false;
+  private topClipRange: TopClipRange = { minY: CHUNK_WORLD_MIN_Y, maxY: CHUNK_WORLD_MAX_Y };
   readonly root = new THREE.Group();
   onStats?: (s: ChunkSchedulerStats) => void;
 
@@ -289,6 +309,15 @@ export class ChunkManager {
     return e && e.state !== 'absent' && e.state !== 'error' && e.displayed !== 'none' ? e.surfaceY : null;
   }
 
+  displayedChunkKeys(): Set<string> {
+    const out = new Set<string>();
+    for (const e of this.chunks.values()) {
+      if (e.displayed === 'none' || !this.entryHasDisplayedMesh(e)) continue;
+      out.add(`${e.cx},${e.cz}`);
+    }
+    return out;
+  }
+
   // #endregion
 
   // #region Scheduler bridge
@@ -302,11 +331,32 @@ export class ChunkManager {
   }
 
   /** 每帧调用（内部节流）。 */
-  update(camera: THREE.PerspectiveCamera, now: number, force = false, viewportHeight = window.innerHeight) {
+  update(
+    camera: ChunkSchedulerCamera,
+    now: number,
+    force = false,
+    viewportHeight = window.innerHeight,
+    topDownView = false,
+    topClipRange?: TopClipRange,
+    lodDistanceOverride?: number,
+  ) {
+    const nextTopClipRange = normalizeTopClipRange(topClipRange);
+    const clipChanged = nextTopClipRange.minY !== this.topClipRange.minY || nextTopClipRange.maxY !== this.topClipRange.maxY;
+    const viewChanged = this.topDownView !== topDownView;
+    if (viewChanged || clipChanged) {
+      this.topDownView = topDownView;
+      this.topClipRange = nextTopClipRange;
+      if (viewChanged) this.setMeshFrustumCulled(!topDownView);
+      this.applyTopClipVisibility();
+    }
     if (!force && now - this.lastUpdate < UPDATE_INTERVAL_MS) return;
     this.lastUpdate = now;
 
-    this.scheduler.setOptions({ viewDistance: this.opts.viewDistance, lodDistance: this.opts.lodDistance });
+    this.scheduler.setOptions({
+      viewDistance: this.opts.viewDistance,
+      lodDistance: lodDistanceOverride ?? this.opts.lodDistance,
+    });
+    const entriesBefore = this.chunks.size;
     const frame = this.scheduler.planFrame(
       camera,
       now,
@@ -314,6 +364,7 @@ export class ChunkManager {
       viewportHeight,
       (cx, cz) => this.key(cx, cz),
       (key) => this.schedulerEntryForKey(key),
+      topDownView,
     );
 
     for (const candidate of frame.candidates) {
@@ -329,7 +380,8 @@ export class ChunkManager {
 
     this.scheduler.pruneQueues(frame.keepKeys, now);
     this.scheduler.expirePriorities(now);
-    for (const key of this.scheduler.evictKeys(frame.centerCx, frame.centerCz, frame.keepKeys, this.schedulerEntries(), now)) {
+    const evictedKeys = this.scheduler.evictKeys(frame.centerCx, frame.centerCz, frame.keepKeys, this.schedulerEntries(), now);
+    for (const key of evictedKeys) {
       const e = this.chunks.get(key);
       if (e) this.dropEntry(key, e);
     }
@@ -343,6 +395,20 @@ export class ChunkManager {
     this.flushFetchQueue();
     this.flushMeshQueue();
     this.updateFullSectionVisibility(camera);
+    if (isDebugLoggingEnabled()) {
+      debugLog('chunk-manager', 'update', {
+        world: this.opts.world,
+        dimension: this.opts.dimension,
+        topDownView,
+        topClipRange: this.topClipRange,
+        candidates: frame.candidates.length,
+        keepKeys: frame.keepKeys.size,
+        entriesBefore,
+        entriesAfter: this.chunks.size,
+        evicted: evictedKeys.length,
+        stats: this.schedulerStats,
+      });
+    }
     this.reportStats();
   }
 
@@ -1085,14 +1151,18 @@ export class ChunkManager {
     try {
       const seen = new Set<string>();
       const payloads = await fetchChunkHashes(this.opts.world, this.opts.dimension, entries.map((e) => ({ cx: e.cx, cz: e.cz })));
+      let missing = 0;
       for (const payload of payloads) {
         seen.add(this.key(payload.cx, payload.cz));
+        if (!payload.hash || payload.missing) missing++;
         this.handleFetchedHash(payload);
       }
       for (const e of entries) {
         if (!seen.has(this.key(e.cx, e.cz)) && e.state === 'checking') this.markUnavailable(e, 'absent', true);
       }
-    } catch {
+      debugLog('chunk-manager', 'hash-batch', { requested: entries.length, returned: payloads.length, missing });
+    } catch (error) {
+      debugLog('chunk-manager', 'hash-batch-error', { requested: entries.length, error: error instanceof Error ? error.message : String(error) });
       for (const e of entries) {
         if (e.state === 'checking') this.markUnavailable(e, 'error', false);
       }
@@ -1144,14 +1214,20 @@ export class ChunkManager {
     try {
       const seen = new Set<string>();
       const payloads = await fetchChunks(this.opts.world, this.opts.dimension, entries.map((e) => ({ cx: e.cx, cz: e.cz })));
+      let missing = 0;
+      let bytes = 0;
       for (const payload of payloads) {
         seen.add(this.key(payload.cx, payload.cz));
+        if (!payload.data || payload.missing) missing++;
+        else bytes += payload.data.byteLength;
         this.handleFetchedChunk(payload);
       }
       for (const e of entries) {
         if (!seen.has(this.key(e.cx, e.cz)) && e.state === 'fetching') this.markUnavailable(e, 'absent', true);
       }
-    } catch {
+      debugLog('chunk-manager', 'chunk-batch', { requested: entries.length, returned: payloads.length, missing, bytes });
+    } catch (error) {
+      debugLog('chunk-manager', 'chunk-batch-error', { requested: entries.length, error: error instanceof Error ? error.message : String(error) });
       for (const e of entries) {
         if (e.state === 'fetching') this.markUnavailable(e, 'error', false);
       }
@@ -1271,8 +1347,51 @@ export class ChunkManager {
     }
   }
 
-  private updateFullSectionVisibility(camera: THREE.PerspectiveCamera) {
+  private fullSectionWithinTopClip(sy: number): boolean {
+    if (!this.topDownView) return true;
+    const sectionMinY = sy * 16;
+    const sectionMaxY = sectionMinY + 16;
+    return sectionMaxY > this.topClipRange.minY && sectionMinY < this.topClipRange.maxY;
+  }
+
+  private lodVisibleForTopClip(): boolean {
+    return !this.topDownView || this.topClipRange.maxY >= CHUNK_WORLD_MAX_Y;
+  }
+
+  private applyFullSectionTopClip() {
+    for (const section of this.fullSectionIndex.values()) {
+      const visible = this.fullSectionWithinTopClip(section.sy);
+      for (const mesh of section.meshes) mesh.visible = visible;
+    }
+  }
+
+  private applyLodTopClip() {
+    const visible = this.lodVisibleForTopClip();
+    for (const e of this.chunks.values()) {
+      if (e.displayed === 'lod' && e.group) e.group.visible = visible;
+    }
+  }
+
+  private applyTopClipVisibility() {
+    if (this.topDownView) this.applyFullSectionTopClip();
+    else this.setAllFullSectionsVisible(true);
+    this.applyLodTopClip();
+  }
+
+  private setMeshFrustumCulled(value: boolean) {
+    for (const entry of this.chunks.values()) {
+      entry.group?.traverse((child) => {
+        if (child instanceof THREE.Mesh) child.frustumCulled = value;
+      });
+    }
+  }
+
+  private updateFullSectionVisibility(camera: ChunkSchedulerCamera) {
     if (!this.fullSectionIndex.size) return;
+    if (this.topDownView) {
+      this.applyFullSectionTopClip();
+      return;
+    }
     const startCx = Math.floor(camera.position.x / 16);
     const startSy = Math.floor(camera.position.y / 16);
     const startCz = Math.floor(camera.position.z / 16);
@@ -1326,12 +1445,15 @@ export class ChunkManager {
     let meshBytes = 0;
     for (const s of sections) {
       const sectionMeshes: THREE.Mesh[] = [];
+      const sectionVisible = this.fullSectionWithinTopClip(s.sy);
       for (const [layer, buffers] of Object.entries(s.layers) as [RenderLayer, MeshBuffers][]) {
+        if (!this.hasRenderableGeometry(buffers)) continue;
         const built = this.buildGeometry(buffers, true);
         meshBytes += built.bytes;
         const mesh = new THREE.Mesh(built.geometry, this.materials[layer]);
         mesh.position.set(e.cx * 16, s.sy * 16, e.cz * 16);
-        mesh.frustumCulled = true;
+        mesh.frustumCulled = !this.topDownView;
+        mesh.visible = sectionVisible;
         mesh.matrixAutoUpdate = false;
         mesh.updateMatrix();
         group.add(mesh);
@@ -1357,23 +1479,31 @@ export class ChunkManager {
     e.displayed = 'full';
     e.displayedVersion = version;
     e.displayedLodStep = 0;
-    e.fullReady = true;
+    e.fullReady = meshBytes > 0;
+    debugLog('chunk-manager', 'display-full', {
+      key: e.key,
+      sections: e.fullSections.length,
+      meshBytes: e.meshBytes,
+      topDownView: this.topDownView,
+      topClipRange: this.topClipRange,
+    });
     this.reportStats();
   }
 
   private displayLod(e: ChunkEntry, meshBuffers: MeshBuffers | null, version: number, step: number) {
     this.removeMesh(e);
-    if (meshBuffers) {
+    if (meshBuffers && this.hasRenderableGeometry(meshBuffers)) {
       const built = this.buildGeometry(meshBuffers, false);
       e.meshBytes = built.bytes;
       this.displayedMeshBytes += e.meshBytes;
       const mesh = new THREE.Mesh(built.geometry, this.materials.lod);
       mesh.position.set(e.cx * 16, 0, e.cz * 16);
-      mesh.frustumCulled = true;
+      mesh.frustumCulled = !this.topDownView;
       mesh.matrixAutoUpdate = false;
       mesh.updateMatrix();
       const group = new THREE.Group();
       group.add(mesh);
+      group.visible = this.lodVisibleForTopClip();
       this.root.add(group);
       e.group = group;
     } else {
@@ -1382,12 +1512,17 @@ export class ChunkManager {
     e.displayed = 'lod';
     e.displayedVersion = version;
     e.displayedLodStep = step;
-    e.lodReadyStep = step;
+    e.lodReadyStep = e.meshBytes > 0 ? step : 0;
     if (e.lastTargetStep === 1) {
       this.scheduler.scheduleStoredFromLastPriority(e, performance.now());
       this.flushMeshQueue();
     }
+    debugLog('chunk-manager', 'display-lod', { key: e.key, step, meshBytes: e.meshBytes, visible: e.group?.visible ?? false });
     this.reportStats();
+  }
+
+  private hasRenderableGeometry(b: MeshBuffers): boolean {
+    return b.positions.length > 0 && b.indices.length > 0;
   }
 
   private buildGeometry(b: MeshBuffers, sectionBounds: boolean): { geometry: THREE.BufferGeometry; bytes: number } {
@@ -1442,14 +1577,31 @@ export class ChunkManager {
 
   // #region Stats
 
+  private entryHasVisibleMesh(e: ChunkEntry): boolean {
+    if (!e.group || !e.group.visible) return false;
+    let visible = false;
+    e.group.traverse((child) => {
+      if (visible) return;
+      if (child instanceof THREE.Mesh && child.visible) visible = true;
+    });
+    return visible;
+  }
+
+  private entryHasDisplayedMesh(e: ChunkEntry): boolean {
+    if (!e.group || !e.group.visible) return false;
+    if (e.displayed === 'lod') return e.group.children.some((child) => child instanceof THREE.Mesh && child.visible);
+    if (e.displayed !== 'full') return false;
+    return e.fullSections.some((section) => section.meshes.some((mesh) => mesh.visible));
+  }
+
   private collectRenderStats(): ChunkRenderStats {
     let nbt = 0, lodReady = 0, lodRendered = 0, fullReady = 0, fullRendered = 0;
     for (const e of this.chunks.values()) {
       if (e.state === 'decoding' || e.state === 'stored') nbt++;
       if (e.lodReadyStep > 0) lodReady++;
-      if (e.displayed === 'lod' && e.group) lodRendered++;
+      if (e.displayed === 'lod' && this.entryHasVisibleMesh(e)) lodRendered++;
       if (e.fullReady) fullReady++;
-      if (e.displayed === 'full' && e.group) fullRendered++;
+      if (e.displayed === 'full' && this.entryHasVisibleMesh(e)) fullRendered++;
     }
     return { nbt, lodReady, lodRendered, fullReady, fullRendered };
   }

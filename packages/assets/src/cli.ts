@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { assetsUsage, runAssetsCommand } from './commands/assets.js';
-import { runBakeHeightmap, runBakeLod } from './commands/bake.js';
+import { runBakeHeightmap } from './commands/bake.js';
 import { runProfileMca } from './commands/profileMca.js';
 
 function usage(): string {
@@ -9,7 +9,6 @@ function usage(): string {
 Usage:
   vm-assets assets <list|extract|extract-all|generate-biomes|generate-dimensions> [...]
   vm-assets profile-mca <file.mca> [...]
-  vm-assets bake-lod <world> [...]
   vm-assets bake-heightmap <world> [...]
 
 ${assetsUsage()}`;
@@ -27,9 +26,6 @@ async function main() {
       break;
     case 'profile-mca':
       await runProfileMca(args);
-      break;
-    case 'bake-lod':
-      await runBakeLod(args);
       break;
     case 'bake-heightmap':
       await runBakeHeightmap(args);

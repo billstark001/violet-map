@@ -13,6 +13,62 @@ export const fetchBlockInfo = () => json<BlockInfoMap>('/api/data/blocks');
 export const fetchBiomes = () => json<BiomeMap>('/api/data/biomes');
 export const fetchDimensions = () => json<DimensionMap>('/api/data/dimensions');
 
+export interface DimensionCapabilities {
+  hasTopMap: boolean;
+  hasHeightmap: boolean;
+}
+
+export interface WorldCapabilities {
+  world: string;
+  hasTopMap: boolean;
+  hasHeightmap: boolean;
+  dimensions: Record<string, DimensionCapabilities>;
+}
+
+export interface TopMapRegionManifestEntry {
+  x: number;
+  z: number;
+  hash: string;
+}
+
+export interface TopMapRegionSourceEntry extends TopMapRegionManifestEntry {
+  empty: boolean;
+}
+
+export interface TopMapTileSetManifest {
+  tileSizeBlocks: number;
+  sampleStride: number;
+  colorStride: number;
+  colorVersion: number;
+  format: 'msgpack';
+  regions: TopMapRegionManifestEntry[];
+  sources: TopMapRegionSourceEntry[];
+}
+
+export interface TopMapDimensionManifest extends DimensionCapabilities {
+  world: string;
+  dimension: string;
+  heightmap?: TopMapTileSetManifest;
+}
+
+export interface HeightmapTilePayload {
+  schema: 5;
+  kind: 'heightmap-region';
+  dimension: string;
+  region: { x: number; z: number };
+  origin: { x: number; z: number };
+  size: { blocks: number; samples: number; colorSamples: number };
+  sampleStride: number;
+  colorStride: number;
+  chunks: number;
+  minY: number;
+  maxY: number;
+  heightEncoding: 'int16le';
+  colorEncoding: 'rgba8888';
+  heights: Uint8Array;
+  colors: Uint8Array;
+}
+
 export interface ChunkPayload extends ChunkHashPayload { data?: Uint8Array }
 export interface ChunkHashPayload {
   cx: number;
@@ -88,3 +144,24 @@ export const fetchTextureAtlas = (ids: string[]) =>
   });
 
 export const textureUrl = (id: string) => `/api/assets/texture/${id}`;
+
+export const fetchWorldCapabilities = (world: string) =>
+  json<WorldCapabilities>(`/api/worlds/${encodeURIComponent(world)}/capabilities`);
+
+export const fetchTopMapManifest = (world: string, dim: string) =>
+  json<TopMapDimensionManifest>(
+    `/api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/top-map/manifest`,
+  );
+
+export async function fetchTopMapHeightmapTile(
+  world: string,
+  dim: string,
+  rx: number,
+  rz: number,
+): Promise<HeightmapTilePayload> {
+  const res = await fetch(`/api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/top-map/heightmap/${rx}/${rz}`, {
+    headers: { accept: 'application/msgpack' },
+  });
+  if (!res.ok) throw new Error(`top-map heightmap fetch failed: ${res.status}`);
+  return decode(new Uint8Array(await res.arrayBuffer())) as HeightmapTilePayload;
+}

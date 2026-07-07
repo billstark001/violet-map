@@ -10,16 +10,18 @@
     "dev": "tsx src/cli.ts",
     "assets": "tsx src/cli.ts assets",
     "profile-mca": "tsx src/cli.ts profile-mca",
-    "bake-lod": "tsx src/cli.ts bake-lod",
     "bake-heightmap": "tsx src/cli.ts bake-heightmap",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@msgpack/msgpack": "^3.1.3",
     "@violet-map/core": "workspace:*",
-    "minecraft-data": "^3.111.0"
+    "minecraft-data": "^3.111.0",
+    "pngjs": "^7.0.0"
   },
   "devDependencies": {
     "@types/node": "^26.1.0",
+    "@types/pngjs": "^6.0.5",
     "tsx": "^4.23.0",
     "typescript": "^6.0.3"
   }

@@ -1,22 +1,26 @@
 import { useEffect, useRef, useState } from 'react';
-import { Badge, Box, Button, Card, Flex, Select, Slider, Tabs, Text, TextField, Theme } from '@radix-ui/themes';
+import { Badge, Box, Button, Card, Flex, Select, Slider, Switch, Tabs, Text, TextField, Theme } from '@radix-ui/themes';
 import { useTranslation } from 'react-i18next';
 import { fetchWorlds } from './api';
+import { Compass } from './Compass';
 import { languageOptions } from './i18n';
+import { clearDebugLog, setDebugLoggingEnabled } from './logger';
 import { clearMeshCache, getMeshCacheStats } from './meshCache';
-import { Viewer, type CameraPositionRequest } from './render/Viewer';
-import { EMPTY_CHUNK_SCHEDULER_STATS, type ChunkSchedulerStats } from './render/chunkScheduler';
+import { Viewer, type CameraPositionRequest, type ViewerStatsPayload, type ViewMode } from './render/Viewer';
+import { EMPTY_CHUNK_SCHEDULER_STATS } from './render/chunkScheduler';
+import type { TopClipRange } from './render/chunkManager';
 
 interface WorldInfo { id: string; dimensions: string[] }
 type Axis = 'x' | 'y' | 'z';
 type DiagnosticDetail = 'off' | 'simple' | 'standard' | 'detailed';
-interface ViewerStats extends ChunkSchedulerStats {
-  pos: [number, number, number];
-}
+type ViewerStats = ViewerStatsPayload;
 
 const SETTINGS_STORAGE_KEY = 'violet-map:settings';
 const PANEL_STORAGE_KEY = 'violet-map:panel-collapsed';
 const DIAGNOSTIC_PANEL_STORAGE_KEY = 'violet-map:diagnostic-panel-collapsed';
+const TOP_CLIP_MIN_Y = -80;
+const TOP_CLIP_MAX_Y = 384;
+const TOP_CLIP_STEP = 16;
 
 interface ViewerSettings {
   world?: string;
@@ -24,7 +28,11 @@ interface ViewerSettings {
   viewDistance?: number;
   lodDistance?: number;
   fastMoveMultiplier?: number;
+  inertiaEnabled?: boolean;
+  viewMode?: ViewMode;
+  topClipRanges?: Record<string, TopClipRange>;
   timeOfDay?: number;
+  debugLoggingEnabled?: boolean;
   diagnosticDetail?: DiagnosticDetail;
 }
 
@@ -71,6 +79,69 @@ function diagnosticDetailSetting(): DiagnosticDetail {
     : 'standard';
 }
 
+function booleanSetting(key: keyof ViewerSettings, fallback: boolean): boolean {
+  const query = params.get(key);
+  if (query !== null) return query === 'true' || query === '1';
+  try {
+    const saved = readSavedSettings();
+    const value = saved[key];
+    return typeof value === 'boolean' ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function viewModeSetting(): ViewMode {
+  const value = stringSetting('viewMode', 'perspective');
+  return value === 'topPerspective' || value === 'topOrthographic' ? value : 'perspective';
+}
+
+function snapTopClipY(value: number): number {
+  if (!Number.isFinite(value)) return TOP_CLIP_MIN_Y;
+  const snapped = Math.round(value / TOP_CLIP_STEP) * TOP_CLIP_STEP;
+  return Math.max(TOP_CLIP_MIN_Y, Math.min(TOP_CLIP_MAX_Y, snapped));
+}
+
+function normalizeTopClipRange(range: TopClipRange): TopClipRange {
+  const minY = snapTopClipY(range.minY);
+  const maxY = snapTopClipY(range.maxY);
+  return {
+    minY: Math.min(minY, maxY),
+    maxY: Math.max(minY, maxY),
+  };
+}
+
+function defaultTopClipRange(dimension: string): TopClipRange {
+  if (dimension === 'minecraft:the_nether') return { minY: TOP_CLIP_MIN_Y, maxY: 96 };
+  if (dimension === 'minecraft:overworld') return { minY: 16, maxY: TOP_CLIP_MAX_Y };
+  return { minY: TOP_CLIP_MIN_Y, maxY: TOP_CLIP_MAX_Y };
+}
+
+function topClipRangeSetting(dimension: string): TopClipRange {
+  const fallback = defaultTopClipRange(dimension);
+  if (params.has('topClipMinY') || params.has('topClipMaxY')) {
+    const minParam = params.get('topClipMinY');
+    const maxParam = params.get('topClipMaxY');
+    const minQuery = minParam === null ? NaN : Number(minParam);
+    const maxQuery = maxParam === null ? NaN : Number(maxParam);
+    return normalizeTopClipRange({
+      minY: Number.isFinite(minQuery) ? minQuery : fallback.minY,
+      maxY: Number.isFinite(maxQuery) ? maxQuery : fallback.maxY,
+    });
+  }
+  try {
+    const saved = readSavedSettings().topClipRanges?.[dimension];
+    if (saved && Number.isFinite(saved.minY) && Number.isFinite(saved.maxY)) return normalizeTopClipRange(saved);
+  } catch {
+    // Ignore malformed persisted settings.
+  }
+  return fallback;
+}
+
+function initialViewerStats(viewMode: ViewMode): ViewerStats {
+  return { ...EMPTY_CHUNK_SCHEDULER_STATS, pos: [0, 0, 0], yaw: 0, pitch: 0, viewMode };
+}
+
 function coordText(v: number): string {
   if (!Number.isFinite(v)) return '0';
   const rounded = Math.round(v * 10) / 10;
@@ -106,12 +177,16 @@ export default function App() {
   const [viewDistance, setViewDistance] = useState(() => numberSetting('viewDistance', 8));
   const [lodDistance, setLodDistance] = useState(() => numberSetting('lodDistance', 12));
   const [fastMoveMultiplier, setFastMoveMultiplier] = useState(() => numberSetting('fastMoveMultiplier', 4));
+  const [inertiaEnabled, setInertiaEnabled] = useState(() => booleanSetting('inertiaEnabled', false));
+  const [viewMode, setViewMode] = useState<ViewMode>(() => viewModeSetting());
+  const [topClipRange, setTopClipRange] = useState<TopClipRange>(() => topClipRangeSetting(stringSetting('dimension', 'minecraft:overworld')));
   const [timeOfDay, setTimeOfDay] = useState(() => numberSetting('timeOfDay', 0));
+  const [debugLoggingEnabled, setDebugLoggingEnabledState] = useState(() => booleanSetting('debugLoggingEnabled', false));
   const [diagnosticDetail, setDiagnosticDetail] = useState<DiagnosticDetail>(() => diagnosticDetailSetting());
   const [panelCollapsed, setPanelCollapsed] = useState(() => localStorage.getItem(PANEL_STORAGE_KEY) === 'true');
   const [diagnosticCollapsed, setDiagnosticCollapsed] = useState(() => localStorage.getItem(DIAGNOSTIC_PANEL_STORAGE_KEY) === 'true');
-  const [stats, setStats] = useState<ViewerStats>({ ...EMPTY_CHUNK_SCHEDULER_STATS, pos: [0, 0, 0] });
-  const latestStatsRef = useRef<ViewerStats>({ ...EMPTY_CHUNK_SCHEDULER_STATS, pos: [0, 0, 0] });
+  const [stats, setStats] = useState<ViewerStats>(() => initialViewerStats(viewMode));
+  const latestStatsRef = useRef<ViewerStats>(initialViewerStats(viewMode));
   const [panelTab, setPanelTab] = useState('view');
   const [cacheStats, setCacheStats] = useState({ entries: 0, bytes: 0 });
   const [coordDirty, setCoordDirty] = useState(false);
@@ -126,7 +201,11 @@ export default function App() {
         const selectedWorld = ws.find((w) => w.id === world)?.id ?? ws[0].id;
         const dims = ws.find((w) => w.id === selectedWorld)?.dimensions ?? [];
         setWorld(selectedWorld);
-        setDimension((d) => dims.includes(d) ? d : (dims[0] ?? 'minecraft:overworld'));
+        setDimension((d) => {
+          const nextDimension = dims.includes(d) ? d : (dims[0] ?? 'minecraft:overworld');
+          if (nextDimension !== d) setTopClipRange(topClipRangeSetting(nextDimension));
+          return nextDimension;
+        });
       }
       setWorldsLoaded(true);
     }).catch(console.error);
@@ -144,13 +223,36 @@ export default function App() {
       if (!params.has('viewDistance')) next.viewDistance = viewDistance;
       if (!params.has('lodDistance')) next.lodDistance = lodDistance;
       if (!params.has('fastMoveMultiplier')) next.fastMoveMultiplier = fastMoveMultiplier;
+      if (!params.has('inertiaEnabled')) next.inertiaEnabled = inertiaEnabled;
+      if (!params.has('viewMode')) next.viewMode = viewMode;
+      if (!params.has('topClipMinY') && !params.has('topClipMaxY')) {
+        next.topClipRanges = { ...(previous.topClipRanges ?? {}), [dimension]: topClipRange };
+      }
       if (!params.has('timeOfDay')) next.timeOfDay = timeOfDay;
+      if (!params.has('debugLoggingEnabled')) next.debugLoggingEnabled = debugLoggingEnabled;
       if (!params.has('diagnosticDetail')) next.diagnosticDetail = diagnosticDetail;
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(next));
     } catch {
       // Storage may be unavailable in restricted contexts.
     }
-  }, [world, dimension, viewDistance, lodDistance, fastMoveMultiplier, timeOfDay, diagnosticDetail, worldsLoaded]);
+  }, [
+    world,
+    dimension,
+    viewDistance,
+    lodDistance,
+    fastMoveMultiplier,
+    inertiaEnabled,
+    viewMode,
+    topClipRange,
+    timeOfDay,
+    debugLoggingEnabled,
+    diagnosticDetail,
+    worldsLoaded,
+  ]);
+
+  useEffect(() => {
+    setDebugLoggingEnabled(debugLoggingEnabled);
+  }, [debugLoggingEnabled]);
 
   useEffect(() => {
     try {
@@ -188,12 +290,11 @@ export default function App() {
   const dims = worlds.find((w) => w.id === world)?.dimensions ?? [];
   const draftValues = [Number(coordDraft.x), Number(coordDraft.y), Number(coordDraft.z)] as const;
   const draftValid = draftValues.every(Number.isFinite);
-  const diagnosticsVisible = diagnosticDetail !== 'off' && !diagnosticCollapsed;
   const showStandardDiagnostics = diagnosticDetail === 'standard' || diagnosticDetail === 'detailed';
   const showDetailedDiagnostics = diagnosticDetail === 'detailed';
   const handleStats = (next: typeof stats) => {
     latestStatsRef.current = next;
-    if (diagnosticsVisible) setStats(next);
+    setStats(next);
     if (!coordDirty) {
       const draft = { x: coordText(next.pos[0]), y: coordText(next.pos[1]), z: coordText(next.pos[2]) };
       setCoordDraft((prev) => (
@@ -214,6 +315,19 @@ export default function App() {
     if (!draftValid) return;
     setCoordDirty(false);
     setCameraTarget({ x: draftValues[0], y: draftValues[1], z: draftValues[2], seq: Date.now() });
+  };
+  const changeDimension = (value: string) => {
+    setDimension(value);
+    setTopClipRange(topClipRangeSetting(value));
+  };
+  const setTopClipMinY = (value: number) => {
+    setTopClipRange((prev) => normalizeTopClipRange({ minY: Math.min(value, prev.maxY), maxY: prev.maxY }));
+  };
+  const setTopClipMaxY = (value: number) => {
+    setTopClipRange((prev) => normalizeTopClipRange({ minY: prev.minY, maxY: Math.max(value, prev.minY) }));
+  };
+  const resetTopClipRange = () => {
+    setTopClipRange(defaultTopClipRange(dimension));
   };
   const changeLanguage = (lng: string) => {
     void i18n.changeLanguage(lng);
@@ -239,16 +353,19 @@ export default function App() {
           <Viewer
             world={world} dimension={dimension}
             viewDistance={viewDistance} lodDistance={lodDistance}
-            fastMoveMultiplier={fastMoveMultiplier}
+            fastMoveMultiplier={fastMoveMultiplier} inertiaEnabled={inertiaEnabled} viewMode={viewMode}
+            topClipRange={topClipRange}
             timeOfDay={timeOfDay} cameraTarget={cameraTarget} onStats={handleStats}
           />
         )}
-        {/* 准星 */}
-        <div style={{
-          position: 'absolute', left: '50%', top: '50%', width: 12, height: 12,
-          transform: 'translate(-50%,-50%)', pointerEvents: 'none',
-          background: 'radial-gradient(circle, rgba(255,255,255,.8) 0 1.5px, transparent 2px)',
-        }} />
+        {viewMode === 'perspective' && (
+          <div style={{
+            position: 'absolute', left: '50%', top: '50%', width: 12, height: 12,
+            transform: 'translate(-50%,-50%)', pointerEvents: 'none',
+            background: 'radial-gradient(circle, rgba(255,255,255,.8) 0 1.5px, transparent 2px)',
+          }} />
+        )}
+        <Compass yaw={stats.yaw} pitch={stats.pitch} viewMode={viewMode} />
         <Card style={{
           position: 'absolute',
           top: 12,
@@ -292,7 +409,7 @@ export default function App() {
                       </Flex>
                       <Flex gap="2" align="center">
                         <Text size="1" style={{ width: 64 }}>{t('dimension')}</Text>
-                        <Select.Root value={dimension} onValueChange={setDimension}>
+                        <Select.Root value={dimension} onValueChange={changeDimension}>
                           <Select.Trigger style={{ flex: 1 }} />
                           <Select.Content>
                             {dims.map((d) => <Select.Item key={d} value={d}>{d.replace('minecraft:', '')}</Select.Item>)}
@@ -308,6 +425,41 @@ export default function App() {
                       <Box>
                         <Text size="1">{t('fastMove', { value: fastMoveMultiplier.toFixed(1) })}</Text>
                         <Slider value={[fastMoveMultiplier]} min={1} max={16} step={0.5} onValueChange={([v]) => setFastMoveMultiplier(v)} />
+                      </Box>
+                      <Flex gap="2" align="center" justify="between">
+                        <Text as="label" size="1" htmlFor="inertia-toggle">{t('inertia')}</Text>
+                        <Switch id="inertia-toggle" checked={inertiaEnabled} onCheckedChange={setInertiaEnabled} />
+                      </Flex>
+                      <Flex gap="2" align="center">
+                        <Text size="1" style={{ width: 64 }}>{t('viewMode')}</Text>
+                        <Select.Root value={viewMode} onValueChange={(value) => setViewMode(value as ViewMode)}>
+                          <Select.Trigger style={{ flex: 1 }} />
+                          <Select.Content>
+                            <Select.Item value="perspective">{t('viewModePerspective')}</Select.Item>
+                            <Select.Item value="topPerspective">{t('viewModeTopPerspective')}</Select.Item>
+                            <Select.Item value="topOrthographic">{t('viewModeTopOrthographic')}</Select.Item>
+                          </Select.Content>
+                        </Select.Root>
+                      </Flex>
+                      <Box>
+                        <Text size="1">{t('topClipMinY', { value: topClipRange.minY })}</Text>
+                        <Slider
+                          value={[topClipRange.minY]}
+                          min={TOP_CLIP_MIN_Y}
+                          max={TOP_CLIP_MAX_Y}
+                          step={TOP_CLIP_STEP}
+                          onValueChange={([v]) => setTopClipMinY(v)}
+                        />
+                        <Text mt="2" size="1">{t('topClipMaxY', { value: topClipRange.maxY })}</Text>
+                        <Slider
+                          mt="1"
+                          value={[topClipRange.maxY]}
+                          min={TOP_CLIP_MIN_Y}
+                          max={TOP_CLIP_MAX_Y}
+                          step={TOP_CLIP_STEP}
+                          onValueChange={([v]) => setTopClipMaxY(v)}
+                        />
+                        <Button mt="2" size="1" variant="soft" onClick={resetTopClipRange}>{t('topClipReset')}</Button>
                       </Box>
                       <Box>
                         <Text size="1">{t('timeOfDay', { value: timeOfDay.toFixed(2) })}</Text>
@@ -355,6 +507,13 @@ export default function App() {
                             <Select.Item value="detailed">{t('diagnosticsDetailed')}</Select.Item>
                           </Select.Content>
                         </Select.Root>
+                      </Flex>
+                      <Flex gap="2" align="center" justify="between">
+                        <Text as="label" size="1" htmlFor="debug-logging-toggle">{t('debugLogging')}</Text>
+                        <Switch id="debug-logging-toggle" checked={debugLoggingEnabled} onCheckedChange={setDebugLoggingEnabledState} />
+                      </Flex>
+                      <Flex gap="2">
+                        <Button size="1" variant="soft" onClick={clearDebugLog}>{t('clearDebugLog')}</Button>
                       </Flex>
                       <Box>
                         <Text size="1" weight="bold">{t('meshCache')}</Text>

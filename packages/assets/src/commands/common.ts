@@ -8,13 +8,17 @@ import {
   AIR_NAMES,
   ChunkColumn,
   ChunkNeighborhood,
+  MISSING_TEXTURE,
   ModelBaker,
+  normalizeId,
   computeColumnLight,
   hexToRgb,
   meshLodChunk,
   meshSection,
   parseChunkColumn,
+  resolveBiomeColors,
   type AssetBundle,
+  type BiomeMap,
   type BlockModelJson,
   type AtlasIndex,
   type BlockInfo,
@@ -22,12 +26,15 @@ import {
   type BlockStateRef,
   type MesherResources,
   type MeshBuffers,
+  type ResolvedBiomeColors,
   type Rgb,
   type SectionMeshes,
   type TintType,
 } from '@violet-map/core';
 import { parseNbt } from '@violet-map/core/nbt';
 import { iterateRegionChunks } from '@violet-map/core/region';
+import minecraftData from 'minecraft-data';
+import { PNG } from 'pngjs';
 
 export interface ArgReader {
   get(names: string | string[], fallback?: string): string | undefined;
@@ -77,6 +84,7 @@ export const fakeAtlas = new Proxy(Object.create(null), {
 const REGION_RE = /^r\.(-?\d+)\.(-?\d+)\.mca$/;
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const REPO_ROOT = path.resolve(PACKAGE_ROOT, '../..');
+type BiomeColorMap = Record<string, ResolvedBiomeColors>;
 
 export function argsReader(args: string[]): ArgReader {
   return {
@@ -146,8 +154,42 @@ export function hashColor(id: string): Rgb {
   return [r, g, b];
 }
 
-export function tintOf(type: TintType, fixed: number | undefined): Rgb {
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+function redstoneTint(state?: BlockStateRef): Rgb {
+  const power = Math.min(15, Math.max(0, Number(state?.properties.power ?? '0') || 0));
+  const f = power / 15;
+  return [
+    power === 0 ? 0.3 : f * 0.6 + 0.4,
+    clamp01(f * f * 0.7 - 0.5),
+    clamp01(f * f * 0.6 - 0.7),
+  ];
+}
+
+function stemTint(state?: BlockStateRef): Rgb {
+  const age = Math.min(7, Math.max(0, Number(state?.properties.age ?? '0') || 0));
+  return [age * 32 / 255, (255 - age * 8) / 255, age * 4 / 255];
+}
+
+export function tintOf(
+  type: TintType,
+  fixed: number | undefined,
+  biome = 'minecraft:plains',
+  biomeColors?: BiomeColorMap | null,
+  state?: BlockStateRef,
+): Rgb {
   if (fixed !== undefined) return hexToRgb(fixed);
+  if (type === 'redstone') return redstoneTint(state);
+  if (type === 'stem') return stemTint(state);
+  if (type === 'attachedStem') return hexToRgb(0xe0c71c);
+  const resolved = biomeColors?.[biome] ?? biomeColors?.default ?? biomeColors?.['minecraft:plains'];
+  if (resolved) {
+    if (type === 'grass') return resolved.grass;
+    if (type === 'foliage') return resolved.foliage;
+    if (type === 'water') return resolved.water;
+  }
   if (type === 'grass') return [0.48, 0.68, 0.29];
   if (type === 'foliage') return [0.36, 0.58, 0.25];
   if (type === 'water') return [0.25, 0.42, 0.95];
@@ -179,9 +221,278 @@ export function makeColorOf(infoOf: (name: string) => BlockInfo): (state: BlockS
   };
 }
 
+function stateKey(state: BlockStateRef): string {
+  const keys = Object.keys(state.properties).sort();
+  return `${state.name}[${keys.map((k) => `${k}=${state.properties[k]}`).join(',')}]`;
+}
+
+function textureIdForPath(namespace: string, rel: string): string {
+  return `${namespace}:${rel.slice(0, -4)}`;
+}
+
+function splitAssetDirs(value: string | undefined): string[] {
+  return (value ?? '').split(',').map((p) => p.trim()).filter(Boolean).map((p) => resolvePath(p));
+}
+
+export function resolveAssetDirs(value?: string): string[] {
+  const explicit = splitAssetDirs(value);
+  if (explicit.length) return explicit;
+  const env = splitAssetDirs(process.env.ASSETS_DIRS);
+  if (env.length) return env;
+  return [resolvePath('packages/server/data/assets')];
+}
+
+function averagePngColor(bytes: Uint8Array): Rgb | null {
+  try {
+    const png = PNG.sync.read(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    let n = 0;
+    for (let i = 0; i < png.data.length; i += 4) {
+      const alpha = png.data[i + 3];
+      if (alpha < 32) continue;
+      r += png.data[i];
+      g += png.data[i + 1];
+      b += png.data[i + 2];
+      n++;
+    }
+    return n ? [r / n / 255, g / n / 255, b / n / 255] : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readTextureAverageColors(assetDirs: string[]): Promise<Map<string, Rgb>> {
+  const colors = new Map<string, Rgb>();
+  for (const dir of assetDirs.map((d) => resolvePath(d))) {
+    let namespaces: string[] = [];
+    try {
+      namespaces = (await fs.readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+    } catch {
+      continue;
+    }
+    for (const ns of namespaces) {
+      await readPngTree(path.join(dir, ns, 'textures'), async (rel, file) => {
+        const avg = averagePngColor(await fs.readFile(file));
+        if (avg) colors.set(textureIdForPath(ns, rel), avg);
+      });
+    }
+  }
+  return colors;
+}
+
+async function readPngTree(dir: string, onFile: (rel: string, file: string) => Promise<void>, rel = ''): Promise<void> {
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  await Promise.all(entries.map(async (entry) => {
+    const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+    const file = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      await readPngTree(file, onFile, childRel);
+    } else if (entry.isFile() && entry.name.endsWith('.png')) {
+      await onFile(childRel, file);
+    }
+  }));
+}
+
+function dataFileCandidates(name: string, explicit?: string): string[] {
+  if (explicit) return [resolvePath(explicit)];
+  const out: string[] = [];
+  const dataDir = process.env.DATA_DIR ? resolvePath(process.env.DATA_DIR) : null;
+  const version = process.env.MC_VERSION;
+  if (dataDir && version) out.push(path.join(dataDir, 'versions', version, name));
+  if (dataDir) out.push(path.join(dataDir, name));
+  if (version) out.push(path.join(REPO_ROOT, 'packages/server/data-defaults/versions', version, name));
+  out.push(path.join(REPO_ROOT, 'packages/server/data-defaults', name));
+  return out;
+}
+
+async function readJsonFirst<T>(candidates: string[]): Promise<T | null> {
+  for (const file of candidates) {
+    try {
+      return JSON.parse(await fs.readFile(file, 'utf8')) as T;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
+}
+
+async function readColormapFromAssets(assetDirs: string[], name: string): Promise<Uint8Array | null> {
+  for (const dir of assetDirs.map((d) => resolvePath(d))) {
+    const file = path.join(dir, 'minecraft/textures/colormap', `${name}.png`);
+    try {
+      const png = PNG.sync.read(await fs.readFile(file));
+      if (png.width !== 256 || png.height !== 256) continue;
+      return Uint8Array.from(png.data);
+    } catch {
+      // Try the next asset directory.
+    }
+  }
+  return null;
+}
+
+export async function loadBiomeColors(assetDirs: string[], biomesFile?: string): Promise<BiomeColorMap | null> {
+  const biomes = await readJsonFirst<BiomeMap>(dataFileCandidates('biomes.json', biomesFile));
+  if (!biomes) return null;
+  const [grass, foliage] = await Promise.all([
+    readColormapFromAssets(assetDirs, 'grass'),
+    readColormapFromAssets(assetDirs, 'foliage'),
+  ]);
+  return resolveBiomeColors(biomes, grass, foliage);
+}
+
+function inferredTint(state: BlockStateRef, info: BlockInfo): TintType {
+  if (info.tint !== 'none') return info.tint;
+  const name = localName(state.name);
+  if (name.includes('water') || name.includes('seagrass') || name.includes('kelp')) return 'water';
+  if (name.includes('leaves') || name.includes('vine')) return 'foliage';
+  if (name.includes('grass') || name.includes('fern')) return 'grass';
+  return 'none';
+}
+
+function firstAverageTexture(textureColors: Map<string, Rgb>, ids: string[]): Rgb | null {
+  for (const id of ids) {
+    const avg = textureColors.get(id);
+    if (avg) return avg;
+  }
+  return null;
+}
+
+function fallbackTexturesForBlock(name: string): string[] {
+  const local = localName(name);
+  const textures: string[] = [];
+  if (name === 'minecraft:grass_block') textures.push('minecraft:block/grass_block_top', 'minecraft:block/grass_block_side_overlay', 'minecraft:block/grass_block_side');
+  if (name === 'minecraft:podzol') textures.push('minecraft:block/podzol_top', 'minecraft:block/dirt');
+  if (name === 'minecraft:mycelium') textures.push('minecraft:block/mycelium_top', 'minecraft:block/dirt');
+  if (name === 'minecraft:dirt_path') textures.push('minecraft:block/dirt_path_top', 'minecraft:block/dirt');
+  if (name === 'minecraft:farmland') textures.push('minecraft:block/farmland_moist', 'minecraft:block/farmland', 'minecraft:block/dirt');
+  if (name === 'minecraft:short_grass' || name === 'minecraft:grass') textures.push('minecraft:block/short_grass', 'minecraft:block/grass');
+  if (name === 'minecraft:tall_grass') textures.push('minecraft:block/tall_grass_top', 'minecraft:block/tall_grass_bottom', 'minecraft:block/short_grass');
+  if (name === 'minecraft:fern') textures.push('minecraft:block/fern');
+  if (local.endsWith('_leaves')) textures.push(`minecraft:block/${local}`);
+  if (local.endsWith('_log') || local.endsWith('_stem') || local.endsWith('_hyphae')) textures.push(`minecraft:block/${local}_top`, `minecraft:block/${local}`);
+  textures.push(`minecraft:block/${local}_top`, `minecraft:block/${local}`);
+  return Array.from(new Set(textures));
+}
+
+function fallbackSurfaceColor(
+  state: BlockStateRef,
+  biome: string,
+  fallbackColorOf: (state: BlockStateRef, biome: string) => Rgb,
+  infoOf: (name: string) => BlockInfo,
+  textureColors: Map<string, Rgb>,
+  biomeColors?: BiomeColorMap | null,
+): Rgb {
+  const found = firstAverageTexture(textureColors, fallbackTexturesForBlock(state.name));
+  if (found) {
+    const info = infoOf(state.name);
+    const tint = info.tint !== 'none'
+      ? tintOf(info.tint, info.fixedTint, biome, biomeColors, state)
+      : tintOf(inferredTint(state, info), info.fixedTint, biome, biomeColors, state);
+    return [found[0] * tint[0], found[1] * tint[1], found[2] * tint[2]];
+  }
+  const name = localName(state.name);
+  if (name.includes('water')) return tintOf('water', undefined, biome, biomeColors, state);
+  if (name.includes('lava')) return [1, 0.34, 0.05];
+  return fallbackColorOf(state, biome);
+}
+
+export async function makeTextureColorOf(
+  assetDirs: string[],
+  infoOf: (name: string) => BlockInfo,
+  biomeColors?: BiomeColorMap | null,
+): Promise<((state: BlockStateRef, biome: string) => Rgb) | null> {
+  const bundle = await loadAssetBundleFromDirs(assetDirs);
+  if (!Object.keys(bundle.blockstates).length && !Object.keys(bundle.models).length) return null;
+  const textureColors = await readTextureAverageColors(assetDirs);
+  if (!textureColors.size) return null;
+  const baker = new ModelBaker(bundle);
+  const cache = new Map<string, Rgb>();
+  const fallbackColorOf = makeColorOf(infoOf);
+  return (state, biome) => {
+    if (AIR_NAMES.has(state.name)) return [0, 0, 0];
+    const key = `${stateKey(state)}|${biomeColors ? biome : ''}`;
+    const cached = cache.get(key);
+    if (cached) return cached;
+    const info = infoOf(state.name);
+    let color: Rgb | null = null;
+    if (info.fluid) {
+      const avg = textureColors.get(info.fluid.texture) ?? [1, 1, 1];
+      const tint = tintOf(info.fluid.tint, undefined, biome, biomeColors, state);
+      color = [avg[0] * tint[0], avg[1] * tint[1], avg[2] * tint[2]];
+    } else {
+      const quads = baker.getQuads(state, 0);
+      const up = quads.find((q) => q.face === 'up') ?? quads[0];
+      if (up && up.texture !== MISSING_TEXTURE) {
+        const avg = textureColors.get(normalizeId(up.texture)) ?? textureColors.get(up.texture);
+        if (avg) {
+          const tint = up.tintIndex >= 0 ? tintOf(info.tint, info.fixedTint, biome, biomeColors, state) : WHITE;
+          color = [avg[0] * tint[0], avg[1] * tint[1], avg[2] * tint[2]];
+        }
+      }
+    }
+    color ??= fallbackSurfaceColor(state, biome, fallbackColorOf, infoOf, textureColors, biomeColors);
+    cache.set(key, color);
+    return color;
+  };
+}
+
+function latestSupportedMcDataVersion(): string {
+  const versions = (minecraftData as any).supportedVersions?.pc as string[] | undefined;
+  return versions?.[versions.length - 1] ?? '1.21.11';
+}
+
+function loadMinecraftData(version = process.env.MC_DATA_VERSION ?? process.env.MC_VERSION ?? '1.21.4') {
+  try {
+    const data = minecraftData(version);
+    if (!data) throw new Error(`minecraft-data returned no data for ${version}`);
+    return data;
+  } catch (error) {
+    const fallback = latestSupportedMcDataVersion();
+    if (version === fallback) throw error;
+    const data = minecraftData(fallback);
+    if (!data) throw error;
+    return data;
+  }
+}
+
+function applyBlockInfoOverrides(map: BlockInfoMap, overrides: Record<string, Partial<BlockInfo>>) {
+  for (const [pattern, patch] of Object.entries(overrides)) {
+    if (pattern.includes('*')) {
+      const re = new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
+      for (const key of Object.keys(map)) if (re.test(key)) Object.assign(map[key], patch);
+    } else {
+      map[pattern] = {
+        ...(map[pattern] ?? { occludes: false, emit: 0, filter: 0, layer: 'cutout', tint: 'none' }),
+        ...patch,
+      };
+    }
+  }
+}
+
 export async function loadBlockInfo(file?: string): Promise<BlockInfoMap | undefined> {
-  if (!file) return undefined;
-  return JSON.parse(await fs.readFile(resolvePath(file), 'utf8')) as BlockInfoMap;
+  if (file) return JSON.parse(await fs.readFile(resolvePath(file), 'utf8')) as BlockInfoMap;
+  const data = loadMinecraftData();
+  const map: BlockInfoMap = {};
+  for (const block of data.blocksArray) {
+    const transparent = block.transparent === true;
+    map[`minecraft:${block.name}`] = {
+      occludes: !transparent && block.boundingBox === 'block',
+      emit: block.emitLight ?? 0,
+      filter: block.filterLight ?? (transparent ? 0 : 15),
+      layer: transparent ? 'cutout' : 'opaque',
+      tint: 'none',
+    };
+  }
+  const overrides = await readJsonFirst<Record<string, Partial<BlockInfo>>>(dataFileCandidates('block-overrides.json'));
+  if (overrides) applyBlockInfoOverrides(map, overrides);
+  return map;
 }
 
 export async function loadAssetBundleFromDirs(dirs: string[]): Promise<AssetBundle> {

@@ -7,6 +7,7 @@ import { config } from './config.js';
 import { requireRole } from './auth.js';
 import { buildAssetBundle, buildTextureAtlas, clearTextureAtlasCache, getTextureAtlasPng, textureFilePath } from './assets.js';
 import { buildBlockInfo, readBiomes, readDimensions, writeDataFile } from './gameData.js';
+import { getTopMapManifest, getWorldCapabilities, readTopMapTile, warmTopMapManifests } from './topMap.js';
 import {
   createWorld,
   deleteChunks,
@@ -44,8 +45,30 @@ function requestedChunks(raw: unknown): { cx: number; cz: number }[] {
 }
 
 app.get('/api/worlds', async (c) => c.json(await listWorlds()));
+app.get('/api/worlds/:world/capabilities', async (c) => c.json(await getWorldCapabilities(c.req.param('world'))));
 app.get('/api/worlds/:world/:dim/regions', async (c) =>
   c.json(await listRegions(c.req.param('world'), c.req.param('dim'))));
+
+app.get('/api/worlds/:world/:dim/top-map/manifest', async (c) => {
+  const manifest = await getTopMapManifest(c.req.param('world'));
+  const dim = decodeURIComponent(c.req.param('dim'));
+  const dimension = manifest?.dimensions[dim];
+  if (!manifest || !dimension) return c.json({ error: 'top map not found' }, 404);
+  return c.json({ ...dimension, world: c.req.param('world'), dimension: dim }, 200, {
+    'cache-control': 'private, max-age=60',
+  });
+});
+
+app.get('/api/worlds/:world/:dim/top-map/heightmap/:rx/:rz', async (c) => {
+  const rx = Number(c.req.param('rx')), rz = Number(c.req.param('rz'));
+  if (!Number.isInteger(rx) || !Number.isInteger(rz)) return c.text('bad region coords', 400);
+  const bytes = await readTopMapTile(c.req.param('world'), decodeURIComponent(c.req.param('dim')), rx, rz);
+  if (!bytes) return c.text('top-map tile not found', 404);
+  return c.body(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, 200, {
+    'cache-control': 'private, max-age=3600',
+    'content-type': 'application/msgpack',
+  });
+});
 
 app.get('/api/worlds/:world/:dim/chunk/:cx/:cz', async (c) => {
   const cx = Number(c.req.param('cx')), cz = Number(c.req.param('cz'));
@@ -187,4 +210,5 @@ app.post('/api/admin/upload', async (c) => {
 
 console.log(`[violet-map] server on :${config.port}\n  worlds: ${config.worldsDir}\n  assets: ${config.assetsDirs.join(', ')}`);
 void buildAssetBundle();
+void warmTopMapManifests();
 serve({ fetch: app.fetch, port: config.port });
