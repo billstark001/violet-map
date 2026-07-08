@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CameraGridTracker, type Pose, type RankedCell } from '@violet-map/core';
+import { CameraGridTracker, type Pose, type RankedCell, type RankingResult } from '@violet-map/core';
 import { debugLog, isDebugLoggingEnabled } from '../logger';
 
 export type ChunkState = 'checking' | 'hashed' | 'fetching' | 'decoding' | 'stored' | 'absent' | 'error';
@@ -23,17 +23,22 @@ const FETCH_BATCH_SIZE = 16;
 const BLOCKED_RENDER_HASH_BATCH_SIZE = 4;
 const BLOCKED_RENDER_FETCH_BATCH_SIZE = 3;
 const MAX_IO_QUEUE = 384;
-const MAX_MESH_QUEUE = 32;
+const MAX_MESH_QUEUE = 36;
 
-const IO_QUEUE_RETENTION_MS = 2000;
-const RECORD_RETENTION_MS = 9000;
-const OUTSIDE_ACTIVE_DROP_MS = 500;
+const IO_QUEUE_RETENTION_MS = 1500;
+const RECORD_RETENTION_MS = 6000;
+const OUTSIDE_ACTIVE_DROP_MS = 350;
 const HARD_TRACKED_MULTIPLIER = 1.05;
 const MESH_RETRY_COOLDOWN_MS = 180;
 const IO_RENDER_SHARE_TARGET = 0.92;
 const MIN_EXISTING_CHUNKS_BEFORE_BALANCE = 12;
 const RENDER_BACKLOG_IO_PAUSE = 4;
 const MAX_FRAME_CANDIDATES = 56;
+const CRITICAL_NEAR_RADIUS_CHUNKS = 2;
+const CRITICAL_CENTER_RAY_MAX_CHUNKS = 12;
+const CRITICAL_CENTER_RAY_STEP_CHUNKS = 0.75;
+const MIN_CRITICAL_RAY_HORIZONTAL = 0.08;
+const CRITICAL_SCORE_BOOST = -2400;
 
 const MIN_IMPORTANCE_TO_SCHEDULE = 0.012;
 const MIN_GAP_TO_SCHEDULE = 0.018;
@@ -97,6 +102,11 @@ interface ChunkCandidate extends ChunkPriority {
   cx: number;
   cz: number;
   targetStep: LodStep;
+}
+
+interface CriticalCell {
+  i: number;
+  j: number;
 }
 
 export interface ChunkSchedulerEntry {
@@ -352,6 +362,16 @@ function priorityKey(task: Pick<MeshTask, 'key' | 'kind'>): string {
   return `${task.key}\u0000${task.kind}`;
 }
 
+function emptyRankingResult(time: number): RankingResult {
+  return {
+    time,
+    activeCount: 0,
+    importance: { top: [], bottom: [] },
+    satisfaction: { top: [], bottom: [] },
+    gap: { top: [], bottom: [] },
+  };
+}
+
 function trackerConfigKey(cfg: TrackerRuntimeConfig): string {
   return [
     cfg.activeRadiusChunks,
@@ -384,7 +404,7 @@ export class ChunkScheduler {
   private lastActiveRadiusChunks = DEFAULT_ACTIVE_RADIUS_CHUNKS;
   private tmpDirection = new THREE.Vector3();
 
-  constructor(private opts: ChunkSchedulerOptions = {}) {}
+  constructor(private opts: ChunkSchedulerOptions = {}) { }
 
   syncStats(stats: ChunkRenderStats, profileStats: ChunkProfileStats = EMPTY_PROFILE_STATS): ChunkSchedulerStats {
     this.renderStats = { ...stats };
@@ -540,9 +560,13 @@ export class ChunkScheduler {
     this.ensureTracker(cfg, input.force);
 
     const pose = this.poseFromCamera(input.camera);
-    const ranked = this.rankCells(pose, nowSeconds, cfg);
+    const ranking = this.rankCells(pose, nowSeconds, cfg);
+    const centerCx = Math.floor(input.camera.position.x / CHUNK_SIZE_BLOCKS);
+    const centerCz = Math.floor(input.camera.position.z / CHUNK_SIZE_BLOCKS);
+    const criticalCells = this.criticalCellsForPose(pose, centerCx, centerCz, cfg);
+    const criticalKeys = new Set(criticalCells.map((cell) => input.keyFor(cell.i, cell.j)));
 
-    for (const cell of ranked) {
+    for (const cell of this.mergeRankedCells(ranking.gap.top, ranking.importance.top)) {
       this.syncTrackerCell(
         cell.i,
         cell.j,
@@ -552,40 +576,55 @@ export class ChunkScheduler {
       );
     }
 
-    const reranked = this.tracker?.query(cfg.maxCandidates, nowSeconds).gap.top ?? ranked;
-    const centerCx = Math.floor(input.camera.position.x / CHUNK_SIZE_BLOCKS);
-    const centerCz = Math.floor(input.camera.position.z / CHUNK_SIZE_BLOCKS);
+    for (const cell of criticalCells) {
+      this.syncTrackerCell(
+        cell.i,
+        cell.j,
+        input.entryFor(input.keyFor(cell.i, cell.j)),
+        input.cellInfoFor?.(cell.i, cell.j) ?? null,
+        nowSeconds,
+      );
+    }
+
+    const reranking = this.tracker?.query(cfg.maxCandidates, nowSeconds) ?? ranking;
+    const criticalRankedCells = this.snapshotCriticalCells(criticalCells, nowSeconds);
+    const rankedCells = this.mergeRankedCells(criticalRankedCells, reranking.gap.top, reranking.importance.top);
     const keepKeys = new Set<string>();
     const candidates: ChunkCandidate[] = [];
 
-    for (const cell of reranked) {
+    for (const cell of rankedCells) {
       const key = input.keyFor(cell.i, cell.j);
       const entry = input.entryFor(key);
+      const critical = criticalKeys.has(key);
       keepKeys.add(key);
 
-      const targetStep = this.targetStepForCell(cell, entry);
-      if (!this.shouldScheduleCell(cell, entry, targetStep, cfg)) continue;
-      if (candidates.length >= cfg.maxFrameCandidates) continue;
+      const targetStep = critical ? 1 : this.targetStepForCell(cell, entry);
+      const shouldSchedule = critical
+        ? this.shouldScheduleCriticalCell(entry, targetStep)
+        : this.shouldScheduleCell(cell, entry, targetStep, cfg);
+      if (!shouldSchedule) continue;
 
       candidates.push({
         key,
         cx: cell.i,
         cz: cell.j,
         targetStep,
-        tier: this.tierForCell(cell, entry, targetStep),
-        score: this.scoreForCell(cell, entry, targetStep, centerCx, centerCz),
+        tier: critical ? this.tierForCriticalCell(entry, targetStep) : this.tierForCell(cell, entry, targetStep),
+        score: this.scoreForCell(cell, entry, targetStep, centerCx, centerCz) + (critical ? CRITICAL_SCORE_BOOST : 0),
         updatedAt: input.now,
       });
     }
 
     candidates.sort((a, b) => this.comparePriority(a, b) || a.cx - b.cx || a.cz - b.cz);
+    if (candidates.length > cfg.maxFrameCandidates) candidates.length = cfg.maxFrameCandidates;
 
     if (isDebugLoggingEnabled()) {
       debugLog('scheduler', 'tracker-frame', {
         mode: topDownView ? 'topDown' : 'perspective',
         center: [centerCx, centerCz],
         activeRadiusChunks: cfg.activeRadiusChunks,
-        activeCells: reranked.length,
+        activeCells: rankedCells.length,
+        criticalCells: criticalCells.length,
         candidates: candidates.length,
         hashQueued: this.hashQueue.size,
         fetchQueued: this.fetchQueue.size,
@@ -596,18 +635,90 @@ export class ChunkScheduler {
     return { candidates, keepKeys, centerCx, centerCz };
   }
 
-  private rankCells(pose: Pose, nowSeconds: number, cfg: TrackerRuntimeConfig): RankedCell[] {
+  private rankCells(pose: Pose, nowSeconds: number, cfg: TrackerRuntimeConfig): RankingResult {
     const tracker = this.tracker;
-    if (!tracker) return [];
+    if (!tracker) return emptyRankingResult(nowSeconds);
 
     if (!this.trackerSeeded) {
       const seedTime = Math.max(0, nowSeconds - TRACKER_SEED_SECONDS);
       tracker.updateCamera(seedTime, pose, 0);
       this.trackerSeeded = true;
-      return tracker.advanceTime(nowSeconds, cfg.maxCandidates).gap.top;
+      return tracker.advanceTime(nowSeconds, cfg.maxCandidates);
     }
 
-    return tracker.updateCamera(nowSeconds, pose, cfg.maxCandidates).gap.top;
+    return tracker.updateCamera(nowSeconds, pose, cfg.maxCandidates);
+  }
+
+  private criticalCellsForPose(
+    pose: Pose,
+    centerCx: number,
+    centerCz: number,
+    cfg: TrackerRuntimeConfig,
+  ): CriticalCell[] {
+    const out: CriticalCell[] = [];
+    const seen = new Set<string>();
+    const add = (i: number, j: number): void => {
+      const key = `${i},${j}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ i, j });
+    };
+
+    for (let di = -CRITICAL_NEAR_RADIUS_CHUNKS; di <= CRITICAL_NEAR_RADIUS_CHUNKS; di++) {
+      for (let dj = -CRITICAL_NEAR_RADIUS_CHUNKS; dj <= CRITICAL_NEAR_RADIUS_CHUNKS; dj++) {
+        add(centerCx + di, centerCz + dj);
+      }
+    }
+
+    const horizontal = Math.cos(pose.pitch);
+    const dx = horizontal * Math.sin(pose.yaw);
+    const dz = horizontal * Math.cos(pose.yaw);
+    const len = Math.hypot(dx, dz);
+    if (len < MIN_CRITICAL_RAY_HORIZONTAL) return out;
+
+    const ux = dx / len;
+    const uz = dz / len;
+    const maxChunks = Math.min(cfg.activeRadiusChunks, CRITICAL_CENTER_RAY_MAX_CHUNKS);
+    for (let d = CRITICAL_CENTER_RAY_STEP_CHUNKS; d <= maxChunks; d += CRITICAL_CENTER_RAY_STEP_CHUNKS) {
+      add(
+        Math.floor((pose.p.x + ux * d * CHUNK_SIZE_BLOCKS) / CHUNK_SIZE_BLOCKS),
+        Math.floor((pose.p.z + uz * d * CHUNK_SIZE_BLOCKS) / CHUNK_SIZE_BLOCKS),
+      );
+    }
+
+    return out;
+  }
+
+  private snapshotCriticalCells(cells: CriticalCell[], nowSeconds: number): RankedCell[] {
+    const tracker = this.tracker;
+    if (!tracker) return [];
+
+    return cells.map((cell) => {
+      const snapshot = tracker.getCellSnapshot(cell.i, cell.j, nowSeconds);
+      const gap = snapshot.importance - snapshot.satisfaction;
+      return {
+        i: cell.i,
+        j: cell.j,
+        score: gap,
+        importance: snapshot.importance,
+        satisfaction: snapshot.satisfaction,
+        gap,
+      };
+    });
+  }
+
+  private mergeRankedCells(...groups: RankedCell[][]): RankedCell[] {
+    const out: RankedCell[] = [];
+    const seen = new Set<string>();
+    for (const group of groups) {
+      for (const cell of group) {
+        const key = `${cell.i},${cell.j}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(cell);
+      }
+    }
+    return out;
   }
 
   private scheduleCandidate(candidate: ChunkCandidate, entry: ChunkSchedulerEntry): { removeMesh: boolean } {
@@ -654,6 +765,8 @@ export class ChunkScheduler {
     selectedKeys: ReadonlySet<string>,
   ): MeshTask | null {
     const tasks = [...this.meshQueue.values()].sort((a, b) => this.comparePriority(a, b) || a.step - b.step);
+    let best: MeshTask | null = null;
+    let bestQueueKey: string | null = null;
 
     for (const task of tasks) {
       const queueKey = priorityKey(task);
@@ -667,22 +780,25 @@ export class ChunkScheduler {
         this.meshQueue.delete(queueKey);
         continue;
       }
-      this.meshQueue.delete(queueKey);
-      const out = this.withLatestPriority(task);
-      this.cooldownMesh(out.key, now);
-      return out;
+      const queued = this.withLatestPriority(task);
+      if (!best || this.compareMeshTaskPriority(queued, best) < 0) {
+        best = queued;
+        bestQueueKey = queueKey;
+      }
     }
 
-    let best: MeshTask | null = null;
     for (const entry of entries) {
       if (selectedKeys.has(entry.key) || this.meshOnCooldown(entry.key, now)) continue;
       if (entry.state !== 'stored') continue;
       const task = this.desiredMeshTaskForEntry(entry, now);
       if (!task) continue;
-      if (!best || this.comparePriority(task, best) < 0 || (this.comparePriority(task, best) === 0 && task.step < best.step)) {
+      if (!best || this.compareMeshTaskPriority(task, best) < 0) {
         best = task;
+        bestQueueKey = null;
       }
     }
+
+    if (bestQueueKey) this.meshQueue.delete(bestQueueKey);
     if (best) this.cooldownMesh(best.key, now);
     return best;
   }
@@ -1061,6 +1177,12 @@ export class ChunkScheduler {
     return entry.dirty || cell.gap >= cfg.minGapToSchedule;
   }
 
+  private shouldScheduleCriticalCell(entry: ChunkSchedulerEntry | null, targetStep: LodStep): boolean {
+    if (entry?.state === 'absent' || entry?.state === 'error') return false;
+    if (!entry) return true;
+    return entry.dirty || !this.displaySatisfiesTarget(entry, targetStep);
+  }
+
   private tierForCell(cell: RankedCell, entry: ChunkSchedulerEntry | null, targetStep: LodStep): number {
     if (entry?.state === 'stored' && !this.displaySatisfiesTarget(entry, targetStep)) return 0;
     if (entry?.dirty) return 1;
@@ -1069,6 +1191,15 @@ export class ChunkScheduler {
     if (targetStep === 1 && entry.displayed !== 'full') return 1;
     if (cell.gap > 0.2) return 4;
     return 5;
+  }
+
+  private tierForCriticalCell(entry: ChunkSchedulerEntry | null, targetStep: LodStep): number {
+    if (entry?.dirty) return -3;
+    if (entry?.state === 'stored' && !this.displaySatisfiesTarget(entry, targetStep)) return -3;
+    if (!entry) return -2;
+    if (entry.state === 'checking' || entry.state === 'hashed' || entry.state === 'fetching') return -2;
+    if (!this.displaySatisfiesTarget(entry, targetStep)) return -1;
+    return 0;
   }
 
   private scoreForCell(
@@ -1125,6 +1256,10 @@ export class ChunkScheduler {
 
   private comparePriority(a: ChunkPriority, b: ChunkPriority): number {
     return a.tier - b.tier || a.score - b.score || b.updatedAt - a.updatedAt;
+  }
+
+  private compareMeshTaskPriority(a: MeshTask, b: MeshTask): number {
+    return this.comparePriority(a, b) || a.step - b.step;
   }
 
   private compareQueuedKeys(a: string, b: string): number {
