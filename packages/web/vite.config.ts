@@ -74,7 +74,7 @@ export default defineConfig({
   },
   optimizeDeps: { exclude: ['@violet-map/core'] },
   server: {
-    port: 5173,
-    proxy: { '/api': process.env.API_PROXY ?? 'http://localhost:8787' },
+    port: 3305,
+    proxy: { '/api': process.env.API_PROXY ?? 'http://localhost:3300' },
   },
 });

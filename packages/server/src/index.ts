@@ -59,7 +59,7 @@ app.get('/api/worlds/:world/:dim/top-map/manifest', async (c) => {
   });
 });
 
-app.get('/api/worlds/:world/:dim/top-map/heightmap/:rx/:rz', async (c) => {
+app.get('/api/worlds/:world/:dim/top-map/tile/:rx/:rz', async (c) => {
   const rx = Number(c.req.param('rx')), rz = Number(c.req.param('rz'));
   if (!Number.isInteger(rx) || !Number.isInteger(rz)) return c.text('bad region coords', 400);
   const bytes = await readTopMapTile(c.req.param('world'), decodeURIComponent(c.req.param('dim')), rx, rz);

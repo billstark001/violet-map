@@ -1,11 +1,11 @@
-import { ModelBaker, BakedQuad, MISSING_TEXTURE } from './model.js';
-import { AIR, AIR_NAMES, ChunkColumn } from './world.js';
+import { ModelBaker, BakedQuad, MISSING_TEXTURE } from '../model.js';
+import { AIR, AIR_NAMES, ChunkColumn } from '../world.js';
 import {
   AtlasIndex, AtlasRect, BlockInfo, BlockStateRef, Direction, DIR_VEC, MeshBuffers, RenderLayer,
   SectionMeshes, TextureAlphaMap, TintType,
-} from './types.js';
-import type { Rgb } from './colors.js';
-import { Float32Writer, Uint32Writer } from './utils.js';
+} from '../types.js';
+import type { Rgb } from '../colors.js';
+import { Float32Writer, Uint32Writer } from '../utils.js';
 
 export interface WorldView {
   getBlock(x: number, y: number, z: number): BlockStateRef;

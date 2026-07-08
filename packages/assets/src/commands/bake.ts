@@ -2,12 +2,24 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { encode } from '@msgpack/msgpack';
 import {
-  AIR_NAMES,
+  computeColumnLight,
+  sampleTopMapSurface,
+  TOP_MAP_MISSING_HEIGHT,
+  TOP_MAP_SCHEMA,
+  TOP_MAP_TILE_BLOCKS,
+  type BlockInfo,
   type BlockStateRef,
   type Rgb,
+  type TopMapApproach,
+  type TopMapLightMode,
+  type TopMapManifest,
+  type TopMapRegionManifestEntry as RegionManifestEntry,
+  type TopMapRegionSourceEntry as RegionSourceEntry,
+  type TopMapTileSetManifest,
 } from '@violet-map/core';
 import {
   argsReader,
+  ensureLight,
   defaultTopMapOut,
   ensureDir,
   findRegionFiles,
@@ -23,41 +35,9 @@ import {
   resolvePath,
   sha1Bytes,
   stateColor,
+  type ColumnEntry,
   type RegionFile,
 } from './common.js';
-
-interface RegionManifestEntry {
-  x: number;
-  z: number;
-  hash: string;
-}
-
-interface RegionSourceEntry extends RegionManifestEntry {
-  empty: boolean;
-}
-
-interface TileSetManifest {
-  tileSizeBlocks: number;
-  sampleStride: number;
-  colorStride: number;
-  colorVersion: number;
-  format: 'msgpack';
-  regions: RegionManifestEntry[];
-  sources: RegionSourceEntry[];
-}
-
-interface DimensionManifest {
-  hasTopMap: boolean;
-  hasHeightMap: boolean;
-  heightMap?: TileSetManifest;
-}
-
-interface TopMapManifest {
-  schema: 5;
-  generatedAt: string;
-  world: string;
-  dimensions: Record<string, DimensionManifest>;
-}
 
 interface BakeOptions {
   world: string;
@@ -70,17 +50,31 @@ interface BakeOptions {
   assetDirs: string[];
   sampleStride: number;
   colorStride: number;
+  lightStride: number;
+  approach: TopMapApproach;
+  lightMode: TopMapLightMode;
 }
 
-const TILE_BLOCKS = 512;
 const DEFAULT_SAMPLE_STRIDE = 4;
 const DEFAULT_COLOR_STRIDE = 1;
-const HEIGHTMAP_COLOR_VERSION = 2;
-const TOP_MAP_SCHEMA = 5;
+const TOPMAP_COLOR_VERSION = 3;
+const TOPMAP_LIGHT_VERSION = 1;
 
 function usage(): string {
   return `Usage:
-  vm-assets bake-heightmap <world> [--dim <id>] [--out <dir>] [--limit <regions>] [--block-info <file>] [--biomes <file>] [--assets-dir <dir[,dir]>] [--sample-stride <blocks>] [--color-stride <blocks>] [--no-sky]`;
+  vm-assets bake-topmap <world> [--dim <id>] [--out <dir>] [--limit <regions>] [--block-info <file>] [--biomes <file>] [--assets-dir <dir[,dir]>] [--sample-stride <blocks>] [--color-stride <blocks>] [--light-stride <blocks>] [--approach <top|bottom>] [--light-mode <stored-first|rebake>] [--no-sky]`;
+}
+
+function parseApproach(value: string | undefined): TopMapApproach {
+  if (!value || value === 'top') return 'top';
+  if (value === 'bottom') return 'bottom';
+  throw new Error(`bad --approach: ${value}`);
+}
+
+function parseLightMode(value: string | undefined): TopMapLightMode {
+  if (!value || value === 'stored-first') return 'stored-first';
+  if (value === 'rebake') return 'rebake';
+  throw new Error(`bad --light-mode: ${value}`);
 }
 
 function parseOptions(args: string[]): BakeOptions {
@@ -99,11 +93,14 @@ function parseOptions(args: string[]): BakeOptions {
     assetDirs: resolveAssetDirs(reader.get('--assets-dir')),
     sampleStride: Math.floor(numberArg(reader.get('--sample-stride'), DEFAULT_SAMPLE_STRIDE, 1)),
     colorStride: Math.floor(numberArg(reader.get('--color-stride'), DEFAULT_COLOR_STRIDE, 1)),
+    lightStride: Math.floor(numberArg(reader.get('--light-stride'), numberArg(reader.get('--color-stride'), DEFAULT_COLOR_STRIDE, 1), 1)),
+    approach: parseApproach(reader.get('--approach')),
+    lightMode: parseLightMode(reader.get('--light-mode')),
   };
 }
 
 function dimOutDir(out: string, dim: string): string {
-  return path.join(out, encodeURIComponent(dim), 'heightmap');
+  return path.join(out, encodeURIComponent(dim), 'topmap');
 }
 
 function tileFile(out: string, dim: string, rx: number, rz: number): string {
@@ -135,42 +132,38 @@ async function writeManifest(out: string, manifest: TopMapManifest) {
 function updateDimensionManifest(
   manifest: TopMapManifest,
   dim: string,
-  patch: Partial<DimensionManifest>,
+  patch: Partial<TopMapManifest['dimensions'][string]>,
 ) {
-  const previous = manifest.dimensions[dim] ?? { hasTopMap: false, hasHeightMap: false };
+  const previous = manifest.dimensions[dim] ?? { hasTopMap: false };
   const next = { ...previous, ...patch };
-  next.hasTopMap = next.hasHeightMap;
+  next.hasTopMap = !!next.topMap && next.topMap.regions.length > 0;
   manifest.dimensions[dim] = next;
 }
 
-function topBlock(col: { minY: number; heightAt(x: number, z: number): number; getBlock(x: number, y: number, z: number): BlockStateRef }, x: number, z: number): { y: number; state: BlockStateRef | null } {
-  for (let y = col.heightAt(x, z) - 1; y >= col.minY; y--) {
-    const state = col.getBlock(x, y, z);
-    if (!AIR_NAMES.has(state.name)) return { y, state };
-  }
-  return { y: col.minY, state: null };
+function shouldReplaceHeight(current: number, next: number, approach: TopMapApproach): boolean {
+  if (current <= TOP_MAP_MISSING_HEIGHT) return true;
+  return approach === 'top' ? next > current : next < current;
 }
 
-function writeRgba(
-  colors: Uint8Array,
-  index: number,
-  state: BlockStateRef | null,
-  biome: string,
-  colorOf: ((state: BlockStateRef, biome: string) => Rgb) | null,
-) {
+function writeRgbaColor(colors: Uint8Array, index: number, color: Rgb | null) {
   const offset = index * 4;
-  if (!state) {
+  if (!color) {
     colors[offset] = 0;
     colors[offset + 1] = 0;
     colors[offset + 2] = 0;
     colors[offset + 3] = 0;
     return;
   }
-  const color = colorOf?.(state, biome) ?? stateColor(state);
   colors[offset] = Math.round(color[0] * 255);
   colors[offset + 1] = Math.round(color[1] * 255);
   colors[offset + 2] = Math.round(color[2] * 255);
   colors[offset + 3] = 255;
+}
+
+function writeLight(lights: Uint8Array, index: number, sky: number, block: number, hasSkyLight: boolean) {
+  const offset = index * 2;
+  lights[offset] = hasSkyLight ? Math.min(15, Math.max(0, Math.round(sky))) : 0;
+  lights[offset + 1] = Math.min(15, Math.max(0, Math.round(block)));
 }
 
 function bytesOf(values: Int16Array | Uint8Array): Uint8Array {
@@ -191,19 +184,37 @@ interface BakeRegionResult {
   empty: boolean;
 }
 
-async function bakeHeightMapRegion(
+function bakeColumnLight(
+  entry: ColumnEntry,
+  opts: BakeOptions,
+  infoOf: (name: string) => BlockInfo,
+) {
+  if (opts.lightMode === 'rebake') {
+    computeColumnLight(entry.col, infoOf, opts.hasSkyLight, { writeSky: opts.hasSkyLight, writeBlock: true });
+    entry.litSky = !opts.hasSkyLight || entry.col.hasStoredSkyLight;
+    entry.litBlock = entry.col.hasStoredBlockLight;
+    return;
+  }
+  ensureLight(entry, infoOf, opts.hasSkyLight);
+}
+
+async function bakeTopMapRegion(
   region: RegionFile,
   opts: BakeOptions,
+  infoOf: (name: string) => BlockInfo,
   colorOf: ((state: BlockStateRef, biome: string) => Rgb) | null,
   previous: RegionManifestEntry | undefined,
   previousSource: RegionSourceEntry | undefined,
   force: boolean,
 ): Promise<BakeRegionResult> {
-  if (TILE_BLOCKS % opts.sampleStride !== 0) {
-    throw new Error(`sample stride must evenly divide ${TILE_BLOCKS}: ${opts.sampleStride}`);
+  if (TOP_MAP_TILE_BLOCKS % opts.sampleStride !== 0) {
+    throw new Error(`sample stride must evenly divide ${TOP_MAP_TILE_BLOCKS}: ${opts.sampleStride}`);
   }
-  if (TILE_BLOCKS % opts.colorStride !== 0) {
-    throw new Error(`color stride must evenly divide ${TILE_BLOCKS}: ${opts.colorStride}`);
+  if (TOP_MAP_TILE_BLOCKS % opts.colorStride !== 0) {
+    throw new Error(`color stride must evenly divide ${TOP_MAP_TILE_BLOCKS}: ${opts.colorStride}`);
+  }
+  if (TOP_MAP_TILE_BLOCKS % opts.lightStride !== 0) {
+    throw new Error(`light stride must evenly divide ${TOP_MAP_TILE_BLOCKS}: ${opts.lightStride}`);
   }
   const sourceBytes = new Uint8Array(await fs.readFile(region.file));
   const hash = sha1Bytes(sourceBytes);
@@ -248,16 +259,23 @@ async function bakeHeightMapRegion(
       empty: true,
     };
   }
-  const samples = TILE_BLOCKS / opts.sampleStride;
-  const colorSamples = TILE_BLOCKS / opts.colorStride;
+  const samples = TOP_MAP_TILE_BLOCKS / opts.sampleStride;
+  const colorSamples = TOP_MAP_TILE_BLOCKS / opts.colorStride;
+  const lightSamples = TOP_MAP_TILE_BLOCKS / opts.lightStride;
   const heights = new Int16Array(samples * samples);
   const colorHeights = new Int16Array(colorSamples * colorSamples);
+  const lightHeights = new Int16Array(lightSamples * lightSamples);
   const colors = new Uint8Array(colorSamples * colorSamples * 4);
-  heights.fill(-32768);
-  colorHeights.fill(-32768);
+  const lights = new Uint8Array(lightSamples * lightSamples * 2);
+  heights.fill(TOP_MAP_MISSING_HEIGHT);
+  colorHeights.fill(TOP_MAP_MISSING_HEIGHT);
+  lightHeights.fill(TOP_MAP_MISSING_HEIGHT);
   let minY = Infinity;
   let maxY = -Infinity;
   let chunks = 0;
+  const fallbackColorOf = colorOf ?? ((state: BlockStateRef) => stateColor(state));
+
+  for (const entry of entries.values()) bakeColumnLight(entry, opts, infoOf);
 
   for (const entry of entries.values()) {
     chunks++;
@@ -268,19 +286,26 @@ async function bakeHeightMapRegion(
       for (let x = 0; x < 16; x++) {
         const tileX = chunkLocalX + x;
         const tileZ = chunkLocalZ + z;
-        if (tileX < 0 || tileX >= TILE_BLOCKS || tileZ < 0 || tileZ >= TILE_BLOCKS) continue;
-        const top = topBlock(col, x, z);
-        if (!top.state) continue;
+        if (tileX < 0 || tileX >= TOP_MAP_TILE_BLOCKS || tileZ < 0 || tileZ >= TOP_MAP_TILE_BLOCKS) continue;
+        const top = sampleTopMapSurface(col, x, z, { approach: opts.approach, infoOf, colorOf: fallbackColorOf });
+        if (!top) continue;
         const sampleX = Math.floor(tileX / opts.sampleStride);
         const sampleZ = Math.floor(tileZ / opts.sampleStride);
         const i = sampleZ * samples + sampleX;
-        if (top.y > heights[i]) heights[i] = top.y;
+        if (shouldReplaceHeight(heights[i], top.y, opts.approach)) heights[i] = top.y;
         const colorX = Math.floor(tileX / opts.colorStride);
         const colorZ = Math.floor(tileZ / opts.colorStride);
         const colorIndex = colorZ * colorSamples + colorX;
-        if (top.y > colorHeights[colorIndex]) {
+        if (shouldReplaceHeight(colorHeights[colorIndex], top.y, opts.approach)) {
           colorHeights[colorIndex] = top.y;
-          writeRgba(colors, colorIndex, top.state, col.getBiome(x, top.y, z), colorOf);
+          writeRgbaColor(colors, colorIndex, top.color);
+        }
+        const lightX = Math.floor(tileX / opts.lightStride);
+        const lightZ = Math.floor(tileZ / opts.lightStride);
+        const lightIndex = lightZ * lightSamples + lightX;
+        if (shouldReplaceHeight(lightHeights[lightIndex], top.y, opts.approach)) {
+          lightHeights[lightIndex] = top.y;
+          writeLight(lights, lightIndex, top.sky, top.block, opts.hasSkyLight);
         }
       }
     }
@@ -305,20 +330,24 @@ async function bakeHeightMapRegion(
 
   const payload = {
     schema: TOP_MAP_SCHEMA,
-    kind: 'heightmap-region',
+    kind: 'topmap-region',
     dimension: opts.dim,
+    approach: opts.approach,
     region: { x: region.rx, z: region.rz },
-    origin: { x: region.rx * TILE_BLOCKS, z: region.rz * TILE_BLOCKS },
-    size: { blocks: TILE_BLOCKS, samples, colorSamples },
+    origin: { x: region.rx * TOP_MAP_TILE_BLOCKS, z: region.rz * TOP_MAP_TILE_BLOCKS },
+    size: { blocks: TOP_MAP_TILE_BLOCKS, samples, colorSamples, lightSamples },
     sampleStride: opts.sampleStride,
     colorStride: opts.colorStride,
+    lightStride: opts.lightStride,
     chunks,
     minY: Number.isFinite(minY) ? minY : 0,
     maxY: Number.isFinite(maxY) ? maxY : 0,
     heightEncoding: 'int16le',
     colorEncoding: 'rgba8888',
+    lightEncoding: 'sky-block-u4',
     heights: bytesOf(heights),
     colors,
+    lights,
   };
 
   const outDir = dimOutDir(opts.out, opts.dim);
@@ -339,7 +368,7 @@ async function selectRegions(opts: BakeOptions): Promise<RegionFile[]> {
   return Number.isFinite(opts.limit) ? regions.slice(0, opts.limit) : regions;
 }
 
-export async function runBakeHeightMap(args: string[]) {
+export async function runBakeTopMap(args: string[]) {
   if (args.includes('--help') || args.includes('-h')) {
     console.log(usage());
     return;
@@ -350,19 +379,24 @@ export async function runBakeHeightMap(args: string[]) {
   const biomeColors = await loadBiomeColors(opts.assetDirs, opts.biomes);
   const colorOf = await makeTextureColorOf(opts.assetDirs, infoOf, biomeColors) ?? (blockInfo ? makeColorOf(infoOf) : null);
   const regions = await selectRegions(opts);
-  console.log(`bake-heightmap world=${opts.world} dim=${opts.dim} regions=${regions.length} out=${opts.out}`);
+  console.log(`bake-topmap world=${opts.world} dim=${opts.dim} regions=${regions.length} out=${opts.out}`);
+  console.log(`  approach=${opts.approach} light=${opts.lightMode}${opts.hasSkyLight ? '' : ' no-sky'}`);
   console.log(`  assets=${opts.assetDirs.join(', ')}`);
   console.log(`  biome colors=${biomeColors ? 'enabled' : 'fallback'}`);
   const manifest = await readManifest(opts.out, opts.world);
-  const previousHeightMap = manifest.dimensions[opts.dim]?.heightMap;
-  const force = previousHeightMap?.format !== 'msgpack'
-    || previousHeightMap.tileSizeBlocks !== TILE_BLOCKS
-    || previousHeightMap.sampleStride !== opts.sampleStride
-    || previousHeightMap.colorStride !== opts.colorStride
-    || previousHeightMap.colorVersion !== HEIGHTMAP_COLOR_VERSION;
-  const previousByKey = new Map<string, RegionManifestEntry>((force ? [] : previousHeightMap?.regions ?? [])
+  const previousTopMap = manifest.dimensions[opts.dim]?.topMap;
+  const force = previousTopMap?.format !== 'msgpack'
+    || previousTopMap.tileSizeBlocks !== TOP_MAP_TILE_BLOCKS
+    || previousTopMap.sampleStride !== opts.sampleStride
+    || previousTopMap.colorStride !== opts.colorStride
+    || previousTopMap.lightStride !== opts.lightStride
+    || previousTopMap.colorVersion !== TOPMAP_COLOR_VERSION
+    || previousTopMap.lightVersion !== TOPMAP_LIGHT_VERSION
+    || previousTopMap.approach !== opts.approach
+    || previousTopMap.lightMode !== opts.lightMode;
+  const previousByKey = new Map<string, RegionManifestEntry>((force ? [] : previousTopMap?.regions ?? [])
     .map((region) => [`${region.x},${region.z}`, region] as const));
-  const previousSources = previousHeightMap?.sources ?? [];
+  const previousSources = previousTopMap?.sources ?? [];
   const previousSourceByKey = new Map<string, RegionSourceEntry>((force ? [] : previousSources)
     .map((region) => [`${region.x},${region.z}`, region] as const));
   const currentKeys = new Set<string>(regions.map((region) => `${region.rx},${region.rz}`));
@@ -374,7 +408,7 @@ export async function runBakeHeightMap(args: string[]) {
   let removed = 0;
 
   await ensureDir(dimOutDir(opts.out, opts.dim));
-  for (const previous of previousSources.length ? previousSources : previousHeightMap?.regions ?? []) {
+  for (const previous of previousSources.length ? previousSources : previousTopMap?.regions ?? []) {
     const key = `${previous.x},${previous.z}`;
     if (!force && currentKeys.has(key)) continue;
     await fs.rm(tileFile(opts.out, opts.dim, previous.x, previous.z), { force: true });
@@ -382,9 +416,10 @@ export async function runBakeHeightMap(args: string[]) {
   }
   for (const [index, region] of regions.entries()) {
     const key = `${region.rx},${region.rz}`;
-    const result = await bakeHeightMapRegion(
+    const result = await bakeTopMapRegion(
       region,
       opts,
+      infoOf,
       colorOf,
       previousByKey.get(key),
       previousSourceByKey.get(key),
@@ -400,16 +435,19 @@ export async function runBakeHeightMap(args: string[]) {
     console.log(`  ${index + 1}/${regions.length} ${action} r.${region.rx}.${region.rz}`);
   }
   updateDimensionManifest(manifest, opts.dim, {
-    hasHeightMap: nextRegions.length > 0,
-    heightMap: {
-      tileSizeBlocks: TILE_BLOCKS,
+    topMap: {
+      tileSizeBlocks: TOP_MAP_TILE_BLOCKS,
       sampleStride: opts.sampleStride,
       colorStride: opts.colorStride,
-      colorVersion: HEIGHTMAP_COLOR_VERSION,
+      lightStride: opts.lightStride,
+      colorVersion: TOPMAP_COLOR_VERSION,
+      lightVersion: TOPMAP_LIGHT_VERSION,
+      approach: opts.approach,
+      lightMode: opts.lightMode,
       format: 'msgpack',
       regions: nextRegions,
       sources: nextSources,
-    },
+    } satisfies TopMapTileSetManifest,
   });
   await writeManifest(opts.out, manifest);
   console.log(`wrote ${path.join(opts.out, 'manifest.json')} (${wrote} updated, ${skipped} unchanged, ${empty} empty, ${removed} removed)`);

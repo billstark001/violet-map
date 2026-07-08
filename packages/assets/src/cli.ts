@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { assetsUsage, runAssetsCommand } from './commands/assets.js';
-import { runBakeHeightMap } from './commands/bake.js';
+import { runBakeTopMap } from './commands/bake.js';
 import { runProfileMca } from './commands/profileMca.js';
 
 function usage(): string {
@@ -9,7 +9,7 @@ function usage(): string {
 Usage:
   vm-assets assets <list|extract|extract-all|generate-biomes|generate-dimensions> [...]
   vm-assets profile-mca <file.mca> [...]
-  vm-assets bake-heightmap <world> [...]
+  vm-assets bake-topmap <world> [...]
 
 ${assetsUsage()}`;
 }
@@ -27,8 +27,8 @@ async function main() {
     case 'profile-mca':
       await runProfileMca(args);
       break;
-    case 'bake-heightmap':
-      await runBakeHeightMap(args);
+    case 'bake-topmap':
+      await runBakeTopMap(args);
       break;
     default:
       throw new Error(`unknown command: ${command}`);

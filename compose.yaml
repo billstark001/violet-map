@@ -1,0 +1,45 @@
+services:
+  server:
+    image: node:24-bookworm-slim
+    profiles: ["full"]
+    working_dir: /app
+    command: sh -lc "corepack enable && pnpm install && pnpm --filter @violet-map/server dev"
+    environment:
+      PORT: "3300"
+      WORLDS_DIR: /app/packages/server/data/worlds
+      ASSETS_DIRS: /app/packages/server/data/assets
+      DATA_DIR: /app/packages/server/data
+    ports:
+      - "3300:3300"
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+
+  web:
+    image: node:24-bookworm-slim
+    profiles: ["light", "full"]
+    working_dir: /app
+    command: sh -lc "corepack enable && pnpm install && pnpm --filter @violet-map/web dev -- --host 0.0.0.0"
+    environment:
+      API_PROXY: http://server:3300
+    ports:
+      - "3305:3305"
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+
+  admin:
+    image: node:24-bookworm-slim
+    profiles: ["full"]
+    working_dir: /app
+    command: sh -lc "corepack enable && pnpm install && pnpm --filter @violet-map/admin dev -- --host 0.0.0.0"
+    environment:
+      API_PROXY: http://server:3300
+    ports:
+      - "3310:3310"
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+
+volumes:
+  node_modules:

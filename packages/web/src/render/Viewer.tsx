@@ -300,8 +300,8 @@ function statsForCamera(s: ChunkSchedulerStats, camera: THREE.Camera, viewMode: 
   };
 }
 
-function heightMapAvailable(capabilities: WorldCapabilities | null, dimension: string): boolean {
-  return capabilities?.dimensions[dimension]?.hasHeightMap === true;
+function topMapAvailable(capabilities: WorldCapabilities | null, dimension: string): boolean {
+  return capabilities?.dimensions[dimension]?.hasTopMap === true;
 }
 
 function dimensionDefinition(dimensions: DimensionMap, dimension: string): ViewerDimensionDef {
@@ -813,8 +813,8 @@ function visibleRadiusBlocks(viewDistance: number, lodDistance: number): number 
   return Math.max(1024, (viewDistance + lodDistance + 32) * 16);
 }
 
-function chunkClipY(topView: boolean, offlineHeightMap: boolean): number | undefined {
-  return topView && offlineHeightMap ? 0 : undefined;
+function chunkClipY(topView: boolean, offlineTopMap: boolean): number | undefined {
+  return topView && offlineTopMap ? 0 : undefined;
 }
 
 function rendererHeight(engine: Engine): number {
@@ -827,12 +827,12 @@ function updateChunksAndTopMap(
   props: ViewerProps,
   capabilities: WorldCapabilities | null,
   now: number,
-): { topView: boolean; dimDef: ViewerDimensionDef; offlineHeightMap: boolean } {
+): { topView: boolean; dimDef: ViewerDimensionDef; offlineTopMap: boolean } {
   const topView = isTopViewMode(props.viewMode);
   const dimDef = dimensionDefinition(engine.dimensions, props.dimension);
-  const offlineHeightMap = heightMapAvailable(capabilities, props.dimension);
+  const offlineTopMap = topMapAvailable(capabilities, props.dimension);
 
-  engine.topMap.configure(props.world, props.dimension, offlineHeightMap);
+  engine.topMap.configure(props.world, props.dimension, offlineTopMap);
   if (manager) manager.root.visible = true;
   manager?.update(
     engine.activeCamera,
@@ -841,16 +841,15 @@ function updateChunksAndTopMap(
     rendererHeight(engine),
     topView,
     props.topClipRange,
-    chunkClipY(topView, offlineHeightMap),
+    chunkClipY(topView, offlineTopMap),
   );
   engine.topMap.update(engine.activeCamera, now, {
     mode: topView ? 'top' : 'perspective',
     radiusBlocks: visibleRadiusBlocks(props.viewDistance, props.lodDistance),
     onlineChunks: manager?.displayedChunkKeys(),
-    hasSkyLight: dimDef?.hasSkyLight ?? true,
   });
 
-  return { topView, dimDef, offlineHeightMap };
+  return { topView, dimDef, offlineTopMap };
 }
 
 function dayFactorForDimension(dimDef: ViewerDimensionDef, timeOfDay: number): number {
@@ -1062,7 +1061,7 @@ function updateManagerAfterCameraTarget(
     rendererHeight(engine),
     topView,
     props.topClipRange,
-    chunkClipY(topView, heightMapAvailable(capabilities, props.dimension)),
+    chunkClipY(topView, topMapAvailable(capabilities, props.dimension)),
   );
 }
 

@@ -1,10 +1,16 @@
 # Violet Map
 
-Violet Map is a pnpm workspace for inspecting Minecraft Java worlds in a browser:
+Violet Map is a browser-first toolkit for exploring Minecraft Java worlds without opening the game client. It combines offline preprocessing with interactive Three.js rendering, so large worlds can be scanned quickly while nearby chunks still render with model-aware full meshes.
+
+The project is split into a lightweight viewer mode and a full server-backed mode. That makes it useful both as a local visualization/debugging tool and as a small web service for browsing uploaded worlds, editing supporting data, and serving baked top-map tiles.
+
+Its rendering path is intentionally data-oriented: parsing, light baking, LOD generation, and top-map generation live in the core package, while the web app focuses on scheduling, caching, and presenting those meshes smoothly in the browser.
+
+Violet Map is a pnpm workspace with these packages:
 
 | Package | Purpose |
 | --- | --- |
-| `@violet-map/core` | Pure data and rendering algorithms: NBT parsing, region extraction, model baking, meshing, lighting, colors, and LOD meshes. |
+| `@violet-map/core` | Pure data and rendering algorithms: NBT parsing, region extraction, model baking, lighting, colors, and the `mesher` module (`full`, `lod`, `topMap`). |
 | `@violet-map/assets` | CLI utilities for downloading/extracting Mojang client assets and generating data files. |
 | `@violet-map/server` | Hono API server for worlds, chunks, assets, generated atlases, uploads, and editable data. |
 | `@violet-map/web` | Three.js viewer with worker-side chunk parsing, meshing, LOD rendering, and fly controls. |
@@ -52,30 +58,80 @@ Violet Map is a pnpm workspace for inspecting Minecraft Java worlds in a browser
 
    Standard Java world layouts such as `region/`, `DIM-1/`, and `DIM1/` are supported. You can also upload `.mca` region files or individual chunk NBT files from the admin UI.
 
-## Development
+## Runtime Modes
 
-```bash
-pnpm dev
-```
+Violet Map supports two modes:
 
-Default services:
+| Mode | Services | Use |
+| --- | --- | --- |
+| `light` | Viewer only, no backend | Frontend/static UI work or a viewer shell without world/chunk APIs. |
+| `full` | API server, viewer, admin | Normal world browsing, uploads, assets, top-map tiles, and admin workflows. |
+
+Default ports:
 
 | Service | URL |
 | --- | --- |
-| API server | <http://localhost:8787> |
-| Viewer | <http://localhost:5173> |
-| Admin | <http://localhost:5174> |
+| API server | <http://localhost:3300> |
+| Viewer | <http://localhost:3305> |
+| Admin | <http://localhost:3310> |
+
+## Development Without Docker
+
+Using pnpm:
+
+```bash
+pnpm install
+pnpm dev:light
+```
+
+For the full stack:
+
+```bash
+pnpm dev:full
+```
+
+Using npm workspaces:
+
+```bash
+npm install
+npm --workspace @violet-map/web run dev
+```
+
+For the full stack with npm, start these in separate terminals:
+
+```bash
+npm --workspace @violet-map/server run dev
+npm --workspace @violet-map/web run dev
+npm --workspace @violet-map/admin run dev
+```
 
 The viewer URL supports camera parameters such as `?x=&y=&z=&yaw=&pitch=`.
+
+## Development With Docker
+
+Light mode:
+
+```bash
+docker compose --profile light up web
+```
+
+Full mode:
+
+```bash
+docker compose --profile full up
+```
+
+The compose file mounts the repository into Node containers and runs the same workspace scripts as local development.
 
 ## Environment
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `PORT` | `8787` | API server port. |
+| `PORT` | `3300` | API server port. |
 | `WORLDS_DIR` | `data/worlds` | Directory containing Minecraft world folders. |
 | `ASSETS_DIRS` | `data/assets` | Comma-separated asset directories; later entries override earlier entries. |
 | `DATA_DIR` | `data` | Runtime data directory for editable defaults. |
+| `VIOLET_MAP_CONFIG` / `CONFIG_YAML` | | Optional YAML file for non-sensitive server settings. If unset, `violet-map.yaml` or `violet-map.yml` in the working directory is loaded when present. |
 | `MC_VERSION` | `1.21.4` | Preferred Minecraft version for generated data and generated `level.dat`. |
 | `MC_DATA_VERSION` | `MC_VERSION` | Optional `minecraft-data` version override. |
 | `WORLD_STORAGE` | `osfs` | World storage driver. Use `osfs`, `s3`, or `s3-compatible`. |
@@ -89,14 +145,25 @@ The viewer URL supports camera parameters such as `?x=&y=&z=&yaw=&pitch=`.
 | `REGION_CACHE_BYTES` | `268435456` | Byte cap for full `.mca` region cache. |
 | `CHUNK_NBT_CACHE_BYTES` | `134217728` | Byte cap for decompressed chunk NBT cache. |
 
-When running from the repository root with the bundled sample layout, use absolute paths or paths relative to the server package working directory. For example:
+Non-sensitive server settings can also be supplied by YAML:
 
-```bash
-WORLDS_DIR=$PWD/packages/server/data/worlds \
-ASSETS_DIRS=$PWD/packages/server/data/assets \
-DATA_DIR=$PWD/packages/server/data \
-pnpm --filter @violet-map/server dev
+```yaml
+server:
+  port: 3300
+worldsDir: packages/server/data/worlds
+assetsDirs:
+  - packages/server/data/assets
+dataDir: packages/server/data
+worldStorage: osfs
+s3:
+  endpoint: http://localhost:9000
+  region: auto
+  bucket: violet-map
+  prefix: worlds
+  forcePathStyle: true
 ```
+
+Sensitive values stay in environment variables only: `ADMIN_TOKENS`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY`.
 
 ## Asset CLI
 
@@ -112,14 +179,15 @@ pnpm --filter @violet-map/assets dev --help
 | `assets generate-biomes --version <id>` | Generate `biomes.json` with sky, fog, water, grass, and foliage color data. |
 | `assets generate-dimensions --version <id>` | Generate `dimensions.json` for the standard dimensions. |
 | `profile-mca <file.mca>` | Profile parse, height, full mesh, and LOD mesh work for one region file. |
-| `bake-lod <world>` | Bake region-scoped LOD mesh tiles and update `.violet-map/top-map/manifest.json`. |
-| `bake-heightmap <world>` | Bake top-view height/color tiles and update `.violet-map/top-map/manifest.json`. |
+| `bake-topmap <world>` | Bake top-map height/color tiles plus sky/block light cache and update `.violet-map/top-map/manifest.json`. |
+
+`bake-topmap` supports `--approach top|bottom` for top-down worlds or underside/floating-island worlds, and `--light-mode stored-first|rebake`. `stored-first` uses saved light data when present and fills missing light per column; `rebake` ignores saved light and recomputes sky/block light for the tile cache. Transparent overlays such as water, glass, and ice tint the baked top-map color while the output tile remains a single opaque color sample.
 
 ## Runtime APIs
 
 - Chunk payloads are served as MessagePack. The single-chunk endpoint is available at `/api/worlds/:world/:dim/chunk/:cx/:cz`, and the viewer uses `/api/worlds/:world/:dim/chunk-hashes` before incrementally requesting changed or evicted chunks from `/api/worlds/:world/:dim/chunks`.
 - Chunk responses include the source file hash (`hash`/`fileHash`), source type (`region` or `chunk`), and chunk NBT hash (`nbtHash`). For chunks inside `.mca` files, the source hash is the whole region file hash.
-- Top-map capabilities are exposed at `/api/worlds/:world/capabilities` with `hasTopMap`, `hasLod8`, and `hasHeightMap` flags. Offline tiles are served from `/api/worlds/:world/:dim/top-map/:kind/:rx/:rz`.
+- Top-map capabilities are exposed at `/api/worlds/:world/capabilities` with per-dimension `hasTopMap`. Offline tiles are served from `/api/worlds/:world/:dim/top-map/tile/:rx/:rz`.
 - Texture loading supports both individual PNG requests and a generated atlas mode. The viewer first requests `/api/assets/atlas` and falls back to individual textures if atlas generation fails.
 - The worker receives transferable binary chunk buffers and builds typed-array mesh buffers for return to the main thread.
 
@@ -146,5 +214,5 @@ Uploaded worlds do not need to include `level.dat`; the server generates a minim
 - Only 1.18+ chunk sections using `sections` and `block_states` palettes are supported.
 - Entities and block entities are not rendered.
 - Biome tinting is sampled per block; radius blending is not implemented yet.
-- If stored light is missing, fallback lighting is baked per column and may have subtle chunk-boundary seams.
+- If stored light is missing, fallback lighting is baked per column and may have subtle chunk-boundary seams. `bake-topmap --light-mode rebake` can build a fresh top-map sky/block light cache without trusting saved light data.
 - Fluid rendering approximates vanilla levels and neighbor seams but does not simulate animated flow textures.

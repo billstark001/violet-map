@@ -10,7 +10,7 @@
     "dev": "tsx src/cli.ts",
     "assets": "tsx src/cli.ts assets",
     "profile-mca": "tsx src/cli.ts profile-mca",
-    "bake-heightmap": "tsx src/cli.ts bake-heightmap",
+    "bake-topmap": "tsx src/cli.ts bake-topmap",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

@@ -1,12 +1,13 @@
-import { AIR, AIR_NAMES, ChunkColumn } from './world.js';
-import { BlockInfo, BlockStateRef, Direction, MeshBuffers } from './types.js';
-import type { Rgb } from './colors.js';
-import { Float32Writer, Uint32Writer } from './utils.js';
+import { AIR, AIR_NAMES, ChunkColumn } from '../world.js';
+import { BlockInfo, BlockStateRef, Direction, DIR_VEC, MeshBuffers } from '../types.js';
+import type { Rgb } from '../colors.js';
+import { Float32Writer, Uint32Writer } from '../utils.js';
 
 interface LodWorldView {
   getBlock(x: number, y: number, z: number): BlockStateRef;
   getBiome(x: number, y: number, z: number): string;
   getSkyLight?(x: number, y: number, z: number): number;
+  getBlockLight?(x: number, y: number, z: number): number;
 }
 
 interface LodShape {
@@ -28,6 +29,8 @@ interface FaceBucket {
   r: number;
   g: number;
   b: number;
+  sky: number;
+  block: number;
   count: number;
 }
 
@@ -225,6 +228,7 @@ class LodFaceAccumulator {
     z0: number,
     z1: number,
     color: Rgb,
+    light: readonly [number, number],
   ) {
     if (Math.abs(x1 - x0) <= EPS && (dir === 'up' || dir === 'down' || dir === 'north' || dir === 'south')) return;
     if (Math.abs(z1 - z0) <= EPS && (dir === 'up' || dir === 'down' || dir === 'west' || dir === 'east')) return;
@@ -245,20 +249,37 @@ class LodFaceAccumulator {
         hit.r += color[0];
         hit.g += color[1];
         hit.b += color[2];
+        hit.sky += light[0];
+        hit.block += light[1];
         hit.count++;
         return;
       }
     }
 
-    heightBuckets.set(heightKey, { dir, x0, x1, y0, y1, z0, z1, r: color[0], g: color[1], b: color[2], count: 1 });
+    heightBuckets.set(heightKey, {
+      dir,
+      x0,
+      x1,
+      y0,
+      y1,
+      z0,
+      z1,
+      r: color[0],
+      g: color[1],
+      b: color[2],
+      sky: light[0],
+      block: light[1],
+      count: 1,
+    });
     this.bucketCount++;
   }
 
-  flush(builder: LodBuilder, light: [number, number]) {
+  flush(builder: LodBuilder) {
     for (const dirBuckets of this.buckets) {
       for (const heightBuckets of dirBuckets.values()) {
         for (const f of heightBuckets.values()) {
           const color: Rgb = [f.r / f.count, f.g / f.count, f.b / f.count];
+          const light: [number, number] = [f.sky / f.count, f.block / f.count];
           switch (f.dir) {
             case 'up':
               builder.quad([[f.x0, f.y0, f.z0], [f.x1, f.y0, f.z0], [f.x1, f.y0, f.z1], [f.x0, f.y0, f.z1]], color, light, SHADE.up);
@@ -356,6 +377,10 @@ function makeLocalView(col: ChunkColumn): LodWorldView {
     getSkyLight(x, y, z) {
       if (x < ox || x >= ox + 16 || z < oz || z >= oz + 16) return 15;
       return col.getSkyLight(x - ox, y, z - oz);
+    },
+    getBlockLight(x, y, z) {
+      if (x < ox || x >= ox + 16 || z < oz || z >= oz + 16) return 0;
+      return col.getBlockLight(x - ox, y, z - oz);
     },
   };
 }
@@ -557,6 +582,15 @@ export function meshLodChunk(
     noSkyExterior ??= makeNoSkyExteriorMask(view, col, cachedShape);
     return noSkyExterior(wx, wy, wz);
   };
+  const faceLight = (dir: Direction, wx: number, wy: number, wz: number): [number, number] => {
+    const d = DIR_VEC[dir];
+    const lx = wx + d[0];
+    const ly = wy + d[1];
+    const lz = wz + d[2];
+    const sky = hasSkyLight && view.getSkyLight ? view.getSkyLight(lx, ly, lz) / 15 : 0;
+    const block = view.getBlockLight ? view.getBlockLight(lx, ly, lz) / 15 : 0;
+    return [Math.min(1, Math.max(0, sky)), Math.min(1, Math.max(0, block))];
+  };
 
   const sectionCacheScratch = createSectionLodCacheScratch();
 
@@ -614,43 +648,44 @@ export function meshLodChunk(
               const y0 = wy + shape.minY;
               const y1 = wy + shape.maxY;
               const sideMaxY = sideMaxYForShapes(shape, shapes[upIndex]);
-              const addFace = (dir: Direction, ay: number, by: number, color: Rgb) => {
+              const addFace = (dir: Direction, ay: number, by: number, color: Rgb, light: readonly [number, number]) => {
                 switch (dir) {
                   case 'up':
                   case 'down':
-                    acc.add(dir, x0, x1, ay, by, z0, z1, color);
+                    acc.add(dir, x0, x1, ay, by, z0, z1, color, light);
                     break;
                   case 'north':
-                    acc.add(dir, x0, x1, ay, by, z0, z0, color);
+                    acc.add(dir, x0, x1, ay, by, z0, z0, color, light);
                     break;
                   case 'south':
-                    acc.add(dir, x0, x1, ay, by, z1, z1, color);
+                    acc.add(dir, x0, x1, ay, by, z1, z1, color, light);
                     break;
                   case 'west':
-                    acc.add(dir, x0, x0, ay, by, z0, z1, color);
+                    acc.add(dir, x0, x0, ay, by, z0, z1, color, light);
                     break;
                   case 'east':
-                    acc.add(dir, x1, x1, ay, by, z0, z1, color);
+                    acc.add(dir, x1, x1, ay, by, z0, z1, color, light);
                     break;
                 }
               };
 
               if (exteriorUp) {
                 const above = shapes[upIndex];
-                if (!above || above.minY > EPS) addFace('up', y1, y1, getColor());
+                if (!above || above.minY > EPS) addFace('up', y1, y1, getColor(), faceLight('up', wx, wy, wz));
               }
 
               if (exteriorDown) {
                 const below = shapes[downIndex];
-                if (!below || below.maxY < 1 - EPS) addFace('down', y0, y0, getColor());
+                if (!below || below.maxY < 1 - EPS) addFace('down', y0, y0, getColor(), faceLight('down', wx, wy, wz));
               }
 
               const side = (dir: Direction, exposed: boolean, cover: LodShape | null, coverAbove: LodShape | null) => {
                 if (!exposed) return;
+                const light = faceLight(dir, wx, wy, wz);
                 const emit = (a: number, b: number) => {
                   const ay = wy + a;
                   const by = wy + b;
-                  addFace(dir, ay, by, getColor());
+                  addFace(dir, ay, by, getColor(), light);
                 };
                 if (!cover) {
                   emit(shape.minY, sideMaxY);
@@ -680,6 +715,6 @@ export function meshLodChunk(
 
   if (acc.empty) return null;
   const builder = new LodBuilder();
-  acc.flush(builder, hasSkyLight ? [1, 0] : [0, 1]);
+  acc.flush(builder);
   return builder.build();
 }

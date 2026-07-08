@@ -3,7 +3,7 @@ import type { MeshBuffers } from '@violet-map/core';
 import type { SectionMeshMsg } from './worker/protocol';
 
 const DB_NAME = 'violet-map-mesh-cache';
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 const STORE = 'meshes';
 const MAX_ENTRIES = 1000;
 const MAX_BYTES = 192 * 1024 * 1024;

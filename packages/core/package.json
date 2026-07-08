@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     ".": { "types": "./src/index.ts", "default": "./src/index.ts" },
+    "./mesher": { "types": "./src/mesher/index.ts", "default": "./src/mesher/index.ts" },
     "./nbt": { "types": "./src/nbt.ts", "default": "./src/nbt.ts" },
     "./region": { "types": "./src/region.ts", "default": "./src/region.ts" }
   },

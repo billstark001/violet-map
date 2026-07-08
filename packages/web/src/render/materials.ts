@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { TOP_MAP_POSITION_OFFSET, TOP_MAP_POSITION_SCALE } from '@violet-map/core';
 
 export interface SharedUniforms {
   skyDarken: { value: number };
@@ -233,8 +234,8 @@ export function createTopMapMaterial(map: THREE.Texture, shared: SharedUniforms)
   return makeTerrainMaterial(map, shared, {
     map,
     alphaTest: 0.05,
-    positionScale: new THREE.Vector3(1, 1, 1),
-    positionOffset: new THREE.Vector3(0, 0, 0),
+    positionScale: new THREE.Vector3(...TOP_MAP_POSITION_SCALE),
+    positionOffset: new THREE.Vector3(...TOP_MAP_POSITION_OFFSET),
     polygonOffset: true,
     polygonOffsetFactor: 1,
     polygonOffsetUnits: 2,

@@ -1,49 +1,17 @@
 import { cleanStoragePath, worldStorage } from './storage.js';
+import {
+  TOP_MAP_SCHEMA,
+  type TopMapManifest,
+} from '@violet-map/core';
 
 const WORLD_RE = /^[A-Za-z0-9_.-]+$/;
 const TOP_MAP_ROOT = '.violet-map/top-map';
-const TOP_MAP_SCHEMA = 5;
-
-export interface TopMapRegionManifestEntry {
-  x: number;
-  z: number;
-  hash: string;
-}
-
-export interface TopMapRegionSourceEntry extends TopMapRegionManifestEntry {
-  empty: boolean;
-}
-
-export interface TopMapTileSetManifest {
-  tileSizeBlocks: number;
-  sampleStride: number;
-  colorStride: number;
-  colorVersion: number;
-  format: 'msgpack';
-  regions: TopMapRegionManifestEntry[];
-  sources: TopMapRegionSourceEntry[];
-}
-
-export interface TopMapDimensionManifest {
-  hasTopMap: boolean;
-  hasHeightMap: boolean;
-  heightMap?: TopMapTileSetManifest;
-}
-
-export interface TopMapManifest {
-  schema: 5;
-  generatedAt: string;
-  world: string;
-  dimensions: Record<string, TopMapDimensionManifest>;
-}
 
 export interface WorldCapabilities {
   world: string;
   hasTopMap: boolean;
-  hasHeightMap: boolean;
   dimensions: Record<string, {
     hasTopMap: boolean;
-    hasHeightMap: boolean;
   }>;
 }
 
@@ -70,7 +38,7 @@ function validator(size?: number, modifiedAt?: number, etag?: string): string {
 function tilePath(world: string, dim: string, rx: number, rz: number): string {
   assertWorldName(world);
   if (!Number.isInteger(rx) || !Number.isInteger(rz)) throw new Error('bad region coords');
-  return cleanStoragePath(`${world}/${TOP_MAP_ROOT}/${encodeURIComponent(dim)}/heightmap/r.${rx}.${rz}.msgpack`);
+  return cleanStoragePath(`${world}/${TOP_MAP_ROOT}/${encodeURIComponent(dim)}/topmap/r.${rx}.${rz}.msgpack`);
 }
 
 function toCapabilities(world: string, manifest: TopMapManifest | null): WorldCapabilities {
@@ -78,14 +46,12 @@ function toCapabilities(world: string, manifest: TopMapManifest | null): WorldCa
   for (const [dim, value] of Object.entries(manifest?.dimensions ?? {})) {
     dimensions[dim] = {
       hasTopMap: value.hasTopMap,
-      hasHeightMap: value.hasHeightMap,
     };
   }
   const values = Object.values(dimensions);
   return {
     world,
     hasTopMap: values.some((d) => d.hasTopMap),
-    hasHeightMap: values.some((d) => d.hasHeightMap),
     dimensions,
   };
 }
@@ -131,8 +97,8 @@ export async function readTopMapTile(
   const manifest = await getTopMapManifest(world);
   const dimension = manifest?.dimensions[dim];
   if (!dimension) return null;
-  if (!dimension.hasHeightMap) return null;
-  if (!dimension.heightMap?.regions.some((region) => region.x === rx && region.z === rz)) return null;
+  if (!dimension.hasTopMap) return null;
+  if (!dimension.topMap?.regions.some((region) => region.x === rx && region.z === rz)) return null;
   return worldStorage.read(tilePath(world, dim, rx, rz));
 }
 
