@@ -8,7 +8,11 @@
     "./nbt": { "types": "./src/nbt.ts", "default": "./src/nbt.ts" },
     "./region": { "types": "./src/region.ts", "default": "./src/region.ts" }
   },
-  "scripts": { "typecheck": "tsc -p tsconfig.json" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "start": "node -e \"console.log('@violet-map/core is a library package with no standalone service')\"",
+    "typecheck": "tsc -p tsconfig.json"
+  },
   "dependencies": {
     "pako": "^3.0.0",
     "prismarine-nbt": "^2.8.0",

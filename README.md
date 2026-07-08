@@ -2,7 +2,7 @@
 
 Violet Map is a browser-first toolkit for exploring Minecraft Java worlds without opening the game client. It combines offline preprocessing with interactive Three.js rendering, so large worlds can be scanned quickly while nearby chunks still render with model-aware full meshes.
 
-The project is split into a lightweight viewer mode and a full server-backed mode. That makes it useful both as a local visualization/debugging tool and as a small web service for browsing uploaded worlds, editing supporting data, and serving baked top-map tiles.
+The project is split into a lightweight server-backed viewer mode and a full mode with the admin UI enabled. That makes it useful both as a local visualization/debugging tool and as a small web service for browsing uploaded worlds, editing supporting data, and serving baked top-map tiles.
 
 Its rendering path is intentionally data-oriented: parsing, light baking, LOD generation, and top-map generation live in the core package, while the web app focuses on scheduling, caching, and presenting those meshes smoothly in the browser.
 
@@ -64,8 +64,8 @@ Violet Map supports two modes:
 
 | Mode | Services | Use |
 | --- | --- | --- |
-| `light` | Viewer only, no backend | Frontend/static UI work or a viewer shell without world/chunk APIs. |
-| `full` | API server, viewer, admin | Normal world browsing, uploads, assets, top-map tiles, and admin workflows. |
+| `light` | API server and viewer | Normal browsing without the admin UI. This is the default development and start mode. |
+| `full` | API server, viewer, admin | Everything in light mode plus uploads, editable data, and admin workflows. |
 
 Default ports:
 
@@ -81,7 +81,7 @@ Using pnpm:
 
 ```bash
 pnpm install
-pnpm dev:light
+pnpm dev
 ```
 
 For the full stack:
@@ -94,6 +94,7 @@ Using npm workspaces:
 
 ```bash
 npm install
+npm --workspace @violet-map/server run dev
 npm --workspace @violet-map/web run dev
 ```
 
@@ -107,12 +108,19 @@ npm --workspace @violet-map/admin run dev
 
 The viewer URL supports camera parameters such as `?x=&y=&z=&yaw=&pitch=`.
 
+For built assets, run `pnpm build` first and then start either mode:
+
+```bash
+pnpm start
+pnpm start:full
+```
+
 ## Development With Docker
 
 Light mode:
 
 ```bash
-docker compose --profile light up web
+docker compose --profile light up
 ```
 
 Full mode:

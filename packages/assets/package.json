@@ -8,6 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js --help",
     "assets": "tsx src/cli.ts assets",
     "profile-mca": "tsx src/cli.ts profile-mca",
     "bake-topmap": "tsx src/cli.ts bake-topmap",

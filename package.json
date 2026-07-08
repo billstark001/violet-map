@@ -3,10 +3,13 @@
   "private": true,
   "workspaces": ["packages/*"],
   "scripts": {
-    "dev": "pnpm run dev:full",
-    "dev:light": "pnpm --filter=@violet-map/web run dev",
-    "dev:full": "pnpm --filter=!@violet-map/assets --parallel -r run dev",
+    "dev": "pnpm run dev:light",
+    "dev:light": "pnpm --filter=@violet-map/server --filter=@violet-map/web --parallel -r run dev",
+    "dev:full": "pnpm --filter=@violet-map/server --filter=@violet-map/web --filter=@violet-map/admin --parallel -r run dev",
     "build": "pnpm -r run build",
+    "start": "pnpm run start:light",
+    "start:light": "pnpm --filter=@violet-map/server --filter=@violet-map/web --parallel -r run start",
+    "start:full": "pnpm --filter=@violet-map/server --filter=@violet-map/web --filter=@violet-map/admin --parallel -r run start",
     "typecheck": "pnpm -r run typecheck"
   },
   "devDependencies": {

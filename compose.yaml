@@ -1,7 +1,7 @@
 services:
   server:
     image: node:24-bookworm-slim
-    profiles: ["full"]
+    profiles: ["light", "full"]
     working_dir: /app
     command: sh -lc "corepack enable && pnpm install && pnpm --filter @violet-map/server dev"
     environment:
@@ -18,6 +18,8 @@ services:
   web:
     image: node:24-bookworm-slim
     profiles: ["light", "full"]
+    depends_on:
+      - server
     working_dir: /app
     command: sh -lc "corepack enable && pnpm install && pnpm --filter @violet-map/web dev -- --host 0.0.0.0"
     environment:
