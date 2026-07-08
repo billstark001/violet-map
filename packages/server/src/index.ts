@@ -17,6 +17,7 @@ import {
   getChunkMetadataBatch,
   getChunksNbtWithMetaBatch,
   getChunkNbtWithMeta,
+  listChunkSourceCoverage,
   listRegions,
   listWorlds,
   saveChunkNbt,
@@ -47,7 +48,9 @@ function requestedChunks(raw: unknown): { cx: number; cz: number }[] {
 app.get('/api/worlds', async (c) => c.json(await listWorlds()));
 app.get('/api/worlds/:world/capabilities', async (c) => c.json(await getWorldCapabilities(c.req.param('world'))));
 app.get('/api/worlds/:world/:dim/regions', async (c) =>
-  c.json(await listRegions(c.req.param('world'), c.req.param('dim'))));
+  c.json(await listRegions(c.req.param('world'), decodeURIComponent(c.req.param('dim')))));
+app.get('/api/worlds/:world/:dim/chunk-coverage', async (c) =>
+  c.json(await listChunkSourceCoverage(c.req.param('world'), decodeURIComponent(c.req.param('dim')))));
 
 app.get('/api/worlds/:world/:dim/top-map/manifest', async (c) => {
   const manifest = await getTopMapManifest(c.req.param('world'));

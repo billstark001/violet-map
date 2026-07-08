@@ -15,7 +15,7 @@ import {
 import { buildAtlas, collectTextureIds, loadColormap } from '../atlas';
 import { ChunkManager, type TopClipRange } from './chunkManager';
 import { EMPTY_CHUNK_SCHEDULER_STATS, type ChunkSchedulerStats } from './chunkScheduler';
-import { FlyControls, TopDownControls, type FlyView } from './controls';
+import { clampFlyPitch, FlyControls, normalizeFlyYaw, TopDownControls, type FlyView } from './controls';
 import { createMaterials, createSharedUniforms, SharedUniforms, TerrainMaterials } from './materials';
 import { TopMapManager } from './topMapManager';
 import type { WorkerInit } from '../worker/protocol';
@@ -43,6 +43,8 @@ export interface CameraPositionRequest {
   x: number;
   y: number;
   z: number;
+  yaw?: number;
+  pitch?: number;
   seq: number;
 }
 
@@ -173,8 +175,8 @@ function viewFromParams(params: URLSearchParams, defaults: FlyView = DEFAULT_VIE
     x: finiteParam(params, 'x', defaults.x),
     y: finiteParam(params, 'y', defaults.y),
     z: finiteParam(params, 'z', defaults.z),
-    yaw: finiteParam(params, 'yaw', defaults.yaw),
-    pitch: finiteParam(params, 'pitch', defaults.pitch),
+    yaw: normalizeFlyYaw(finiteParam(params, 'yaw', defaults.yaw)),
+    pitch: clampFlyPitch(finiteParam(params, 'pitch', defaults.pitch)),
     hasAngles,
   };
 }
@@ -193,8 +195,8 @@ function viewFromSaved(saved: Partial<FlyView> | null, defaults: FlyView = DEFAU
     x: finiteNumber(saved.x, defaults.x),
     y: finiteNumber(saved.y, defaults.y),
     z: finiteNumber(saved.z, defaults.z),
-    yaw: finiteNumber(saved.yaw, defaults.yaw),
-    pitch: finiteNumber(saved.pitch, defaults.pitch),
+    yaw: normalizeFlyYaw(finiteNumber(saved.yaw, defaults.yaw)),
+    pitch: clampFlyPitch(finiteNumber(saved.pitch, defaults.pitch)),
     hasAngles: Number.isFinite(saved.yaw) || Number.isFinite(saved.pitch),
   };
 }
@@ -212,8 +214,8 @@ function buildViewUrl(pathname: string, search: string, hash: string, view: FlyV
   params.set('x', fixed(view.x, 2));
   params.set('y', fixed(view.y, 2));
   params.set('z', fixed(view.z, 2));
-  params.set('yaw', fixed(view.yaw, 4));
-  params.set('pitch', fixed(view.pitch, 4));
+  params.set('yaw', fixed(normalizeFlyYaw(view.yaw), 4));
+  params.set('pitch', fixed(clampFlyPitch(view.pitch), 4));
   params.delete('lookAtX');
   params.delete('lookAtY');
   params.delete('lookAtZ');
@@ -247,8 +249,8 @@ function cameraView(camera: THREE.Camera, yaw: number, pitch: number): FlyView {
     x: camera.position.x,
     y: camera.position.y,
     z: camera.position.z,
-    yaw,
-    pitch,
+    yaw: normalizeFlyYaw(yaw),
+    pitch: clampFlyPitch(pitch),
   };
 }
 
@@ -280,8 +282,8 @@ function setControlsEnabled(engine: Engine, mode: ViewMode) {
 function cameraOrientation(camera: THREE.Camera): { yaw: number; pitch: number } {
   camera.getWorldDirection(cameraDirection);
   return {
-    yaw: Math.atan2(-cameraDirection.x, -cameraDirection.z),
-    pitch: Math.asin(THREE.MathUtils.clamp(cameraDirection.y, -1, 1)),
+    yaw: normalizeFlyYaw(Math.atan2(-cameraDirection.x, -cameraDirection.z)),
+    pitch: clampFlyPitch(Math.asin(THREE.MathUtils.clamp(cameraDirection.y, -1, 1))),
   };
 }
 
@@ -986,6 +988,9 @@ function renderFrame({ engine, manager, latestStats, props, capabilities, state 
 
 function createWorldManager(engine: Engine, props: ViewerProps): ChunkManager {
   const dimDef = dimensionDefinition(engine.dimensions, props.dimension);
+  const schedulerRadiusChunks = Math.min(32, Math.ceil(props.viewDistance + props.lodDistance));
+  const schedulerMaxCandidates = Math.min(1536, Math.max(896, schedulerRadiusChunks * 32));
+  const schedulerMaxFrameCandidates = Math.min(112, Math.max(72, Math.ceil(schedulerRadiusChunks * 2.5)));
   return new ChunkManager(engine.scene, engine.materials, engine.initPayload, {
     world: props.world,
     dimension: props.dimension,
@@ -995,13 +1000,17 @@ function createWorldManager(engine: Engine, props: ViewerProps): ChunkManager {
     // 十分抽象，渲染一个lod耗时是渲染完整区块的85%左右，完全没有优化性能的意义，不如直接拔了
     disableLod: true,
     scheduling: {
-      activeRadiusChunks: 32,
-      maxFrameCandidates: 56,
-      tauImportance: 0.85,
-      tauSatisfaction: 3,
-      angleSigmaRad: 0.75,
-      distanceWeightPower: 1,
-      overshootEta: 0.18,
+      activeRadiusChunks: schedulerRadiusChunks,
+      maxCandidates: schedulerMaxCandidates,
+      maxFrameCandidates: schedulerMaxFrameCandidates,
+      tauImportance: 0.7,
+      tauSatisfaction: 1.8,
+      angleSigmaRad: 0.8,
+      distanceInverseSquareRadiusChunks: Math.max(10, schedulerRadiusChunks * 0.4),
+      overshootEta: 0.12,
+      neighborSatisfactionPenaltyByCount: [0, 0, 0.04, 0.085, 0.14, 0.21, 0.3, 0.4, 0.52],
+      minImportanceToSchedule: 0.004,
+      minGapToSchedule: 0.008,
     }
   });
 }
@@ -1021,6 +1030,13 @@ function moveCameraToTarget(engine: Engine, target: CameraPositionRequest, viewM
     engine.activeCamera = engine.topOrthographicCamera;
   } else {
     engine.flyControls.setPosition(target.x, target.y, target.z);
+    if (Number.isFinite(target.yaw) || Number.isFinite(target.pitch)) {
+      const current = engine.flyControls.getView();
+      engine.flyControls.setAngles(
+        Number.isFinite(target.yaw) ? target.yaw! : current.yaw,
+        Number.isFinite(target.pitch) ? target.pitch! : current.pitch,
+      );
+    }
     engine.activeCamera = engine.perspectiveCamera;
   }
   setControlsEnabled(engine, viewMode);

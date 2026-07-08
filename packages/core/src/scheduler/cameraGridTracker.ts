@@ -75,6 +75,15 @@ export interface TrackerConfig {
   /** Time constant for importance response/decay. */
   tauImportance?: number;
 
+  /** Importance half-life for cells at the camera. Defaults to tauImportance * ln(2). */
+  nearImportanceHalfLife?: number;
+
+  /** Importance half-life for cells at the active radius. Defaults to tauImportance * ln(2). */
+  farImportanceHalfLife?: number;
+
+  /** Shapes the near-to-far importance half-life interpolation. */
+  importanceDecayDistancePower?: number;
+
   /** Time constant for satisfaction overshoot decay. */
   tauSatisfaction?: number;
 
@@ -86,6 +95,9 @@ export interface TrackerConfig {
 
   /** Distance falloff exponent. 1 means linear distance falloff. */
   distanceWeightPower?: number;
+
+  /** Optional soft inverse-square distance scale. null disables this multiplier. */
+  distanceInverseSquareRadius?: number | null;
 
   /** Added overshoot = overshootEta * positive base-satisfaction increase. */
   overshootEta?: number;
@@ -114,6 +126,12 @@ export interface TrackerConfig {
   /** Maps precision to baseline satisfaction before transient bump. */
   precisionToSatisfaction?: (precision: number) => number;
 
+  /** Precision delta required for a neighbor to count as higher precision. */
+  neighborPrecisionEpsilon?: number;
+
+  /** Satisfaction penalty for 0..8 higher-precision neighbors. */
+  neighborSatisfactionPenaltyByCount?: readonly number[];
+
   /** Optional custom angle weight. Receives theta in radians and best cosine. */
   angleWeight?: (theta: number, bestCos: number) => number;
 
@@ -129,10 +147,15 @@ interface ResolvedConfig {
   m: number;
   chunkSize: number;
   tauImportance: number;
+  defaultImportanceHalfLife: number;
+  nearImportanceHalfLife: number;
+  farImportanceHalfLife: number;
+  importanceDecayDistancePower: number;
   tauSatisfaction: number;
   angleSigmaRad: number;
   fovRadiusRad: number | null;
   distanceWeightPower: number;
+  distanceInverseSquareRadius: number | null;
   overshootEta: number;
   minSatisfaction: number;
   maxSatisfaction: number;
@@ -142,6 +165,9 @@ interface ResolvedConfig {
   initialImportance: (i: number, j: number) => number;
   initialBump: (i: number, j: number) => number;
   precisionToSatisfaction: (precision: number) => number;
+  neighborPrecisionEpsilon: number;
+  neighborSatisfactionPenaltyByCount: Float64Array;
+  usesNeighborSatisfactionPenalty: boolean;
   angleWeight?: (theta: number, bestCos: number) => number;
   distanceWeight?: (horizontalDistance: number, m: number) => number;
   epsilon: number;
@@ -155,10 +181,12 @@ class Chunk {
 
   readonly importance: Float64Array;
   readonly tImportance: Float64Array;
+  readonly importanceHalfLife: Float32Array;
 
   readonly bump: Float64Array;
   readonly tBump: Float64Array;
 
+  readonly higherPrecisionNeighbors: Uint8Array;
   readonly initialized: Uint8Array;
 
   constructor(readonly size: number) {
@@ -169,10 +197,12 @@ class Chunk {
 
     this.importance = new Float64Array(this.count);
     this.tImportance = new Float64Array(this.count);
+    this.importanceHalfLife = new Float32Array(this.count);
 
     this.bump = new Float64Array(this.count);
     this.tBump = new Float64Array(this.count);
 
+    this.higherPrecisionNeighbors = new Uint8Array(this.count);
     this.initialized = new Uint8Array(this.count);
   }
 }
@@ -232,9 +262,11 @@ class SparseChunkGrid {
     chunk.precision[index] = precision;
     chunk.importance[index] = importance;
     chunk.tImportance[index] = now;
+    chunk.importanceHalfLife[index] = this.cfg.defaultImportanceHalfLife;
     chunk.bump[index] = bump;
     chunk.tBump[index] = now;
     chunk.initialized[index] = 1;
+    if (this.cfg.usesNeighborSatisfactionPenalty) this.refreshHigherNeighborCount(i, j);
   }
 
   getOrCreateCell(i: number, j: number, now: number): { chunk: Chunk; index: number } {
@@ -242,6 +274,44 @@ class SparseChunkGrid {
     const chunk = this.getOrCreateChunk(loc.ci, loc.cj);
     this.initCellIfNeeded(chunk, loc.index, i, j, now);
     return { chunk, index: loc.index };
+  }
+
+  getExistingCell(i: number, j: number): { chunk: Chunk; index: number } | null {
+    const loc = this.cellLocation(i, j);
+    const chunk = this.getChunkIfExists(loc.ci, loc.cj);
+    if (chunk === undefined || chunk.initialized[loc.index] === 0) return null;
+    return { chunk, index: loc.index };
+  }
+
+  precisionAt(i: number, j: number): number {
+    const existing = this.getExistingCell(i, j);
+    return existing === null ? this.cfg.initialPrecision(i, j) : existing.chunk.precision[existing.index];
+  }
+
+  refreshHigherNeighborCount(i: number, j: number): void {
+    const existing = this.getExistingCell(i, j);
+    if (existing === null) return;
+
+    const precision = existing.chunk.precision[existing.index];
+    const threshold = precision + this.cfg.neighborPrecisionEpsilon;
+    let higher = 0;
+
+    for (let di = -1; di <= 1; di++) {
+      for (let dj = -1; dj <= 1; dj++) {
+        if (di === 0 && dj === 0) continue;
+        if (this.precisionAt(i + di, j + dj) > threshold) higher++;
+      }
+    }
+
+    existing.chunk.higherPrecisionNeighbors[existing.index] = higher;
+  }
+
+  refreshHigherNeighborCountsAround(i: number, j: number): void {
+    for (let di = -1; di <= 1; di++) {
+      for (let dj = -1; dj <= 1; dj++) {
+        this.refreshHigherNeighborCount(i + di, j + dj);
+      }
+    }
   }
 }
 
@@ -527,6 +597,7 @@ export class CameraGridTracker {
     }
 
     chunk.precision[index] = precision;
+    if (this.cfg.usesNeighborSatisfactionPenalty) this.grid.refreshHigherNeighborCountsAround(i, j);
   }
 
   getPrecision(i: number, j: number, t = this.lastT): number {
@@ -622,8 +693,15 @@ export class CameraGridTracker {
     const dt = toT - fromT;
     if (dt <= 0) return;
 
-    const a = Math.exp(-dt / this.cfg.tauImportance);
-    const oneMinusA = 1 - a;
+    const { k, m, epsilon } = this.cfg;
+    const px = pose.p.x;
+    const py = pose.p.y;
+    const pz = pose.p.z;
+
+    const cp = Math.cos(pose.pitch);
+    const dx = cp * Math.sin(pose.yaw);
+    const dy = Math.sin(pose.pitch);
+    const dz = cp * Math.cos(pose.yaw);
 
     for (let pos = 0; pos < active.length; pos++) {
       const chunk = active.chunks[pos];
@@ -632,10 +710,21 @@ export class CameraGridTracker {
       const i = active.i[pos];
       const j = active.j[pos];
 
+      const qx = (i + 0.5) * k - px;
+      const qz = (j + 0.5) * k - pz;
+      const horizontal2 = qx * qx + qz * qz;
+      const horizontal = Math.sqrt(horizontal2);
+
       const oldImportance = this.realizeImportanceInPlace(chunk, index, fromT);
-      const w = this.gazeWeight(i, j, chunk, index, pose);
+      const halfLife = this.importanceHalfLifeForDistance(horizontal);
+      const a = Math.exp(-Math.LN2 * dt / halfLife);
+      const oneMinusA = 1 - a;
+      const w = horizontal <= m + epsilon
+        ? this.gazeWeightFromGeometry(qx, qz, horizontal2, horizontal, chunk, index, py, dx, dy, dz)
+        : 0;
 
       chunk.importance[index] = oldImportance * a + w * oneMinusA;
+      chunk.importanceHalfLife[index] = halfLife;
       chunk.tImportance[index] = toT;
     }
   }
@@ -689,7 +778,8 @@ export class CameraGridTracker {
   private realizeImportanceInPlace(chunk: Chunk, index: number, t: number): number {
     const dt = t - chunk.tImportance[index];
     if (dt > 0) {
-      chunk.importance[index] *= Math.exp(-dt / this.cfg.tauImportance);
+      const halfLife = chunk.importanceHalfLife[index] || this.cfg.defaultImportanceHalfLife;
+      chunk.importance[index] *= Math.exp(-Math.LN2 * dt / halfLife);
       chunk.tImportance[index] = t;
     }
     return chunk.importance[index];
@@ -710,8 +800,9 @@ export class CameraGridTracker {
     const transient = dt > 0
       ? chunk.bump[index] * Math.exp(-dt / this.cfg.tauSatisfaction)
       : chunk.bump[index];
+    const penalty = this.cfg.neighborSatisfactionPenaltyByCount[chunk.higherPrecisionNeighbors[index]];
 
-    return this.clampSatisfaction(base + transient);
+    return this.clampSatisfaction(base + transient - penalty);
   }
 
   private clampSatisfaction(x: number): number {
@@ -719,30 +810,30 @@ export class CameraGridTracker {
     return Math.max(this.cfg.minSatisfaction, Math.min(this.cfg.maxSatisfaction, x));
   }
 
-  private gazeWeight(i: number, j: number, chunk: Chunk, index: number, pose: Pose): number {
-    const { k, m, epsilon } = this.cfg;
+  private importanceHalfLifeForDistance(horizontal: number): number {
+    const u = Math.max(0, Math.min(1, horizontal / this.cfg.m));
+    const shaped = this.cfg.importanceDecayDistancePower === 1
+      ? u
+      : Math.pow(u, this.cfg.importanceDecayDistancePower);
+    return this.cfg.nearImportanceHalfLife
+      + (this.cfg.farImportanceHalfLife - this.cfg.nearImportanceHalfLife) * shaped;
+  }
 
-    const px = pose.p.x;
-    const py = pose.p.y;
-    const pz = pose.p.z;
-
-    const xc = (i + 0.5) * k;
-    const zc = (j + 0.5) * k;
-
-    const qx = xc - px;
-    const qz = zc - pz;
-    const horizontal2 = qx * qx + qz * qz;
-    const horizontal = Math.sqrt(horizontal2);
-
-    if (horizontal > m + epsilon) return 0;
-
-    const cp = Math.cos(pose.pitch);
-    const dx = cp * Math.sin(pose.yaw);
-    const dy = Math.sin(pose.pitch);
-    const dz = cp * Math.cos(pose.yaw);
-
+  private gazeWeightFromGeometry(
+    qx: number,
+    qz: number,
+    horizontal2: number,
+    horizontal: number,
+    chunk: Chunk,
+    index: number,
+    py: number,
+    dx: number,
+    dy: number,
+    dz: number,
+  ): number {
     const h = chunk.height[index];
     const g = dx * qx + dz * qz;
+    const { epsilon } = this.cfg;
 
     let bestCos = -Infinity;
 
@@ -778,7 +869,7 @@ export class CameraGridTracker {
     if (!(angleWeight > 0)) return 0;
 
     const distanceWeight = this.cfg.distanceWeight !== undefined
-      ? this.cfg.distanceWeight(horizontal, m)
+      ? this.cfg.distanceWeight(horizontal, this.cfg.m)
       : defaultDistanceWeight(horizontal, this.cfg);
 
     if (!(distanceWeight > 0)) return 0;
@@ -799,17 +890,32 @@ function resolveConfig(config: TrackerConfig): ResolvedConfig {
   if (chunkSize > 4096) throw new RangeError(`chunkSize is suspiciously large: ${chunkSize}`);
 
   const tauImportance = config.tauImportance ?? 1.0;
+  const defaultImportanceHalfLife = tauImportance * Math.LN2;
+  const nearImportanceHalfLife = config.nearImportanceHalfLife ?? defaultImportanceHalfLife;
+  const farImportanceHalfLife = config.farImportanceHalfLife ?? defaultImportanceHalfLife;
+  const importanceDecayDistancePower = config.importanceDecayDistancePower ?? 1.0;
   const tauSatisfaction = config.tauSatisfaction ?? 3.0;
   const angleSigmaRad = config.angleSigmaRad ?? 0.25;
   const fovRadiusRad = config.fovRadiusRad === undefined ? null : config.fovRadiusRad;
   const distanceWeightPower = config.distanceWeightPower ?? 1.0;
+  const distanceInverseSquareRadius = config.distanceInverseSquareRadius === undefined
+    ? null
+    : config.distanceInverseSquareRadius;
   const overshootEta = config.overshootEta ?? 0.15;
   const minSatisfaction = config.minSatisfaction ?? 0;
   const maxSatisfaction = config.maxSatisfaction ?? 1;
   const maxActiveCells = config.maxActiveCells ?? Number.POSITIVE_INFINITY;
+  const neighborPrecisionEpsilon = config.neighborPrecisionEpsilon ?? 1e-6;
+  const neighborSatisfactionPenaltyByCount = normalizeNeighborSatisfactionPenalty(
+    config.neighborSatisfactionPenaltyByCount,
+  );
   const epsilon = config.epsilon ?? 1e-9;
 
   assertFiniteNumber(tauImportance, "tauImportance");
+  assertFiniteNumber(defaultImportanceHalfLife, "defaultImportanceHalfLife");
+  assertFiniteNumber(nearImportanceHalfLife, "nearImportanceHalfLife");
+  assertFiniteNumber(farImportanceHalfLife, "farImportanceHalfLife");
+  assertFiniteNumber(importanceDecayDistancePower, "importanceDecayDistancePower");
   assertFiniteNumber(tauSatisfaction, "tauSatisfaction");
   assertFiniteNumber(angleSigmaRad, "angleSigmaRad");
   assertFiniteNumber(distanceWeightPower, "distanceWeightPower");
@@ -817,16 +923,33 @@ function resolveConfig(config: TrackerConfig): ResolvedConfig {
   assertFiniteNumber(minSatisfaction, "minSatisfaction");
   assertFiniteNumber(maxSatisfaction, "maxSatisfaction");
   assertFiniteNumber(maxActiveCells, "maxActiveCells");
+  assertFiniteNumber(neighborPrecisionEpsilon, "neighborPrecisionEpsilon");
   assertFiniteNumber(epsilon, "epsilon");
 
   if (tauImportance <= 0) throw new RangeError("tauImportance must be > 0");
+  if (defaultImportanceHalfLife <= 0) throw new RangeError("defaultImportanceHalfLife must be > 0");
+  if (nearImportanceHalfLife <= 0) throw new RangeError("nearImportanceHalfLife must be > 0");
+  if (farImportanceHalfLife <= 0) throw new RangeError("farImportanceHalfLife must be > 0");
+  if (nearImportanceHalfLife < farImportanceHalfLife) {
+    throw new RangeError("nearImportanceHalfLife must be >= farImportanceHalfLife");
+  }
+  if (importanceDecayDistancePower <= 0) {
+    throw new RangeError("importanceDecayDistancePower must be > 0");
+  }
   if (tauSatisfaction <= 0) throw new RangeError("tauSatisfaction must be > 0");
   if (angleSigmaRad <= 0) throw new RangeError("angleSigmaRad must be > 0");
   if (distanceWeightPower <= 0) throw new RangeError("distanceWeightPower must be > 0");
+  if (distanceInverseSquareRadius !== null) {
+    assertFiniteNumber(distanceInverseSquareRadius, "distanceInverseSquareRadius");
+    if (distanceInverseSquareRadius <= 0) {
+      throw new RangeError("distanceInverseSquareRadius must be > 0 or null");
+    }
+  }
   if (maxSatisfaction < minSatisfaction) {
     throw new RangeError("maxSatisfaction must be >= minSatisfaction");
   }
   if (maxActiveCells < 0) throw new RangeError("maxActiveCells must be >= 0");
+  if (neighborPrecisionEpsilon < 0) throw new RangeError("neighborPrecisionEpsilon must be >= 0");
   if (epsilon <= 0) throw new RangeError("epsilon must be > 0");
   if (fovRadiusRad !== null) {
     assertFiniteNumber(fovRadiusRad, "fovRadiusRad");
@@ -838,10 +961,15 @@ function resolveConfig(config: TrackerConfig): ResolvedConfig {
     m: config.m,
     chunkSize,
     tauImportance,
+    defaultImportanceHalfLife,
+    nearImportanceHalfLife,
+    farImportanceHalfLife,
+    importanceDecayDistancePower,
     tauSatisfaction,
     angleSigmaRad,
     fovRadiusRad,
     distanceWeightPower,
+    distanceInverseSquareRadius,
     overshootEta,
     minSatisfaction,
     maxSatisfaction,
@@ -851,6 +979,9 @@ function resolveConfig(config: TrackerConfig): ResolvedConfig {
     initialImportance: scalarOrFn(config.initialImportance ?? 0),
     initialBump: scalarOrFn(config.initialBump ?? 0),
     precisionToSatisfaction: config.precisionToSatisfaction ?? ((p: number) => p),
+    neighborPrecisionEpsilon,
+    neighborSatisfactionPenaltyByCount,
+    usesNeighborSatisfactionPenalty: hasNeighborSatisfactionPenalty(neighborSatisfactionPenaltyByCount),
     angleWeight: config.angleWeight,
     distanceWeight: config.distanceWeight,
     epsilon,
@@ -863,10 +994,44 @@ function defaultAngleWeight(theta: number, _bestCos: number, cfg: ResolvedConfig
   return Math.exp(-(x * x));
 }
 
+function normalizeNeighborSatisfactionPenalty(value: readonly number[] | undefined): Float64Array {
+  const out = new Float64Array(9);
+  if (value === undefined) return out;
+  if (value.length !== 9) {
+    throw new RangeError(`neighborSatisfactionPenaltyByCount must have 9 entries, got ${value.length}`);
+  }
+
+  let previous = 0;
+  for (let i = 0; i < value.length; i++) {
+    const penalty = value[i];
+    assertFiniteNumber(penalty, `neighborSatisfactionPenaltyByCount[${i}]`);
+    if (penalty < 0) {
+      throw new RangeError(`neighborSatisfactionPenaltyByCount[${i}] must be >= 0`);
+    }
+    if (penalty < previous) {
+      throw new RangeError("neighborSatisfactionPenaltyByCount must be non-decreasing");
+    }
+    out[i] = penalty;
+    previous = penalty;
+  }
+
+  return out;
+}
+
+function hasNeighborSatisfactionPenalty(value: Float64Array): boolean {
+  for (let i = 0; i < value.length; i++) {
+    if (value[i] > 0) return true;
+  }
+  return false;
+}
+
 function defaultDistanceWeight(horizontal: number, cfg: ResolvedConfig): number {
   const base = Math.max(0, Math.min(1, 1 - horizontal / cfg.m));
-  if (cfg.distanceWeightPower === 1) return base;
-  return Math.pow(base, cfg.distanceWeightPower);
+  const edgeWeight = cfg.distanceWeightPower === 1 ? base : Math.pow(base, cfg.distanceWeightPower);
+  if (cfg.distanceInverseSquareRadius === null) return edgeWeight;
+
+  const x = horizontal / cfg.distanceInverseSquareRadius;
+  return edgeWeight / (1 + x * x);
 }
 
 function scalarOrFn(value: number | ((i: number, j: number) => number)): (i: number, j: number) => number {

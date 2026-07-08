@@ -12,6 +12,7 @@ const VANILLA_DIMS: Record<string, string[]> = {
 const DEFAULT_DIMS = ['minecraft:overworld'];
 const WORLD_RE = /^[A-Za-z0-9_.-]+$/;
 const REGION_RE = /^r\.(-?\d+)\.(-?\d+)\.mca$/;
+const CHUNK_RE = /^c\.(-?\d+)\.(-?\d+)\.nbt$/;
 
 export interface WorldInfo { id: string; dimensions: string[] }
 export interface WorldFileManifestEntry {
@@ -38,6 +39,10 @@ export interface ChunkReadResult extends ChunkMetadata {
   fileHash: string;
   source: 'region' | 'chunk';
   sourcePath: string;
+}
+export interface ChunkSourceCoverage {
+  regions: { x: number; z: number; mask: string }[];
+  chunks: { cx: number; cz: number }[];
 }
 
 interface WorldMeta {
@@ -417,6 +422,55 @@ export async function listRegions(world: string, dim: string): Promise<{ x: numb
     }
   }
   return [...out.values()].sort((a, b) => a.x - b.x || a.z - b.z);
+}
+
+export async function listChunkSourceCoverage(world: string, dim: string): Promise<ChunkSourceCoverage> {
+  const [regions, chunks] = await Promise.all([
+    listRegionChunkMasks(world, dim),
+    listChunkOverrides(world, dim),
+  ]);
+  return { regions, chunks };
+}
+
+async function listRegionChunkMasks(world: string, dim: string): Promise<{ x: number; z: number; mask: string }[]> {
+  const out = new Map<string, { x: number; z: number; mask: string }>();
+  for (const sub of dimensionRegionCandidates(dim)) {
+    const prefix = `${world}/${sub}`;
+    for (const file of await worldStorage.list(prefix)) {
+      const match = REGION_RE.exec(file.path.split('/').pop() ?? '');
+      if (!match) continue;
+      const x = Number(match[1]);
+      const z = Number(match[2]);
+      const header = await readRegionHeader(file.path);
+      out.set(`${x},${z}`, { x, z, mask: regionChunkMask(header?.header) });
+    }
+  }
+  return [...out.values()].sort((a, b) => a.x - b.x || a.z - b.z);
+}
+
+function regionChunkMask(header: Uint8Array | undefined): string {
+  const mask = new Uint8Array(128);
+  if (header) {
+    for (let z = 0; z < 32; z++) {
+      for (let x = 0; x < 32; x++) {
+        if (!hasRegionChunkHeader(header, x, z)) continue;
+        const index = x + z * 32;
+        mask[index >> 3] |= 1 << (index & 7);
+      }
+    }
+  }
+  return Buffer.from(mask).toString('base64');
+}
+
+async function listChunkOverrides(world: string, dim: string): Promise<{ cx: number; cz: number }[]> {
+  const out = new Map<string, { cx: number; cz: number }>();
+  for (const file of await worldStorage.list(chunkOverrideDir(world, dim))) {
+    const match = CHUNK_RE.exec(file.path.split('/').pop() ?? '');
+    if (!match) continue;
+    const item = { cx: Number(match[1]), cz: Number(match[2]) };
+    out.set(`${item.cx},${item.cz}`, item);
+  }
+  return [...out.values()].sort((a, b) => a.cx - b.cx || a.cz - b.cz);
 }
 
 export async function getChunkMetadataBatch(

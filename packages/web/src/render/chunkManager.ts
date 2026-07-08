@@ -1,6 +1,13 @@
 import * as THREE from 'three';
 import type { DimensionDef, MeshBuffers, RenderLayer } from '@violet-map/core';
-import { fetchChunkHashes, fetchChunks, type ChunkHashPayload, type ChunkPayload } from '../api';
+import {
+  fetchChunkHashes,
+  fetchChunks,
+  fetchChunkSourceCoverage,
+  type ChunkHashPayload,
+  type ChunkPayload,
+  type ChunkSourceCoveragePayload,
+} from '../api';
 import { debugLog, isDebugLoggingEnabled } from '../logger';
 import { chunkKey, type SectionMeshMsg, WorkerInit, WorkerRequest, WorkerResponse } from '../worker/protocol';
 import { getCachedFull, getCachedLod, putCachedFull, putCachedLod, type MeshCacheKeyParts } from '../meshCache';
@@ -83,6 +90,13 @@ interface CachePartsResult {
   stable: boolean;
 }
 
+interface ChunkSourceCoverage {
+  regions: Set<string>;
+  regionMasks: Map<string, Uint8Array>;
+  chunks: Set<string>;
+  hasRegionMasks: boolean;
+}
+
 export interface TopClipRange {
   minY: number;
   maxY: number;
@@ -117,6 +131,44 @@ function normalizeTopClipRange(range?: TopClipRange): TopClipRange {
     minY: Math.max(CHUNK_WORLD_MIN_Y, Math.min(CHUNK_WORLD_MAX_Y, Math.min(minY, maxY))),
     maxY: Math.max(CHUNK_WORLD_MIN_Y, Math.min(CHUNK_WORLD_MAX_Y, Math.max(minY, maxY))),
   };
+}
+
+function normalizeChunkSourceCoverage(payload: ChunkSourceCoveragePayload): ChunkSourceCoverage {
+  const regions = new Set<string>();
+  const regionMasks = new Map<string, Uint8Array>();
+  const chunks = new Set<string>();
+  let hasRegionMasks = false;
+
+  for (const region of payload.regions ?? []) {
+    if (!Number.isInteger(region.x) || !Number.isInteger(region.z)) continue;
+    const key = `${region.x},${region.z}`;
+    regions.add(key);
+    if (typeof region.mask === 'string') {
+      const mask = decodeCoverageMask(region.mask);
+      if (mask.byteLength >= 128) {
+        regionMasks.set(key, mask);
+        hasRegionMasks = true;
+      }
+    }
+  }
+
+  for (const chunk of payload.chunks ?? []) {
+    if (!Number.isInteger(chunk.cx) || !Number.isInteger(chunk.cz)) continue;
+    chunks.add(`${chunk.cx},${chunk.cz}`);
+  }
+
+  return { regions, regionMasks, chunks, hasRegionMasks };
+}
+
+function decodeCoverageMask(value: string): Uint8Array {
+  try {
+    const binary = atob(value);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+    return out;
+  } catch {
+    return new Uint8Array(0);
+  }
 }
 
 interface FullSectionRender {
@@ -195,6 +247,7 @@ export class ChunkManager {
   private lodCacheHits = 0;
   private lodCacheMisses = 0;
   private schedulerStats: ChunkSchedulerStats = {
+    trackedChunks: 0,
     nbt: 0,
     lodReady: 0,
     lodRendered: 0,
@@ -223,6 +276,8 @@ export class ChunkManager {
   private lastUpdate = 0;
   private lodReleaseStep: LodStep = DEFAULT_LOD_RELEASE_STEP;
   private disposed = false;
+  private coverageSeq = 0;
+  private chunkCoverage: ChunkSourceCoverage | null = null;
   private topDownView = false;
   private topClipRange: TopClipRange = { minY: CHUNK_WORLD_MIN_Y, maxY: CHUNK_WORLD_MAX_Y };
   readonly root = new THREE.Group();
@@ -241,6 +296,7 @@ export class ChunkManager {
     this.root.updateMatrix();
     scene.add(this.root);
     this.lodReleaseStep = this.resolveLodReleaseStep();
+    void this.loadChunkSourceCoverage();
     const workerCount = this.resolveWorkerCount();
     for (let i = 0; i < workerCount; i++) {
       const worker = new Worker(new URL('../worker/meshWorker.ts', import.meta.url), { type: 'module' });
@@ -301,6 +357,58 @@ export class ChunkManager {
       const copy = i === last ? chunk : chunk.slice(0);
       this.workers[i].postMessage({ ...msg, chunk: copy } satisfies WorkerRequest, [copy]);
     }
+  }
+
+  // #endregion
+
+  // #region Source coverage
+
+  private async loadChunkSourceCoverage() {
+    const seq = ++this.coverageSeq;
+    this.chunkCoverage = null;
+    try {
+      const payload = await fetchChunkSourceCoverage(this.opts.world, this.opts.dimension);
+      if (this.disposed || seq !== this.coverageSeq) return;
+      this.chunkCoverage = normalizeChunkSourceCoverage(payload);
+      let markedAbsent = 0;
+      for (const e of this.chunks.values()) {
+        if (this.hasChunkSourceAt(e.cx, e.cz) !== false) continue;
+        if (e.state !== 'absent') markedAbsent++;
+        this.markUnavailable(e, 'absent', true);
+      }
+      if (markedAbsent > 0) this.scheduler.clear();
+      debugLog('chunk-manager', 'coverage-loaded', {
+        world: this.opts.world,
+        dimension: this.opts.dimension,
+        regions: this.chunkCoverage.regions.size,
+        regionMasks: this.chunkCoverage.regionMasks.size,
+        chunks: this.chunkCoverage.chunks.size,
+        markedAbsent,
+      });
+      this.reportStats();
+    } catch (error) {
+      if (this.disposed || seq !== this.coverageSeq) return;
+      this.chunkCoverage = null;
+      debugLog('chunk-manager', 'coverage-error', {
+        world: this.opts.world,
+        dimension: this.opts.dimension,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private hasChunkSourceAt(cx: number, cz: number): boolean | null {
+    const coverage = this.chunkCoverage;
+    if (!coverage) return null;
+    if (coverage.chunks.has(`${cx},${cz}`)) return true;
+    const regionKey = `${Math.floor(cx / 32)},${Math.floor(cz / 32)}`;
+    if (!coverage.regions.has(regionKey)) return false;
+    if (!coverage.hasRegionMasks) return true;
+
+    const mask = coverage.regionMasks.get(regionKey);
+    if (!mask) return false;
+    const index = (cx & 31) + ((cz & 31) << 5);
+    return (mask[index >> 3] & (1 << (index & 7))) !== 0;
   }
 
   // #endregion
@@ -391,7 +499,10 @@ export class ChunkManager {
       options: this.schedulerOptions(),
       keyFor: (cx, cz) => this.key(cx, cz),
       entryFor: (key) => this.schedulerEntryForKey(key),
-      cellInfoFor: (cx, cz) => ({ topMapSurfaceY: this.opts.topMapSurfaceYAt?.(cx, cz) ?? null }),
+      cellInfoFor: (cx, cz) => ({
+        topMapSurfaceY: this.opts.topMapSurfaceYAt?.(cx, cz) ?? null,
+        hasChunkSource: this.hasChunkSourceAt(cx, cz),
+      }),
       entries: this.schedulerEntries(),
     });
 
@@ -402,6 +513,9 @@ export class ChunkManager {
       e.lastScore = update.lastScore;
       e.lastTargetStep = update.lastTargetStep;
       e.lastForcedFull = update.lastForcedFull;
+      e.lastImportance = update.lastImportance;
+      e.lastSatisfaction = update.lastSatisfaction;
+      e.lastGap = update.lastGap;
     }
 
     for (const action of frame.actions) this.applySchedulerAction(action, now);
@@ -475,6 +589,9 @@ export class ChunkManager {
       lastScore: Infinity,
       lastTargetStep: 8,
       lastForcedFull: false,
+      lastImportance: 0,
+      lastSatisfaction: 0,
+      lastGap: 0,
     };
     this.chunks.set(key, e);
     return e;
@@ -1664,7 +1781,7 @@ export class ChunkManager {
       if (e.fullReady) fullReady++;
       if (e.displayed === 'full' && this.entryHasVisibleMesh(e)) fullRendered++;
     }
-    return { nbt, lodReady, lodRendered, fullReady, fullRendered };
+    return { trackedChunks: this.chunks.size, nbt, lodReady, lodRendered, fullReady, fullRendered };
   }
 
   private collectProfileStats(renderStats: ChunkRenderStats): ChunkProfileStats {
@@ -1703,6 +1820,7 @@ export class ChunkManager {
 
   dispose() {
     this.disposed = true;
+    this.coverageSeq++;
     for (const e of this.chunks.values()) this.removeMesh(e);
     this.chunks.clear();
     this.scheduler.clear();

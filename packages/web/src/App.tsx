@@ -12,6 +12,7 @@ import type { TopClipRange } from './render/chunkManager';
 
 interface WorldInfo { id: string; dimensions: string[] }
 type Axis = 'x' | 'y' | 'z';
+type AngleAxis = 'yaw' | 'pitch';
 type DiagnosticDetail = 'off' | 'simple' | 'standard' | 'detailed';
 type ViewerStats = ViewerStatsPayload;
 
@@ -148,6 +149,30 @@ function coordText(v: number): string {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
+function normalizeYawDegrees(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return ((value + 180) % 360 + 360) % 360 - 180;
+}
+
+function clampPitchDegrees(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  const max = 90 - 0.01 * 180 / Math.PI;
+  return Math.max(-max, Math.min(max, value));
+}
+
+function degreesText(value: number): string {
+  if (!Number.isFinite(value)) return '0';
+  const rounded = Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+function angleDraftFromStats(stats: ViewerStats): Record<AngleAxis, string> {
+  return {
+    yaw: degreesText(normalizeYawDegrees(stats.yaw * 180 / Math.PI)),
+    pitch: degreesText(clampPitchDegrees(stats.pitch * 180 / Math.PI)),
+  };
+}
+
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -191,6 +216,7 @@ export default function App() {
   const [cacheStats, setCacheStats] = useState({ entries: 0, bytes: 0 });
   const [coordDirty, setCoordDirty] = useState(false);
   const [coordDraft, setCoordDraft] = useState<Record<Axis, string>>({ x: '0', y: '80', z: '0' });
+  const [angleDraft, setAngleDraft] = useState<Record<AngleAxis, string>>({ yaw: '0', pitch: '0' });
   const [cameraTarget, setCameraTarget] = useState<CameraPositionRequest>();
   const [worldsLoaded, setWorldsLoaded] = useState(false);
 
@@ -289,7 +315,8 @@ export default function App() {
 
   const dims = worlds.find((w) => w.id === world)?.dimensions ?? [];
   const draftValues = [Number(coordDraft.x), Number(coordDraft.y), Number(coordDraft.z)] as const;
-  const draftValid = draftValues.every(Number.isFinite);
+  const angleDraftValues = [Number(angleDraft.yaw), Number(angleDraft.pitch)] as const;
+  const draftValid = draftValues.every(Number.isFinite) && angleDraftValues.every(Number.isFinite);
   const showStandardDiagnostics = diagnosticDetail === 'standard' || diagnosticDetail === 'detailed';
   const showDetailedDiagnostics = diagnosticDetail === 'detailed';
   const handleStats = (next: typeof stats) => {
@@ -300,21 +327,40 @@ export default function App() {
       setCoordDraft((prev) => (
         prev.x === draft.x && prev.y === draft.y && prev.z === draft.z ? prev : draft
       ));
+      const angle = angleDraftFromStats(next);
+      setAngleDraft((prev) => (
+        prev.yaw === angle.yaw && prev.pitch === angle.pitch ? prev : angle
+      ));
     }
   };
   const setAxis = (axis: Axis, value: string) => {
     setCoordDirty(true);
     setCoordDraft((prev) => ({ ...prev, [axis]: value }));
   };
+  const setAngleAxis = (axis: AngleAxis, value: string) => {
+    setCoordDirty(true);
+    setAngleDraft((prev) => ({ ...prev, [axis]: value }));
+  };
   const useCurrentPosition = () => {
     const current = latestStatsRef.current;
     setCoordDraft({ x: coordText(current.pos[0]), y: coordText(current.pos[1]), z: coordText(current.pos[2]) });
+    setAngleDraft(angleDraftFromStats(current));
     setCoordDirty(false);
   };
   const applyPosition = () => {
     if (!draftValid) return;
+    const yawDeg = normalizeYawDegrees(angleDraftValues[0]);
+    const pitchDeg = clampPitchDegrees(angleDraftValues[1]);
     setCoordDirty(false);
-    setCameraTarget({ x: draftValues[0], y: draftValues[1], z: draftValues[2], seq: Date.now() });
+    setAngleDraft({ yaw: degreesText(yawDeg), pitch: degreesText(pitchDeg) });
+    setCameraTarget({
+      x: draftValues[0],
+      y: draftValues[1],
+      z: draftValues[2],
+      yaw: yawDeg * Math.PI / 180,
+      pitch: pitchDeg * Math.PI / 180,
+      seq: Date.now(),
+    });
   };
   const changeDimension = (value: string) => {
     setDimension(value);
@@ -480,6 +526,25 @@ export default function App() {
                             />
                           </Box>
                         ))}
+                      </Flex>
+                      <Flex gap="2" align="end">
+                        {(['yaw', 'pitch'] as AngleAxis[]).map((axis) => (
+                          <Box key={axis} style={{ flex: 1, minWidth: 0 }}>
+                            <Text as="label" size="1" htmlFor={`angle-${axis}`} style={{ display: 'block', marginBottom: 4 }}>
+                              {axis === 'yaw' ? 'Yaw' : 'Pitch'}
+                            </Text>
+                            <TextField.Root
+                              id={`angle-${axis}`}
+                              size="1"
+                              type="number"
+                              value={angleDraft[axis]}
+                              min={axis === 'yaw' ? -180 : -89.4}
+                              max={axis === 'yaw' ? 180 : 89.4}
+                              step={1}
+                              onChange={(e) => setAngleAxis(axis, e.currentTarget.value)}
+                            />
+                          </Box>
+                        ))}
                         <Button size="1" variant="soft" onClick={useCurrentPosition}>{t('current')}</Button>
                         <Button size="1" disabled={!draftValid} onClick={applyPosition}>{t('go')}</Button>
                       </Flex>
@@ -565,6 +630,7 @@ export default function App() {
                   <Badge color="amber">{t('meshBytesRendered', { value: formatBytes(stats.displayedMeshBytes) })}</Badge>
                   {showStandardDiagnostics && (
                     <>
+                      <Badge color="cyan">{t('trackedChunks', { value: stats.trackedChunks })}</Badge>
                       <Badge color="blue">{t('nbtChunks', { value: stats.nbt })}</Badge>
                       <Badge color="gray">{t('queueStats', { hash: stats.hashQueued, fetch: stats.fetchQueued, mesh: stats.meshQueued })}</Badge>
                       <Badge color="orange">{t('workerStats', {

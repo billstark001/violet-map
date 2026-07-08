@@ -23,27 +23,45 @@ const FETCH_BATCH_SIZE = 16;
 const BLOCKED_RENDER_HASH_BATCH_SIZE = 4;
 const BLOCKED_RENDER_FETCH_BATCH_SIZE = 3;
 const MAX_IO_QUEUE = 384;
-const MAX_MESH_QUEUE = 36;
+const MAX_MESH_QUEUE = 64;
+const MAX_TRACKED_CHUNKS = 512;
 
-const IO_QUEUE_RETENTION_MS = 1500;
+const IO_QUEUE_RETENTION_MS = 3000;
 const RECORD_RETENTION_MS = 6000;
 const OUTSIDE_ACTIVE_DROP_MS = 350;
-const HARD_TRACKED_MULTIPLIER = 1.05;
 const MESH_RETRY_COOLDOWN_MS = 180;
 const IO_RENDER_SHARE_TARGET = 0.92;
 const MIN_EXISTING_CHUNKS_BEFORE_BALANCE = 12;
 const RENDER_BACKLOG_IO_PAUSE = 4;
 const MAX_FRAME_CANDIDATES = 56;
 const CRITICAL_NEAR_RADIUS_CHUNKS = 2;
-const CRITICAL_CENTER_RAY_MAX_CHUNKS = 12;
+const CRITICAL_CENTER_RAY_MAX_CHUNKS = 8;
 const CRITICAL_CENTER_RAY_STEP_CHUNKS = 0.75;
 const MIN_CRITICAL_RAY_HORIZONTAL = 0.08;
 const CRITICAL_SCORE_BOOST = -2400;
 
-const MIN_IMPORTANCE_TO_SCHEDULE = 0.012;
-const MIN_GAP_TO_SCHEDULE = 0.018;
+const MIN_IMPORTANCE_TO_SCHEDULE = 0.006;
+const MIN_GAP_TO_SCHEDULE = 0.012;
 const TOP_MAP_PRECISION = 0.14;
 const EMPTY_PRECISION = 0;
+const ACTIVE_KEEP_EPSILON = 1e-9;
+const DEFAULT_NEAR_IMPORTANCE_HALF_LIFE_RATIO = 1.8;
+const DEFAULT_FAR_IMPORTANCE_HALF_LIFE_RATIO = 0.25;
+const DEFAULT_IMPORTANCE_DECAY_DISTANCE_POWER = 1.75;
+const DEFAULT_DISTANCE_WEIGHT_POWER = 0.65;
+const DEFAULT_DISTANCE_INVERSE_SQUARE_RADIUS_RATIO = 0.35;
+const DEFAULT_NEIGHBOR_PRECISION_EPSILON = 1e-6;
+const DEFAULT_NEIGHBOR_SATISFACTION_PENALTY_BY_COUNT = [
+  0,
+  0,
+  0.035,
+  0.075,
+  0.12,
+  0.18,
+  0.25,
+  0.34,
+  0.45,
+] as const;
 
 export const LOD_STEPS = [1, 2, 4, 8] as const;
 export type LodStep = typeof LOD_STEPS[number];
@@ -59,6 +77,12 @@ export interface ChunkSchedulingTuning {
   maxFrameCandidates?: number;
   /** Time constant, in seconds, for camera attention to react and decay. */
   tauImportance?: number;
+  /** Importance half-life, in seconds, for cells near the camera. */
+  nearImportanceHalfLife?: number;
+  /** Importance half-life, in seconds, for cells near the active-radius edge. */
+  farImportanceHalfLife?: number;
+  /** Shapes the near-to-far importance half-life interpolation. */
+  importanceDecayDistancePower?: number;
   /** Time constant, in seconds, for satisfaction overshoot to decay. */
   tauSatisfaction?: number;
   /** Gaussian gaze falloff sigma in radians. */
@@ -67,8 +91,16 @@ export interface ChunkSchedulingTuning {
   fovRadiusRad?: number | null;
   /** Horizontal distance falloff exponent. */
   distanceWeightPower?: number;
+  /** Soft inverse-square distance scale in chunks. null disables this multiplier. */
+  distanceInverseSquareRadiusChunks?: number | null;
   /** Temporary satisfaction overshoot when precision improves. */
   overshootEta?: number;
+  /** Precision delta required for a neighbor to count as higher precision. */
+  neighborPrecisionEpsilon?: number;
+  /** Satisfaction penalty for 0..8 higher-precision neighbors. */
+  neighborSatisfactionPenaltyByCount?: readonly number[];
+  /** Satisfaction clamp lower bound. Negative values let neighbor penalties create positive gaps. */
+  minSatisfaction?: number;
   /** Minimum importance needed before a not-yet-satisfied cell schedules work. */
   minImportanceToSchedule?: number;
   /** Minimum importance-satisfaction gap needed before a not-yet-satisfied cell schedules work. */
@@ -83,6 +115,7 @@ export interface ChunkSchedulerOptions {
 
 export interface SchedulerCellInfo {
   topMapSurfaceY: number | null;
+  hasChunkSource: boolean | null;
 }
 
 export interface ChunkPriority {
@@ -102,6 +135,9 @@ interface ChunkCandidate extends ChunkPriority {
   cx: number;
   cz: number;
   targetStep: LodStep;
+  importance: number;
+  satisfaction: number;
+  gap: number;
 }
 
 interface CriticalCell {
@@ -126,6 +162,9 @@ export interface ChunkSchedulerEntry {
   lastScore: number;
   lastTargetStep: LodStep;
   lastForcedFull: boolean;
+  lastImportance: number;
+  lastSatisfaction: number;
+  lastGap: number;
 }
 
 interface SchedulerRecord {
@@ -137,11 +176,15 @@ interface SchedulerRecord {
   lastScore: number;
   lastTargetStep: LodStep;
   lastForcedFull: boolean;
+  lastImportance: number;
+  lastSatisfaction: number;
+  lastGap: number;
 }
 
 interface SchedulerFramePlan {
   candidates: ChunkCandidate[];
   keepKeys: Set<string>;
+  protectedKeys: Set<string>;
   centerCx: number;
   centerCz: number;
 }
@@ -155,6 +198,9 @@ export interface SchedulerEntryUpdate {
   lastScore: number;
   lastTargetStep: LodStep;
   lastForcedFull: boolean;
+  lastImportance: number;
+  lastSatisfaction: number;
+  lastGap: number;
 }
 
 export type SchedulerAction =
@@ -222,6 +268,7 @@ export interface SchedulerMeshResult {
 }
 
 export interface ChunkRenderStats {
+  trackedChunks: number;
   nbt: number;
   lodReady: number;
   lodRendered: number;
@@ -269,6 +316,7 @@ export interface ChunkSchedulerStats extends ChunkRenderStats, ChunkProfileStats
 }
 
 const EMPTY_RENDER_STATS: ChunkRenderStats = {
+  trackedChunks: 0,
   nbt: 0,
   lodReady: 0,
   lodRendered: 0,
@@ -309,11 +357,18 @@ interface TrackerRuntimeConfig {
   maxCandidates: number;
   maxFrameCandidates: number;
   tauImportance: number;
+  nearImportanceHalfLife: number;
+  farImportanceHalfLife: number;
+  importanceDecayDistancePower: number;
   tauSatisfaction: number;
   angleSigmaRad: number;
   fovRadiusRad: number | null;
   distanceWeightPower: number;
+  distanceInverseSquareRadiusBlocks: number | null;
   overshootEta: number;
+  neighborPrecisionEpsilon: number;
+  neighborSatisfactionPenaltyByCount: readonly number[];
+  minSatisfaction: number;
   minImportanceToSchedule: number;
   minGapToSchedule: number;
 }
@@ -321,6 +376,25 @@ interface TrackerRuntimeConfig {
 function clampFinite(value: number | undefined, fallback: number, min: number, max: number): number {
   if (value === undefined || !Number.isFinite(value)) return fallback;
   return Math.max(min, Math.min(max, value));
+}
+
+function normalizeNeighborPenalty(value: readonly number[] | undefined): readonly number[] {
+  const source = value?.length === 9 ? value : DEFAULT_NEIGHBOR_SATISFACTION_PENALTY_BY_COUNT;
+  const out = new Array<number>(9);
+  let previous = 0;
+
+  for (let i = 0; i < out.length; i++) {
+    if (i === 0) {
+      out[i] = 0;
+      continue;
+    }
+    const raw = source[i];
+    const clamped = Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : DEFAULT_NEIGHBOR_SATISFACTION_PENALTY_BY_COUNT[i];
+    previous = Math.max(previous, clamped);
+    out[i] = previous;
+  }
+
+  return out;
 }
 
 function activeCellCapacity(radiusChunks: number): number {
@@ -377,11 +451,18 @@ function trackerConfigKey(cfg: TrackerRuntimeConfig): string {
     cfg.activeRadiusChunks,
     cfg.maxCandidates,
     cfg.tauImportance,
+    cfg.nearImportanceHalfLife,
+    cfg.farImportanceHalfLife,
+    cfg.importanceDecayDistancePower,
     cfg.tauSatisfaction,
     cfg.angleSigmaRad,
     cfg.fovRadiusRad ?? 'none',
     cfg.distanceWeightPower,
+    cfg.distanceInverseSquareRadiusBlocks ?? 'none',
     cfg.overshootEta,
+    cfg.neighborPrecisionEpsilon,
+    cfg.neighborSatisfactionPenaltyByCount.join(','),
+    cfg.minSatisfaction,
   ].join('|');
 }
 
@@ -402,6 +483,7 @@ export class ChunkScheduler {
   private lastCenterCx = 0;
   private lastCenterCz = 0;
   private lastActiveRadiusChunks = DEFAULT_ACTIVE_RADIUS_CHUNKS;
+  private lastMaxCandidates = activeCellCapacity(DEFAULT_ACTIVE_RADIUS_CHUNKS);
   private tmpDirection = new THREE.Vector3();
 
   constructor(private opts: ChunkSchedulerOptions = {}) { }
@@ -458,10 +540,14 @@ export class ChunkScheduler {
       if (decision.removeMesh) actions.push({ type: 'removeMesh', key: candidate.key });
     }
 
-    this.pruneQueues(frame.keepKeys, input.now, input.entryFor);
+    this.pruneQueues(input.now, input.entryFor);
     this.expirePriorities(input.now);
 
-    const evictedKeys = this.evictKeys(frame.keepKeys, input.entries, input.now);
+    const newCandidateCount = frame.candidates.reduce(
+      (count, candidate) => count + (input.entryFor(candidate.key) ? 0 : 1),
+      0,
+    );
+    const evictedKeys = this.evictKeys(frame.keepKeys, frame.protectedKeys, input.entries, input.now, newCandidateCount);
     for (const key of evictedKeys) actions.push({ type: 'dropChunk', key });
 
     return {
@@ -557,6 +643,7 @@ export class ChunkScheduler {
     const nowSeconds = trackerTimeSeconds(input.now);
     const topDownView = input.topDownView ?? false;
     const cfg = this.resolveTrackerConfig(input.camera, topDownView);
+    this.lastMaxCandidates = cfg.maxCandidates;
     this.ensureTracker(cfg, input.force);
 
     const pose = this.poseFromCamera(input.camera);
@@ -589,19 +676,21 @@ export class ChunkScheduler {
     const reranking = this.tracker?.query(cfg.maxCandidates, nowSeconds) ?? ranking;
     const criticalRankedCells = this.snapshotCriticalCells(criticalCells, nowSeconds);
     const rankedCells = this.mergeRankedCells(criticalRankedCells, reranking.gap.top, reranking.importance.top);
-    const keepKeys = new Set<string>();
+    const keepKeys = this.activeDiskKeys(pose, cfg, input.keyFor);
+    const protectedKeys = new Set<string>(criticalKeys);
     const candidates: ChunkCandidate[] = [];
 
     for (const cell of rankedCells) {
       const key = input.keyFor(cell.i, cell.j);
       const entry = input.entryFor(key);
+      const info = input.cellInfoFor?.(cell.i, cell.j) ?? null;
       const critical = criticalKeys.has(key);
       keepKeys.add(key);
 
       const targetStep = critical ? 1 : this.targetStepForCell(cell, entry);
       const shouldSchedule = critical
-        ? this.shouldScheduleCriticalCell(entry, targetStep)
-        : this.shouldScheduleCell(cell, entry, targetStep, cfg);
+        ? this.shouldScheduleCriticalCell(entry, info, targetStep)
+        : this.shouldScheduleCell(cell, entry, info, targetStep, cfg);
       if (!shouldSchedule) continue;
 
       candidates.push({
@@ -609,6 +698,9 @@ export class ChunkScheduler {
         cx: cell.i,
         cz: cell.j,
         targetStep,
+        importance: cell.importance,
+        satisfaction: cell.satisfaction,
+        gap: cell.gap,
         tier: critical ? this.tierForCriticalCell(entry, targetStep) : this.tierForCell(cell, entry, targetStep),
         score: this.scoreForCell(cell, entry, targetStep, centerCx, centerCz) + (critical ? CRITICAL_SCORE_BOOST : 0),
         updatedAt: input.now,
@@ -617,6 +709,7 @@ export class ChunkScheduler {
 
     candidates.sort((a, b) => this.comparePriority(a, b) || a.cx - b.cx || a.cz - b.cz);
     if (candidates.length > cfg.maxFrameCandidates) candidates.length = cfg.maxFrameCandidates;
+    for (const candidate of candidates) protectedKeys.add(candidate.key);
 
     if (isDebugLoggingEnabled()) {
       debugLog('scheduler', 'tracker-frame', {
@@ -632,7 +725,7 @@ export class ChunkScheduler {
       });
     }
 
-    return { candidates, keepKeys, centerCx, centerCz };
+    return { candidates, keepKeys, protectedKeys, centerCx, centerCz };
   }
 
   private rankCells(pose: Pose, nowSeconds: number, cfg: TrackerRuntimeConfig): RankingResult {
@@ -721,8 +814,39 @@ export class ChunkScheduler {
     return out;
   }
 
+  private activeDiskKeys(
+    pose: Pose,
+    cfg: TrackerRuntimeConfig,
+    keyFor: (cx: number, cz: number) => string,
+  ): Set<string> {
+    const out = new Set<string>();
+    const radius = cfg.activeRadiusBlocks;
+    const radius2 = radius * radius;
+    const px = pose.p.x;
+    const pz = pose.p.z;
+
+    const i0 = Math.ceil((px - radius) / CHUNK_SIZE_BLOCKS - 0.5 - ACTIVE_KEEP_EPSILON);
+    const i1 = Math.floor((px + radius) / CHUNK_SIZE_BLOCKS - 0.5 + ACTIVE_KEEP_EPSILON);
+
+    for (let i = i0; i <= i1; i++) {
+      const xc = (i + 0.5) * CHUNK_SIZE_BLOCKS;
+      const dx = xc - px;
+      const remain = radius2 - dx * dx;
+      if (remain < -ACTIVE_KEEP_EPSILON) continue;
+
+      const zLimit = Math.sqrt(Math.max(0, remain));
+      const j0 = Math.ceil((pz - zLimit) / CHUNK_SIZE_BLOCKS - 0.5 - ACTIVE_KEEP_EPSILON);
+      const j1 = Math.floor((pz + zLimit) / CHUNK_SIZE_BLOCKS - 0.5 + ACTIVE_KEEP_EPSILON);
+
+      for (let j = j0; j <= j1; j++) out.add(keyFor(i, j));
+    }
+
+    return out;
+  }
+
   private scheduleCandidate(candidate: ChunkCandidate, entry: ChunkSchedulerEntry): { removeMesh: boolean } {
     if (entry.state === 'absent' || entry.state === 'error') return { removeMesh: true };
+    if (!this.entryNeedsMoreForLastTarget(entry)) return { removeMesh: false };
 
     if (entry.state === 'checking') {
       this.enqueueHash(candidate.key);
@@ -742,7 +866,12 @@ export class ChunkScheduler {
     const batchSize = this.shouldLoadMore(input)
       ? this.ioBatchSize(HASH_BATCH_SIZE, input)
       : BLOCKED_RENDER_HASH_BATCH_SIZE;
-    return this.nextIoBatch(this.hashQueue, batchSize, (entry) => entry?.state === 'checking', input.entryFor);
+    return this.nextIoBatch(
+      this.hashQueue,
+      batchSize,
+      (entry) => entry?.state === 'checking',
+      input.entryFor,
+    );
   }
 
   private nextFetchBatch(input: SchedulerWorkInput): string[] {
@@ -846,7 +975,7 @@ export class ChunkScheduler {
       if (entry.state !== 'stored' || entry.pendingFull || entry.pendingLod) continue;
       const record = this.recordFor(entry);
       if (!record || now - record.lastWantedAt > IO_QUEUE_RETENTION_MS) continue;
-      if (!this.displaySatisfiesTarget(entry, record.lastTargetStep)) backlog++;
+      if (!this.displayCoversTarget(entry, record.lastTargetStep)) backlog++;
     }
     return backlog + this.meshQueue.size;
   }
@@ -928,11 +1057,10 @@ export class ChunkScheduler {
   }
 
   private pruneQueues(
-    keepKeys: Set<string>,
     now: number,
     entryFor: (key: string) => ChunkSchedulerEntry | null,
   ) {
-    const keepQueued = (key: string): boolean => keepKeys.has(key) || this.priorityFreshByKey(key, now);
+    const keepQueued = (key: string): boolean => this.priorityFreshByKey(key, now) || this.recordFreshByKey(key, now);
 
     for (const key of [...this.hashQueue]) {
       const entry = entryFor(key);
@@ -950,7 +1078,9 @@ export class ChunkScheduler {
         continue;
       }
       const entry = entryFor(task.key);
-      if (!entry || entry.state !== 'stored') this.meshQueue.delete(queueKey);
+      if (!entry || entry.state !== 'stored' || !this.shouldStartMeshTask(task, entry, now)) {
+        this.meshQueue.delete(queueKey);
+      }
     }
   }
 
@@ -970,7 +1100,13 @@ export class ChunkScheduler {
     }
   }
 
-  private evictKeys(keepKeys: Set<string>, entries: Iterable<ChunkSchedulerEntry>, now: number): string[] {
+  private evictKeys(
+    keepKeys: Set<string>,
+    protectedKeys: Set<string>,
+    entries: Iterable<ChunkSchedulerEntry>,
+    now: number,
+    reservedSlots: number,
+  ): string[] {
     const out: string[] = [];
     const all = [...entries];
     const already = new Set<string>();
@@ -984,29 +1120,57 @@ export class ChunkScheduler {
       }
     }
 
-    const softLimit = activeCellCapacity(this.lastActiveRadiusChunks);
-    const hardLimit = Math.max(softLimit, Math.floor(softLimit * HARD_TRACKED_MULTIPLIER));
+    const activeCapacity = activeCellCapacity(this.lastActiveRadiusChunks);
+    const residentLimit = Math.min(activeCapacity, MAX_TRACKED_CHUNKS);
+    const existingProtectedCount = all.reduce((count, entry) => count + (protectedKeys.has(entry.key) ? 1 : 0), 0);
+    const softLimit = Math.max(existingProtectedCount, residentLimit - Math.max(0, reservedSlots));
+    const hardLimit = softLimit;
     if (all.length - out.length <= softLimit) return out;
 
-    const victims = all
-      .filter((entry) => !keepKeys.has(entry.key) && !already.has(entry.key))
-      .sort((a, b) => this.evictionScore(b, now) - this.evictionScore(a, now));
-
     let tracked = all.length - out.length;
+    const dropVictim = (victim: ChunkSchedulerEntry): void => {
+      if (already.has(victim.key)) return;
+      out.push(victim.key);
+      already.add(victim.key);
+      tracked--;
+    };
+
+    const victims = this.evictionVictims(
+      all.filter((entry) => !keepKeys.has(entry.key) && !already.has(entry.key)),
+      now,
+      tracked - softLimit,
+    );
     for (const victim of victims) {
       if (tracked <= softLimit) break;
-      out.push(victim.key);
-      tracked--;
+      dropVictim(victim);
+    }
+
+    if (tracked > softLimit) {
+      const staleActiveVictims = this.evictionVictims(
+        all.filter((entry) => (
+          keepKeys.has(entry.key)
+          && !protectedKeys.has(entry.key)
+          && !already.has(entry.key)
+          && !this.priorityFresh(entry, now)
+        )),
+        now,
+        tracked - softLimit,
+      );
+      for (const victim of staleActiveVictims) {
+        if (tracked <= softLimit) break;
+        dropVictim(victim);
+      }
     }
 
     if (tracked > hardLimit) {
-      const staleActiveVictims = all
-        .filter((entry) => keepKeys.has(entry.key) && !already.has(entry.key) && !this.priorityFresh(entry, now))
-        .sort((a, b) => this.evictionScore(b, now) - this.evictionScore(a, now));
-      for (const victim of staleActiveVictims) {
+      const activeVictims = this.evictionVictims(
+        all.filter((entry) => keepKeys.has(entry.key) && !protectedKeys.has(entry.key) && !already.has(entry.key)),
+        now,
+        tracked - hardLimit,
+      );
+      for (const victim of activeVictims) {
         if (tracked <= hardLimit) break;
-        out.push(victim.key);
-        tracked--;
+        dropVictim(victim);
       }
     }
 
@@ -1015,9 +1179,35 @@ export class ChunkScheduler {
         evicted: out.length,
         trackedBefore: all.length,
         trackedAfter: all.length - out.length,
+        residentLimit,
+        reservedSlots,
         softLimit,
         hardLimit,
       });
+    }
+
+    return out;
+  }
+
+  private evictionVictims(entries: ChunkSchedulerEntry[], now: number, limit: number): ChunkSchedulerEntry[] {
+    if (limit <= 0 || entries.length === 0) return [];
+
+    const leastImportant = [...entries].sort((a, b) => this.compareLeastImportantEviction(a, b, now));
+    const saturated = [...entries].sort((a, b) => this.compareSaturatedEviction(a, b, now));
+    const out: ChunkSchedulerEntry[] = [];
+    const seen = new Set<string>();
+    let importanceIndex = 0;
+    let saturatedIndex = 0;
+
+    const take = (entry: ChunkSchedulerEntry | undefined): void => {
+      if (entry === undefined || seen.has(entry.key) || out.length >= limit) return;
+      seen.add(entry.key);
+      out.push(entry);
+    };
+
+    while (out.length < limit && (importanceIndex < leastImportant.length || saturatedIndex < saturated.length)) {
+      take(leastImportant[importanceIndex++]);
+      take(saturated[saturatedIndex++]);
     }
 
     return out;
@@ -1054,18 +1244,65 @@ export class ChunkScheduler {
       1,
       activeCellCapacity(MAX_ACTIVE_RADIUS_CHUNKS),
     )));
+    const tauImportance = clampFinite(scheduling.tauImportance, 0.85, 0.05, 10);
+    const baseImportanceHalfLife = tauImportance * Math.LN2;
+    const nearImportanceHalfLife = clampFinite(
+      scheduling.nearImportanceHalfLife,
+      baseImportanceHalfLife * DEFAULT_NEAR_IMPORTANCE_HALF_LIFE_RATIO,
+      0.05,
+      30,
+    );
+    const farImportanceHalfLife = Math.min(nearImportanceHalfLife, clampFinite(
+      scheduling.farImportanceHalfLife,
+      baseImportanceHalfLife * DEFAULT_FAR_IMPORTANCE_HALF_LIFE_RATIO,
+      0.02,
+      30,
+    ));
+    const distanceInverseSquareRadiusBlocks = scheduling.distanceInverseSquareRadiusChunks === null
+      ? null
+      : clampFinite(
+        scheduling.distanceInverseSquareRadiusChunks,
+        activeRadiusChunks * DEFAULT_DISTANCE_INVERSE_SQUARE_RADIUS_RATIO,
+        2,
+        activeRadiusChunks,
+      ) * CHUNK_SIZE_BLOCKS;
+
+    const neighborSatisfactionPenaltyByCount = normalizeNeighborPenalty(scheduling.neighborSatisfactionPenaltyByCount);
+    const minSatisfaction = clampFinite(
+      scheduling.minSatisfaction,
+      -neighborSatisfactionPenaltyByCount[neighborSatisfactionPenaltyByCount.length - 1],
+      -1,
+      0,
+    );
 
     return {
       activeRadiusChunks,
       activeRadiusBlocks: activeRadiusChunks * CHUNK_SIZE_BLOCKS,
       maxCandidates,
       maxFrameCandidates,
-      tauImportance: clampFinite(scheduling.tauImportance, 0.85, 0.05, 10),
+      tauImportance,
+      nearImportanceHalfLife,
+      farImportanceHalfLife,
+      importanceDecayDistancePower: clampFinite(
+        scheduling.importanceDecayDistancePower,
+        DEFAULT_IMPORTANCE_DECAY_DISTANCE_POWER,
+        0.1,
+        8,
+      ),
       tauSatisfaction: clampFinite(scheduling.tauSatisfaction, 3.0, 0.05, 30),
       angleSigmaRad: clampFinite(scheduling.angleSigmaRad, 0.75, 0.05, Math.PI),
       fovRadiusRad: scheduling.fovRadiusRad === undefined ? null : scheduling.fovRadiusRad,
-      distanceWeightPower: clampFinite(scheduling.distanceWeightPower, 1.0, 0.1, 6),
+      distanceWeightPower: clampFinite(scheduling.distanceWeightPower, DEFAULT_DISTANCE_WEIGHT_POWER, 0.1, 6),
+      distanceInverseSquareRadiusBlocks,
       overshootEta: clampFinite(scheduling.overshootEta, 0.18, 0, 2),
+      neighborPrecisionEpsilon: clampFinite(
+        scheduling.neighborPrecisionEpsilon,
+        DEFAULT_NEIGHBOR_PRECISION_EPSILON,
+        0,
+        0.1,
+      ),
+      neighborSatisfactionPenaltyByCount,
+      minSatisfaction,
       minImportanceToSchedule: clampFinite(scheduling.minImportanceToSchedule, MIN_IMPORTANCE_TO_SCHEDULE, 0, 1),
       minGapToSchedule: clampFinite(scheduling.minGapToSchedule, MIN_GAP_TO_SCHEDULE, -1, 1),
     };
@@ -1081,15 +1318,22 @@ export class ChunkScheduler {
       m: cfg.activeRadiusBlocks,
       chunkSize: TRACKER_CHUNK_SIZE,
       tauImportance: cfg.tauImportance,
+      nearImportanceHalfLife: cfg.nearImportanceHalfLife,
+      farImportanceHalfLife: cfg.farImportanceHalfLife,
+      importanceDecayDistancePower: cfg.importanceDecayDistancePower,
       tauSatisfaction: cfg.tauSatisfaction,
       angleSigmaRad: cfg.angleSigmaRad,
       fovRadiusRad: cfg.fovRadiusRad,
       distanceWeightPower: cfg.distanceWeightPower,
+      distanceInverseSquareRadius: cfg.distanceInverseSquareRadiusBlocks,
       overshootEta: cfg.overshootEta,
       maxActiveCells: activeCellCapacity(cfg.activeRadiusChunks),
       initialHeight: heightForSurfaceY(DEFAULT_SURFACE_Y),
       initialPrecision: EMPTY_PRECISION,
       precisionToSatisfaction: (precision) => precision,
+      neighborPrecisionEpsilon: cfg.neighborPrecisionEpsilon,
+      neighborSatisfactionPenaltyByCount: cfg.neighborSatisfactionPenaltyByCount,
+      minSatisfaction: cfg.minSatisfaction,
     });
     this.trackerKey = key;
     this.trackerSeeded = false;
@@ -1146,46 +1390,54 @@ export class ChunkScheduler {
   }
 
   private precisionForCell(entry: ChunkSchedulerEntry | null, info: SchedulerCellInfo | null): number {
+    if (info?.hasChunkSource === false) return 1;
     if (!entry) return Number.isFinite(info?.topMapSurfaceY) ? TOP_MAP_PRECISION : EMPTY_PRECISION;
     if (entry.state === 'absent' || entry.state === 'error') {
-      return Number.isFinite(info?.topMapSurfaceY) ? TOP_MAP_PRECISION : 1;
+      return 1;
     }
-    if (entry.dirty) return 0;
     if (entry.displayed === 'full') return 1;
     if (entry.displayed === 'lod') return precisionForStep(entry.displayedLodStep);
+    if (entry.dirty) return 0;
     return Number.isFinite(info?.topMapSurfaceY) ? TOP_MAP_PRECISION : EMPTY_PRECISION;
   }
 
   private targetStepForCell(cell: RankedCell, entry: ChunkSchedulerEntry | null): LodStep {
     if (this.lodDisabled()) return 1;
     if (entry?.displayed === 'full' && !entry.dirty) return 1;
-    const desiredPrecision = Math.max(cell.importance, cell.satisfaction + Math.max(0, cell.gap));
+    const desiredPrecision = Math.max(cell.importance, cell.satisfaction, Math.max(0, cell.gap));
     return stepForPrecisionTarget(desiredPrecision);
   }
 
   private shouldScheduleCell(
     cell: RankedCell,
     entry: ChunkSchedulerEntry | null,
+    info: SchedulerCellInfo | null,
     targetStep: LodStep,
     cfg: TrackerRuntimeConfig,
   ): boolean {
+    if (info?.hasChunkSource === false) return false;
     if (entry?.state === 'absent' || entry?.state === 'error') return false;
-    if (entry && !this.displaySatisfiesTarget(entry, targetStep)) return true;
+    if (entry && !this.displayCoversTarget(entry, targetStep)) return true;
     if (!entry) {
       return cell.importance >= cfg.minImportanceToSchedule || cell.gap >= cfg.minGapToSchedule;
     }
     return entry.dirty || cell.gap >= cfg.minGapToSchedule;
   }
 
-  private shouldScheduleCriticalCell(entry: ChunkSchedulerEntry | null, targetStep: LodStep): boolean {
+  private shouldScheduleCriticalCell(
+    entry: ChunkSchedulerEntry | null,
+    info: SchedulerCellInfo | null,
+    targetStep: LodStep,
+  ): boolean {
+    if (info?.hasChunkSource === false) return false;
     if (entry?.state === 'absent' || entry?.state === 'error') return false;
     if (!entry) return true;
-    return entry.dirty || !this.displaySatisfiesTarget(entry, targetStep);
+    return entry.dirty || !this.displayCoversTarget(entry, targetStep);
   }
 
   private tierForCell(cell: RankedCell, entry: ChunkSchedulerEntry | null, targetStep: LodStep): number {
-    if (entry?.state === 'stored' && !this.displaySatisfiesTarget(entry, targetStep)) return 0;
-    if (entry?.dirty) return 1;
+    if (entry?.state === 'stored' && !this.displayCoversTarget(entry, targetStep)) return 0;
+    if (entry?.dirty) return entry.displayed === 'none' ? 1 : 4;
     if (!entry) return 2;
     if (entry.state === 'checking' || entry.state === 'hashed' || entry.state === 'fetching') return 2;
     if (targetStep === 1 && entry.displayed !== 'full') return 1;
@@ -1194,11 +1446,11 @@ export class ChunkScheduler {
   }
 
   private tierForCriticalCell(entry: ChunkSchedulerEntry | null, targetStep: LodStep): number {
-    if (entry?.dirty) return -3;
-    if (entry?.state === 'stored' && !this.displaySatisfiesTarget(entry, targetStep)) return -3;
+    if (entry?.dirty) return this.displayCoversTarget(entry, targetStep) ? 1 : -3;
+    if (entry?.state === 'stored' && !this.displayCoversTarget(entry, targetStep)) return -3;
     if (!entry) return -2;
     if (entry.state === 'checking' || entry.state === 'hashed' || entry.state === 'fetching') return -2;
-    if (!this.displaySatisfiesTarget(entry, targetStep)) return -1;
+    if (!this.displayCoversTarget(entry, targetStep)) return -1;
     return 0;
   }
 
@@ -1225,6 +1477,9 @@ export class ChunkScheduler {
       lastScore: candidate.score,
       lastTargetStep: candidate.targetStep,
       lastForcedFull: candidate.targetStep === 1,
+      lastImportance: candidate.importance,
+      lastSatisfaction: candidate.satisfaction,
+      lastGap: candidate.gap,
     };
     this.recordByKey.set(candidate.key, record);
     return record;
@@ -1243,6 +1498,9 @@ export class ChunkScheduler {
       lastScore: entry.lastScore,
       lastTargetStep: entry.lastTargetStep,
       lastForcedFull: entry.lastForcedFull,
+      lastImportance: entry.lastImportance,
+      lastSatisfaction: entry.lastSatisfaction,
+      lastGap: entry.lastGap,
     };
   }
 
@@ -1305,6 +1563,11 @@ export class ChunkScheduler {
     return !!priority && now - priority.updatedAt <= IO_QUEUE_RETENTION_MS;
   }
 
+  private recordFreshByKey(key: string, now: number): boolean {
+    const record = this.recordByKey.get(key);
+    return !!record && now - record.lastWantedAt <= IO_QUEUE_RETENTION_MS;
+  }
+
   private lastWantedAt(entry: ChunkSchedulerEntry): number {
     return this.recordFor(entry)?.lastWantedAt ?? 0;
   }
@@ -1314,15 +1577,65 @@ export class ChunkScheduler {
     return this.recordFor(entry)?.lastTargetStep ?? 8;
   }
 
-  private displaySatisfiesTarget(entry: ChunkSchedulerEntry, targetStep: LodStep): boolean {
-    if (entry.dirty || entry.displayed === 'none') return false;
+  private entryNeedsMoreForLastTarget(entry: ChunkSchedulerEntry): boolean {
+    return entry.dirty || !this.displayCoversTarget(entry, this.lastTargetStep(entry));
+  }
+
+  private displayCoversTarget(entry: ChunkSchedulerEntry, targetStep: LodStep): boolean {
+    if (entry.displayed === 'none') return false;
     if (targetStep === 1) return entry.displayed === 'full';
     if (entry.displayed === 'full') return true;
     return entry.displayed === 'lod' && entry.displayedLodStep > 0 && entry.displayedLodStep <= targetStep;
   }
 
+  private displaySatisfiesTarget(entry: ChunkSchedulerEntry, targetStep: LodStep): boolean {
+    return !entry.dirty && this.displayCoversTarget(entry, targetStep);
+  }
+
   private lodDisabled(): boolean {
     return this.opts.disableLod === true;
+  }
+
+  private compareLeastImportantEviction(a: ChunkSchedulerEntry, b: ChunkSchedulerEntry, now: number): number {
+    const ai = this.evictionImportance(a);
+    const bi = this.evictionImportance(b);
+    if (ai !== bi) return ai - bi;
+    return this.evictionScore(b, now) - this.evictionScore(a, now) || a.key.localeCompare(b.key);
+  }
+
+  private compareSaturatedEviction(a: ChunkSchedulerEntry, b: ChunkSchedulerEntry, now: number): number {
+    const ag = this.evictionGap(a);
+    const bg = this.evictionGap(b);
+    if (ag !== bg) return ag - bg;
+
+    const ap = this.evictionPrecision(a);
+    const bp = this.evictionPrecision(b);
+    if (ap !== bp) return bp - ap;
+
+    const ai = this.evictionImportance(a);
+    const bi = this.evictionImportance(b);
+    if (ai !== bi) return ai - bi;
+
+    return this.evictionScore(b, now) - this.evictionScore(a, now) || a.key.localeCompare(b.key);
+  }
+
+  private evictionImportance(entry: ChunkSchedulerEntry): number {
+    const value = this.recordFor(entry)?.lastImportance ?? 0;
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  private evictionGap(entry: ChunkSchedulerEntry): number {
+    const value = this.recordFor(entry)?.lastGap;
+    if (Number.isFinite(value)) return value!;
+    return this.evictionImportance(entry) - this.evictionPrecision(entry);
+  }
+
+  private evictionPrecision(entry: ChunkSchedulerEntry): number {
+    if (entry.dirty) return 0;
+    if (entry.displayed === 'full') return 1;
+    if (entry.displayed === 'lod') return precisionForStep(entry.displayedLodStep);
+    if (entry.state === 'absent' || entry.state === 'error') return 1;
+    return 0;
   }
 
   private evictionScore(entry: ChunkSchedulerEntry, now: number): number {

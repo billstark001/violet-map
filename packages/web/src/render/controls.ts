@@ -23,6 +23,16 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
 }
 
+export function normalizeFlyYaw(yaw: number): number {
+  if (!Number.isFinite(yaw)) return 0;
+  const twoPi = Math.PI * 2;
+  return ((yaw + Math.PI) % twoPi + twoPi) % twoPi - Math.PI;
+}
+
+export function clampFlyPitch(pitch: number): number {
+  return Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, Number.isFinite(pitch) ? pitch : 0));
+}
+
 /** 指针锁定 + WASD/空格/Shift 的飞行控制。 */
 export class FlyControls {
   private keys = new Set<string>();
@@ -41,8 +51,8 @@ export class FlyControls {
   private onMouseMove = (e: MouseEvent) => {
     if (!this.enabled) return;
     if (document.pointerLockElement !== this.dom) return;
-    this.yaw -= e.movementX * 0.0025;
-    this.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, this.pitch - e.movementY * 0.0025));
+    this.yaw = normalizeFlyYaw(this.yaw - e.movementX * 0.0025);
+    this.pitch = clampFlyPitch(this.pitch - e.movementY * 0.0025);
   };
   private onKey = (e: KeyboardEvent) => {
     if (!this.enabled) return;
@@ -101,8 +111,8 @@ export class FlyControls {
   }
 
   setAngles(yaw: number, pitch: number) {
-    this.yaw = Number.isFinite(yaw) ? yaw : 0;
-    this.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, Number.isFinite(pitch) ? pitch : 0));
+    this.yaw = normalizeFlyYaw(yaw);
+    this.pitch = clampFlyPitch(pitch);
     this.camera.rotation.set(this.pitch, this.yaw, 0);
   }
 
@@ -129,8 +139,8 @@ export class FlyControls {
   }
 
   syncFromCamera() {
-    this.yaw = this.camera.rotation.y;
-    this.pitch = this.camera.rotation.x;
+    this.yaw = normalizeFlyYaw(this.camera.rotation.y);
+    this.pitch = clampFlyPitch(this.camera.rotation.x);
   }
 
   getView(): FlyView {

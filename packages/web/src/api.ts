@@ -49,6 +49,10 @@ export interface ChunkHashPayload {
   region?: { x: number; z: number };
   missing?: boolean;
 }
+export interface ChunkSourceCoveragePayload {
+  regions: { x: number; z: number; mask?: string }[];
+  chunks: { cx: number; cz: number }[];
+}
 export interface ServerAtlasManifest {
   cacheKey: string;
   image: string;
@@ -120,6 +124,11 @@ export const fetchWorldCapabilities = (world: string) =>
 export const fetchTopMapManifest = (world: string, dim: string) =>
   json<TopMapDimensionManifest>(
     `/api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/top-map/manifest`,
+  );
+
+export const fetchChunkSourceCoverage = (world: string, dim: string) =>
+  json<ChunkSourceCoveragePayload>(
+    `/api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/chunk-coverage`,
   );
 
 export async function fetchTopMapTile(
