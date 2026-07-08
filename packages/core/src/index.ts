@@ -5,3 +5,4 @@ export * from './light.js';
 export * from './model.js';
 export * from './colors.js';
 export * from './mesher/index.js';
+export * from './scheduler/cameraGridTracker.js';

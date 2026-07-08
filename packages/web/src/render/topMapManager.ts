@@ -4,6 +4,7 @@ import {
   prepareTopMapTile,
   topMapCoverageChunkCount,
   topMapCoverageKeyForTile,
+  TOP_MAP_MISSING_HEIGHT,
   TOP_MAP_TILE_BLOCKS,
   type MeshBuffers,
   type PreparedTopMapTile,
@@ -239,6 +240,25 @@ export class TopMapManager {
     this.scene.remove(this.group);
     this.pendingTiles.clear();
     this.clearTiles();
+  }
+
+  surfaceYAtChunk(cx: number, cz: number): number | null {
+    const blocksPerChunk = 16;
+    const worldX = cx * blocksPerChunk + blocksPerChunk / 2;
+    const worldZ = cz * blocksPerChunk + blocksPerChunk / 2;
+    const rx = Math.floor(worldX / TOP_MAP_TILE_BLOCKS);
+    const rz = Math.floor(worldZ / TOP_MAP_TILE_BLOCKS);
+    const tile = this.tiles.get(`${rx},${rz}`);
+    if (!tile) return null;
+
+    const localX = worldX - tile.data.payload.origin.x;
+    const localZ = worldZ - tile.data.payload.origin.z;
+    const stride = tile.data.payload.sampleStride;
+    const samples = tile.data.payload.size.samples;
+    const sx = Math.max(0, Math.min(samples - 1, Math.floor(localX / stride)));
+    const sz = Math.max(0, Math.min(samples - 1, Math.floor(localZ / stride)));
+    const height = tile.data.prepared.heights[sz * samples + sx];
+    return height === TOP_MAP_MISSING_HEIGHT ? null : height;
   }
 
   private async loadManifest(world: string, dimension: string, seq: number) {

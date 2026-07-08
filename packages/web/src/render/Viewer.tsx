@@ -26,6 +26,7 @@ const SKY_PLANE_FORWARD = new THREE.Vector3(0, 0, 1);
 const TOP_CAMERA_HEIGHT = 1024;
 const TOP_ORTHO_HEIGHT = 512;
 const TOP_PERSPECTIVE_FOV = 50;
+const TOP_MAP_VISIBLE_RADIUS_BLOCKS = 1024;
 const DEFAULT_VIEW: FlyView = { x: 8, y: 120, z: 8, yaw: 0, pitch: 0 };
 const DEFAULT_DIMENSION_DEF = {
   hasSkyLight: true,
@@ -809,18 +810,6 @@ function updateActiveControls(engine: Engine, viewMode: ViewMode, dt: number) {
   else engine.flyControls.update(dt);
 }
 
-function visibleRadiusBlocks(viewDistance: number, lodDistance: number): number {
-  return Math.max(1024, (viewDistance + lodDistance + 32) * 16);
-}
-
-function chunkClipY(topView: boolean, offlineTopMap: boolean): number | undefined {
-  return topView && offlineTopMap ? 0 : undefined;
-}
-
-function rendererHeight(engine: Engine): number {
-  return engine.renderer.domElement.clientHeight || window.innerHeight;
-}
-
 function updateChunksAndTopMap(
   engine: Engine,
   manager: ChunkManager | null,
@@ -838,14 +827,12 @@ function updateChunksAndTopMap(
     engine.activeCamera,
     now,
     false,
-    rendererHeight(engine),
     topView,
     props.topClipRange,
-    chunkClipY(topView, offlineTopMap),
   );
   engine.topMap.update(engine.activeCamera, now, {
     mode: topView ? 'top' : 'perspective',
-    radiusBlocks: visibleRadiusBlocks(props.viewDistance, props.lodDistance),
+    radiusBlocks: TOP_MAP_VISIBLE_RADIUS_BLOCKS,
     onlineChunks: manager?.displayedChunkKeys(),
   });
 
@@ -1004,27 +991,19 @@ function createWorldManager(engine: Engine, props: ViewerProps): ChunkManager {
     dimension: props.dimension,
     renderKey: engine.renderKey,
     dimensionDef: dimDef,
-    viewDistance: props.viewDistance,
-    lodDistance: props.lodDistance,
+    topMapSurfaceYAt: (cx, cz) => engine.topMap.surfaceYAtChunk(cx, cz),
     // 十分抽象，渲染一个lod耗时是渲染完整区块的85%左右，完全没有优化性能的意义，不如直接拔了
     disableLod: true,
     scheduling: {
-      previewBias: 0.5,
-      refinementBias: 1.8,
-      frontLoadBias: 2.2,
-      rearEvictBias: 2.2,
-      frontKeepBias: 1.3,
-      rearKeepBias: 0.35,
-      sideKeepBias: 0.75,
-      rearQueueRetentionBias: 0.25,
+      activeRadiusChunks: 32,
+      maxFrameCandidates: 56,
+      tauImportance: 0.85,
+      tauSatisfaction: 3,
+      angleSigmaRad: 0.75,
+      distanceWeightPower: 1,
+      overshootEta: 0.18,
     }
   });
-}
-
-function updateRenderDistances(manager: ChunkManager | null, viewDistance: number, lodDistance: number) {
-  if (!manager) return;
-  manager.opts.viewDistance = viewDistance;
-  manager.opts.lodDistance = lodDistance;
 }
 
 function updateFastMoveMultiplier(engine: Engine | null, fastMoveMultiplier: number) {
@@ -1058,10 +1037,8 @@ function updateManagerAfterCameraTarget(
     engine.activeCamera,
     performance.now(),
     true,
-    rendererHeight(engine),
     topView,
     props.topClipRange,
-    chunkClipY(topView, topMapAvailable(capabilities, props.dimension)),
   );
 }
 
@@ -1163,11 +1140,6 @@ export function Viewer(props: ViewerProps) {
       manager.dispose();
     };
   }, [ready, props.world, props.dimension]);
-
-  // 渲染距离热更新
-  useEffect(() => {
-    updateRenderDistances(managerRef.current, props.viewDistance, props.lodDistance);
-  }, [props.viewDistance, props.lodDistance]);
 
   useEffect(() => {
     updateFastMoveMultiplier(engineRef.current, props.fastMoveMultiplier);

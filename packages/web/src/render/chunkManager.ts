@@ -12,6 +12,7 @@ import {
   type ChunkDiagnosticEvent,
   type ChunkDiagnosticOp,
   type ChunkRenderStats,
+  type ChunkPriority,
   type ChunkSchedulingTuning,
   type SchedulerAction,
   type ChunkSchedulerCamera,
@@ -32,9 +33,10 @@ const LOD_RELEASE_STEP_STORAGE_KEY = 'violet-map:lodReleaseStep';
 const STALE_WORKER_RELEASE_MS = 4000;
 const STALE_MESH_RELEASE_MS = 8000;
 const WORKER_NEIGHBOR_HOLD_MS = 3500;
+const DEFERRED_MESH_RETRY_MS = 140;
 const MIN_WORKER_RESIDENT_COLUMNS = 192;
 const MAX_WORKER_RESIDENT_COLUMNS = 1400;
-const WORKER_RESIDENT_FULL_PADDING = 4;
+const TARGET_WORKER_RESIDENT_COLUMNS = 768;
 const CHUNK_WORLD_MIN_Y = -80;
 const CHUNK_WORLD_MAX_Y = 384;
 const DIAGNOSTIC_HISTORY_LIMIT = 32;
@@ -153,31 +155,10 @@ export interface ChunkManagerOptions {
   dimension: string;
   renderKey: string;
   dimensionDef: DimensionDef;
-  viewDistance: number;
-  lodDistance: number;
   /** When true, chunk scheduling never requests LOD meshes; only full meshes are generated/displayed. */
   disableLod?: boolean;
-  /** Convenience alias for scheduling.previewBias. 0 disables preview-first; 1 is default; >1 favors coverage. */
-  previewBias?: number;
-  /** Convenience alias for scheduling.refinementBias. 0 throttles refinement; 1 is default; >1 favors full/refinement. */
-  refinementBias?: number;
-  /** Convenience alias for scheduling.frontLoadBias. >1 favors loading forward chunks sooner. */
-  frontLoadBias?: number;
-  /** Convenience alias for scheduling.rearEvictBias. >1 deprioritizes/evicts rear chunks sooner. */
-  rearEvictBias?: number;
-  /** Convenience alias for scheduling.frontKeepBias. >1 keeps forward chunks longer. */
-  frontKeepBias?: number;
-  /** Convenience alias for scheduling.rearKeepBias. <1 evicts rear chunks sooner. */
-  rearKeepBias?: number;
-  /** Convenience alias for scheduling.sideKeepBias. */
-  sideKeepBias?: number;
-  /** Convenience alias for scheduling.frontQueueRetentionBias. */
-  frontQueueRetentionBias?: number;
-  /** Convenience alias for scheduling.rearQueueRetentionBias. */
-  rearQueueRetentionBias?: number;
-  /** Convenience alias for scheduling.sideQueueRetentionBias. */
-  sideQueueRetentionBias?: number;
-  /** Optional scheduler tuning for preview/refinement/directional tradeoffs. */
+  topMapSurfaceYAt?: (cx: number, cz: number) => number | null;
+  /** Optional camera-grid tracker tuning. */
   scheduling?: ChunkSchedulingTuning;
 }
 
@@ -255,7 +236,7 @@ export class ChunkManager {
     private initPayload: Omit<WorkerInit, 'type'>,
     public opts: ChunkManagerOptions,
   ) {
-    this.scheduler = new ChunkScheduler(this.schedulerOptions(opts.lodDistance));
+    this.scheduler = new ChunkScheduler(this.schedulerOptions());
     this.root.matrixAutoUpdate = false;
     this.root.updateMatrix();
     scene.add(this.root);
@@ -356,25 +337,10 @@ export class ChunkManager {
     return this.chunks.values();
   }
 
-  private schedulerOptions(lodDistance: number) {
-    const scheduling = {
-      ...this.opts.scheduling,
-      previewBias: this.opts.previewBias ?? this.opts.scheduling?.previewBias,
-      refinementBias: this.opts.refinementBias ?? this.opts.scheduling?.refinementBias,
-      frontLoadBias: this.opts.frontLoadBias ?? this.opts.scheduling?.frontLoadBias,
-      rearEvictBias: this.opts.rearEvictBias ?? this.opts.scheduling?.rearEvictBias,
-      frontKeepBias: this.opts.frontKeepBias ?? this.opts.scheduling?.frontKeepBias,
-      rearKeepBias: this.opts.rearKeepBias ?? this.opts.scheduling?.rearKeepBias,
-      sideKeepBias: this.opts.sideKeepBias ?? this.opts.scheduling?.sideKeepBias,
-      frontQueueRetentionBias: this.opts.frontQueueRetentionBias ?? this.opts.scheduling?.frontQueueRetentionBias,
-      rearQueueRetentionBias: this.opts.rearQueueRetentionBias ?? this.opts.scheduling?.rearQueueRetentionBias,
-      sideQueueRetentionBias: this.opts.sideQueueRetentionBias ?? this.opts.scheduling?.sideQueueRetentionBias,
-    };
+  private schedulerOptions() {
     return {
-      viewDistance: this.opts.viewDistance,
-      lodDistance,
       disableLod: this.opts.disableLod === true,
-      scheduling,
+      scheduling: this.opts.scheduling,
     };
   }
 
@@ -401,10 +367,8 @@ export class ChunkManager {
     camera: ChunkSchedulerCamera,
     now: number,
     force = false,
-    viewportHeight = window.innerHeight,
     topDownView = false,
     topClipRange?: TopClipRange,
-    lodDistanceOverride?: number,
   ) {
     const nextTopClipRange = normalizeTopClipRange(topClipRange);
     const clipChanged = nextTopClipRange.minY !== this.topClipRange.minY || nextTopClipRange.maxY !== this.topClipRange.maxY;
@@ -423,11 +387,11 @@ export class ChunkManager {
       camera,
       now,
       force,
-      viewportHeight,
       topDownView,
-      options: this.schedulerOptions(lodDistanceOverride ?? this.opts.lodDistance),
+      options: this.schedulerOptions(),
       keyFor: (cx, cz) => this.key(cx, cz),
       entryFor: (key) => this.schedulerEntryForKey(key),
+      cellInfoFor: (cx, cz) => ({ topMapSurfaceY: this.opts.topMapSurfaceYAt?.(cx, cz) ?? null }),
       entries: this.schedulerEntries(),
     });
 
@@ -541,19 +505,21 @@ export class ChunkManager {
         includeMesh: true,
       });
       if (!work.meshTasks.length) return;
+      let startedAny = false;
       for (const task of work.meshTasks) {
         const e = this.chunks.get(task.key);
         if (!e || e.state !== 'stored') continue;
         if (task.kind === 'full') {
           if (e.displayed === 'full' && !e.dirty) continue;
           if (e.pendingFull) continue;
-          this.requestFull(e);
+          startedAny = this.requestFull(e) || startedAny;
         } else {
           if (e.displayed === 'lod' && e.displayedLodStep === task.step && !e.dirty) continue;
           if (e.pendingLod && e.pendingLodStep === task.step) continue;
-          this.requestLod(e, task.step);
+          startedAny = this.requestLod(e, task.step) || startedAny;
         }
       }
+      if (!startedAny) return;
     }
   }
 
@@ -599,7 +565,7 @@ export class ChunkManager {
       if (!current || current.state !== 'stored') return;
       this.requeueMesh(current, kind, step, fallbackTier);
       this.flushMeshQueue();
-    }, 80);
+    }, DEFERRED_MESH_RETRY_MS);
     this.deferredMeshTimers.set(timerKey, timer);
   }
 
@@ -633,12 +599,13 @@ export class ChunkManager {
   }
 
   private recoverMissingWorkerInput(e: ChunkEntry, kind: MeshTaskKind, step: LodStep) {
+    const priority = this.meshNeighborPriority(e, e, performance.now());
     if (e.state === 'stored') {
       e.workerReadyMask = 0;
       e.state = 'hashed';
     }
-    if (e.state === 'checking') this.queueHash(e.key);
-    else if (e.state === 'hashed') this.queueFetch(e.key);
+    if (e.state === 'checking') this.queueHash(e.key, priority);
+    else if (e.state === 'hashed') this.queueFetch(e.key, priority);
     else if (e.state === 'fetching') this.flushFetchQueue();
     this.deferMesh(e, kind, step, kind === 'full' ? 3 : 4);
     this.reportStats();
@@ -767,7 +734,6 @@ export class ChunkManager {
 
   private ensureNeighborhoodWorkerData(e: ChunkEntry, now: number): boolean {
     let ready = true;
-    const fetchKeys: string[] = [];
     for (let dz = -1; dz <= 1; dz++) {
       for (let dx = -1; dx <= 1; dx++) {
         const n = this.chunks.get(this.key(e.cx + dx, e.cz + dz));
@@ -776,39 +742,49 @@ export class ChunkManager {
         this.keepWorkerData(n, now);
         if (n.state === 'stored') continue;
         ready = false;
-        if (n.state === 'checking') this.queueHash(n.key);
-        else if (n.state === 'hashed') fetchKeys.push(n.key);
+        const priority = this.meshNeighborPriority(e, n, now);
+        if (n.state === 'checking') this.queueHash(n.key, priority);
+        else if (n.state === 'hashed') this.queueFetch(n.key, priority);
       }
     }
-    if (fetchKeys.length) void this.fetchBatch(fetchKeys);
     return ready;
+  }
+
+  private meshNeighborPriority(center: ChunkEntry, neighbor: ChunkEntry, now: number): ChunkPriority {
+    const distance = Math.hypot(center.cx - neighbor.cx, center.cz - neighbor.cz);
+    const score = Number.isFinite(center.lastScore) ? center.lastScore : 0;
+    return {
+      tier: Math.min(center.lastTier, 1),
+      score: score + distance * 0.1 + 6,
+      updatedAt: now,
+    };
   }
 
   // #endregion
 
   // #region Mesh requests
 
-  private requestFull(e: ChunkEntry) {
+  private requestFull(e: ChunkEntry): boolean {
     if (this.activeMeshTasks >= this.maxActiveMeshTasks()) {
       this.requeueMesh(e, 'full', 1, 3);
-      return;
+      return false;
     }
     const now = performance.now();
     if (!this.ensureNeighborhoodWorkerData(e, now)) {
       this.deferMesh(e, 'full', 1, 3);
       this.flushHashQueue();
       this.flushFetchQueue();
-      return;
+      return false;
     }
     const cache = this.neighborhoodCacheParts(e);
     if (!cache) {
       this.queueHash(e.key);
-      return;
+      return false;
     }
     const version = this.beginPendingMesh(e, 'full', 1, cache);
     if (!cache.stable) {
       this.startWorkerMeshing(e, 'full', 1, version);
-      return;
+      return true;
     }
     void getCachedFull(cache.parts).then((hit) => {
       if (this.disposed) { this.finishActiveMesh(); return; }
@@ -839,37 +815,38 @@ export class ChunkManager {
       }
       this.finishActiveMesh();
     });
+    return true;
   }
 
-  private requestLod(e: ChunkEntry, step: LodStep) {
+  private requestLod(e: ChunkEntry, step: LodStep): boolean {
     if (this.activeMeshTasks >= this.maxActiveMeshTasks()) {
       this.requeueMesh(e, 'lod', step, 4);
-      return;
+      return false;
     }
     if (!this.contentHash(e)) {
       this.queueHash(e.key);
-      return;
+      return false;
     }
     if (e.state !== 'stored') {
       this.queueFetch(e.key);
-      return;
+      return false;
     }
     const now = performance.now();
     if (!this.ensureNeighborhoodWorkerData(e, now)) {
       this.deferMesh(e, 'lod', step, 4);
       this.flushHashQueue();
       this.flushFetchQueue();
-      return;
+      return false;
     }
     const cache = this.neighborhoodCacheParts(e);
     if (!cache) {
       this.queueHash(e.key);
-      return;
+      return false;
     }
     const version = this.beginPendingMesh(e, 'lod', step, cache);
     if (!cache.stable) {
       this.startWorkerMeshing(e, 'lod', step, version);
-      return;
+      return true;
     }
     void getCachedLod({ ...cache.parts, step }).then((hit) => {
       if (this.disposed) { this.finishActiveMesh(); return; }
@@ -902,32 +879,33 @@ export class ChunkManager {
       }
       this.finishActiveMesh();
     });
+    return true;
   }
 
   // #endregion
 
   // #region IO queues
 
-  private queueHash(key: string) {
-    this.queueIo('hash', key);
+  private queueHash(key: string, priority?: ChunkPriority) {
+    this.queueIo('hash', key, priority);
   }
 
   private flushHashQueue() {
     this.flushIoQueue('hash');
   }
 
-  private queueFetch(key: string) {
-    this.queueIo('fetch', key);
+  private queueFetch(key: string, priority?: ChunkPriority) {
+    this.queueIo('fetch', key, priority);
   }
 
   private flushFetchQueue() {
     this.flushIoQueue('fetch');
   }
 
-  private queueIo(kind: IoQueueKind, key: string) {
+  private queueIo(kind: IoQueueKind, key: string, priority?: ChunkPriority) {
     const e = this.chunks.get(key);
     if (kind === 'fetch' && e && e.state !== 'stored') e.state = 'fetching';
-    this.scheduler.notify({ type: kind === 'hash' ? 'hashNeeded' : 'fetchNeeded', key });
+    this.scheduler.notify({ type: kind === 'hash' ? 'hashNeeded' : 'fetchNeeded', key, priority });
     this.scheduleIoFlush(kind, 20);
   }
 
@@ -1178,9 +1156,7 @@ export class ChunkManager {
   }
 
   private maxWorkerResidentColumns(): number {
-    const radius = Math.max(4, Math.floor(this.opts.viewDistance) + WORKER_RESIDENT_FULL_PADDING);
-    const target = (radius * 2 + 1) ** 2;
-    return Math.max(MIN_WORKER_RESIDENT_COLUMNS, Math.min(MAX_WORKER_RESIDENT_COLUMNS, target));
+    return Math.max(MIN_WORKER_RESIDENT_COLUMNS, Math.min(MAX_WORKER_RESIDENT_COLUMNS, TARGET_WORKER_RESIDENT_COLUMNS));
   }
 
   private releaseWorkerDataOverBudget() {
@@ -1564,6 +1540,7 @@ export class ChunkManager {
     e.displayedVersion = version;
     e.displayedLodStep = 0;
     e.fullReady = meshBytes > 0;
+    this.scheduler.notify({ type: 'meshDisplayed', entry: e, kind: 'full', step: 1, version, now: performance.now() });
     debugLog('chunk-manager', 'display-full', {
       key: e.key,
       sections: e.fullSections.length,
@@ -1597,8 +1574,8 @@ export class ChunkManager {
     e.displayedVersion = version;
     e.displayedLodStep = step;
     e.lodReadyStep = e.meshBytes > 0 ? step : 0;
+    this.scheduler.notify({ type: 'meshDisplayed', entry: e, kind: 'lod', step: step as LodStep, version, now: performance.now() });
     if (e.lastTargetStep === 1) {
-      this.scheduler.notify({ type: 'meshDisplayed', entry: e, kind: 'lod', step: step as LodStep, version, now: performance.now() });
       this.flushMeshQueue();
     }
     debugLog('chunk-manager', 'display-lod', { key: e.key, step, meshBytes: e.meshBytes, visible: e.group?.visible ?? false });
