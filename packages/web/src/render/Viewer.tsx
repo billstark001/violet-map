@@ -1007,6 +1007,18 @@ function createWorldManager(engine: Engine, props: ViewerProps): ChunkManager {
     dimensionDef: dimDef,
     viewDistance: props.viewDistance,
     lodDistance: props.lodDistance,
+    // 十分抽象，渲染一个lod耗时是渲染完整区块的85%左右，完全没有优化性能的意义，不如直接拔了
+    disableLod: true,
+    scheduling: {
+      previewBias: 0.5,
+      refinementBias: 1.8,
+      frontLoadBias: 2.2,
+      rearEvictBias: 2.2,
+      frontKeepBias: 1.3,
+      rearKeepBias: 0.35,
+      sideKeepBias: 0.75,
+      rearQueueRetentionBias: 0.25,
+    }
   });
 }
 

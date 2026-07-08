@@ -12,6 +12,7 @@ import {
   type ChunkDiagnosticEvent,
   type ChunkDiagnosticOp,
   type ChunkRenderStats,
+  type ChunkSchedulingTuning,
   type SchedulerAction,
   type ChunkSchedulerCamera,
   type ChunkSchedulerEntry,
@@ -154,6 +155,30 @@ export interface ChunkManagerOptions {
   dimensionDef: DimensionDef;
   viewDistance: number;
   lodDistance: number;
+  /** When true, chunk scheduling never requests LOD meshes; only full meshes are generated/displayed. */
+  disableLod?: boolean;
+  /** Convenience alias for scheduling.previewBias. 0 disables preview-first; 1 is default; >1 favors coverage. */
+  previewBias?: number;
+  /** Convenience alias for scheduling.refinementBias. 0 throttles refinement; 1 is default; >1 favors full/refinement. */
+  refinementBias?: number;
+  /** Convenience alias for scheduling.frontLoadBias. >1 favors loading forward chunks sooner. */
+  frontLoadBias?: number;
+  /** Convenience alias for scheduling.rearEvictBias. >1 deprioritizes/evicts rear chunks sooner. */
+  rearEvictBias?: number;
+  /** Convenience alias for scheduling.frontKeepBias. >1 keeps forward chunks longer. */
+  frontKeepBias?: number;
+  /** Convenience alias for scheduling.rearKeepBias. <1 evicts rear chunks sooner. */
+  rearKeepBias?: number;
+  /** Convenience alias for scheduling.sideKeepBias. */
+  sideKeepBias?: number;
+  /** Convenience alias for scheduling.frontQueueRetentionBias. */
+  frontQueueRetentionBias?: number;
+  /** Convenience alias for scheduling.rearQueueRetentionBias. */
+  rearQueueRetentionBias?: number;
+  /** Convenience alias for scheduling.sideQueueRetentionBias. */
+  sideQueueRetentionBias?: number;
+  /** Optional scheduler tuning for preview/refinement/directional tradeoffs. */
+  scheduling?: ChunkSchedulingTuning;
 }
 
 export class ChunkManager {
@@ -230,7 +255,7 @@ export class ChunkManager {
     private initPayload: Omit<WorkerInit, 'type'>,
     public opts: ChunkManagerOptions,
   ) {
-    this.scheduler = new ChunkScheduler({ viewDistance: opts.viewDistance, lodDistance: opts.lodDistance });
+    this.scheduler = new ChunkScheduler(this.schedulerOptions(opts.lodDistance));
     this.root.matrixAutoUpdate = false;
     this.root.updateMatrix();
     scene.add(this.root);
@@ -331,6 +356,28 @@ export class ChunkManager {
     return this.chunks.values();
   }
 
+  private schedulerOptions(lodDistance: number) {
+    const scheduling = {
+      ...this.opts.scheduling,
+      previewBias: this.opts.previewBias ?? this.opts.scheduling?.previewBias,
+      refinementBias: this.opts.refinementBias ?? this.opts.scheduling?.refinementBias,
+      frontLoadBias: this.opts.frontLoadBias ?? this.opts.scheduling?.frontLoadBias,
+      rearEvictBias: this.opts.rearEvictBias ?? this.opts.scheduling?.rearEvictBias,
+      frontKeepBias: this.opts.frontKeepBias ?? this.opts.scheduling?.frontKeepBias,
+      rearKeepBias: this.opts.rearKeepBias ?? this.opts.scheduling?.rearKeepBias,
+      sideKeepBias: this.opts.sideKeepBias ?? this.opts.scheduling?.sideKeepBias,
+      frontQueueRetentionBias: this.opts.frontQueueRetentionBias ?? this.opts.scheduling?.frontQueueRetentionBias,
+      rearQueueRetentionBias: this.opts.rearQueueRetentionBias ?? this.opts.scheduling?.rearQueueRetentionBias,
+      sideQueueRetentionBias: this.opts.sideQueueRetentionBias ?? this.opts.scheduling?.sideQueueRetentionBias,
+    };
+    return {
+      viewDistance: this.opts.viewDistance,
+      lodDistance,
+      disableLod: this.opts.disableLod === true,
+      scheduling,
+    };
+  }
+
   private applySchedulerAction(action: SchedulerAction, now: number) {
     switch (action.type) {
       case 'wantChunk':
@@ -378,10 +425,7 @@ export class ChunkManager {
       force,
       viewportHeight,
       topDownView,
-      options: {
-        viewDistance: this.opts.viewDistance,
-        lodDistance: lodDistanceOverride ?? this.opts.lodDistance,
-      },
+      options: this.schedulerOptions(lodDistanceOverride ?? this.opts.lodDistance),
       keyFor: (cx, cz) => this.key(cx, cz),
       entryFor: (key) => this.schedulerEntryForKey(key),
       entries: this.schedulerEntries(),
@@ -1312,10 +1356,9 @@ export class ChunkManager {
         this.finishMeshDiagnostic(msg.version, msg.profile?.meshMs);
         this.finishActiveMesh(msg.version);
         const e = this.chunks.get(msg.key);
-        const matched = e?.pendingFullVersion === msg.version;
-        const cacheParts = matched ? e.pendingFullCacheParts : null;
-        const dirtyToken = matched ? e.pendingFullDirtyToken : -1;
-        if (!e || !matched) return;
+        if (!e || e.pendingFullVersion !== msg.version) return;
+        const cacheParts = e.pendingFullCacheParts;
+        const dirtyToken = e.pendingFullDirtyToken;
         this.clearPendingMesh(e, 'full');
         if (msg.profile?.missingInput) {
           this.recoverMissingWorkerInput(e, 'full', 1);
