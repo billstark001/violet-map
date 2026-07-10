@@ -13,7 +13,7 @@ import {
   type ViewerStatsPayload,
   type ViewMode,
 } from './render/Viewer';
-import { EMPTY_CHUNK_SCHEDULER_STATS } from './render/chunkScheduler';
+import { EMPTY_CHUNK_SCHEDULER_STATS, type SchedulerPreset } from './render/chunkScheduler';
 import type { TopClipRange } from './render/chunkManager';
 
 interface WorldInfo { id: string; dimensions: string[] }
@@ -42,6 +42,7 @@ interface ViewerSettings {
   timeOfDay?: number;
   debugLoggingEnabled?: boolean;
   diagnosticDetail?: DiagnosticDetail;
+  schedulerPreset?: SchedulerPreset;
 }
 
 const params = new URLSearchParams(location.search);
@@ -85,6 +86,13 @@ function diagnosticDetailSetting(): DiagnosticDetail {
   return value === 'off' || value === 'simple' || value === 'standard' || value === 'detailed'
     ? value
     : 'standard';
+}
+
+function schedulerPresetSetting(): SchedulerPreset {
+  const value = stringSetting('schedulerPreset', 'medium');
+  return value === 'potato' || value === 'low' || value === 'medium' || value === 'high' || value === 'extreme'
+    ? value
+    : 'medium';
 }
 
 function booleanSetting(key: keyof ViewerSettings, fallback: boolean): boolean {
@@ -215,6 +223,7 @@ export default function App() {
   const [timeOfDay, setTimeOfDay] = useState(() => numberSetting('timeOfDay', 0));
   const [debugLoggingEnabled, setDebugLoggingEnabledState] = useState(() => booleanSetting('debugLoggingEnabled', false));
   const [diagnosticDetail, setDiagnosticDetail] = useState<DiagnosticDetail>(() => diagnosticDetailSetting());
+  const [schedulerPreset, setSchedulerPreset] = useState<SchedulerPreset>(() => schedulerPresetSetting());
   const [panelCollapsed, setPanelCollapsed] = useState(() => localStorage.getItem(PANEL_STORAGE_KEY) === 'true');
   const [diagnosticCollapsed, setDiagnosticCollapsed] = useState(() => localStorage.getItem(DIAGNOSTIC_PANEL_STORAGE_KEY) === 'true');
   const [diagnosticServerToken, setDiagnosticServerToken] = useState(() => {
@@ -275,6 +284,7 @@ export default function App() {
       if (!params.has('timeOfDay')) next.timeOfDay = timeOfDay;
       if (!params.has('debugLoggingEnabled')) next.debugLoggingEnabled = debugLoggingEnabled;
       if (!params.has('diagnosticDetail')) next.diagnosticDetail = diagnosticDetail;
+      if (!params.has('schedulerPreset')) next.schedulerPreset = schedulerPreset;
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(next));
     } catch {
       // Storage may be unavailable in restricted contexts.
@@ -291,6 +301,7 @@ export default function App() {
     timeOfDay,
     debugLoggingEnabled,
     diagnosticDetail,
+    schedulerPreset,
     worldsLoaded,
   ]);
 
@@ -457,6 +468,7 @@ export default function App() {
           <Viewer
             world={world} dimension={dimension}
             viewDistance={viewDistance} lodDistance={lodDistance}
+            schedulerPreset={schedulerPreset}
             fastMoveMultiplier={fastMoveMultiplier} inertiaEnabled={inertiaEnabled} viewMode={viewMode}
             topClipRange={topClipRange}
             timeOfDay={timeOfDay} cameraTarget={cameraTarget} onStats={handleStats}
@@ -629,6 +641,19 @@ export default function App() {
                             <Select.Item value="simple">{t('diagnosticsSimple')}</Select.Item>
                             <Select.Item value="standard">{t('diagnosticsStandard')}</Select.Item>
                             <Select.Item value="detailed">{t('diagnosticsDetailed')}</Select.Item>
+                          </Select.Content>
+                        </Select.Root>
+                      </Flex>
+                      <Flex gap="2" align="center">
+                        <Text size="1" style={{ width: 64 }}>{t('schedulerPreset')}</Text>
+                        <Select.Root value={schedulerPreset} onValueChange={(value) => setSchedulerPreset(value as SchedulerPreset)}>
+                          <Select.Trigger style={{ flex: 1 }} />
+                          <Select.Content>
+                            <Select.Item value="potato">{t('schedulerPreset_potato')}</Select.Item>
+                            <Select.Item value="low">{t('schedulerPreset_low')}</Select.Item>
+                            <Select.Item value="medium">{t('schedulerPreset_medium')}</Select.Item>
+                            <Select.Item value="high">{t('schedulerPreset_high')}</Select.Item>
+                            <Select.Item value="extreme">{t('schedulerPreset_extreme')}</Select.Item>
                           </Select.Content>
                         </Select.Root>
                       </Flex>

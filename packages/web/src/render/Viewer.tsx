@@ -18,7 +18,12 @@ import {
   type ChunkManagerDiagnosticSnapshot,
   type TopClipRange,
 } from './chunkManager';
-import { EMPTY_CHUNK_SCHEDULER_STATS, type ChunkSchedulerStats } from './chunkScheduler';
+import {
+  EMPTY_CHUNK_SCHEDULER_STATS,
+  schedulerTuningForPreset,
+  type ChunkSchedulerStats,
+  type SchedulerPreset,
+} from './chunkScheduler';
 import { clampFlyPitch, FlyControls, normalizeFlyYaw, TopDownControls, type FlyView } from './controls';
 import { createMaterials, createSharedUniforms, SharedUniforms, TerrainMaterials } from './materials';
 import { TopMapManager, type TopMapDiagnosticSnapshot } from './topMapManager';
@@ -59,6 +64,7 @@ export interface ViewerProps {
   dimension: string;
   viewDistance: number;
   lodDistance: number;
+  schedulerPreset: SchedulerPreset;
   fastMoveMultiplier: number;
   inertiaEnabled: boolean;
   viewMode: ViewMode;
@@ -85,6 +91,7 @@ export interface ViewerDiagnosticSnapshot {
     devicePixelRatio: number;
   };
   camera: ViewerStatsPayload;
+  schedulerPreset: SchedulerPreset;
   chunkManager: ChunkManagerDiagnosticSnapshot | null;
   topMap: TopMapDiagnosticSnapshot;
 }
@@ -328,6 +335,7 @@ function diagnosticSnapshotForViewer(
   manager: ChunkManager | null,
   stats: ChunkSchedulerStats,
   viewMode: ViewMode,
+  schedulerPreset: SchedulerPreset,
 ): ViewerDiagnosticSnapshot {
   return {
     schema: 1,
@@ -338,6 +346,7 @@ function diagnosticSnapshotForViewer(
       devicePixelRatio: window.devicePixelRatio,
     },
     camera: statsForCamera(stats, engine.activeCamera, viewMode),
+    schedulerPreset,
     chunkManager: manager?.diagnosticSnapshot() ?? null,
     topMap: engine.topMap.diagnosticSnapshot(),
   };
@@ -1029,9 +1038,6 @@ function renderFrame({ engine, manager, latestStats, props, capabilities, state 
 
 function createWorldManager(engine: Engine, props: ViewerProps): ChunkManager {
   const dimDef = dimensionDefinition(engine.dimensions, props.dimension);
-  const schedulerRadiusChunks = Math.min(32, Math.ceil(props.viewDistance + props.lodDistance));
-  const schedulerMaxCandidates = Math.min(1536, Math.max(896, schedulerRadiusChunks * 32));
-  const schedulerMaxFrameCandidates = Math.min(112, Math.max(72, Math.ceil(schedulerRadiusChunks * 2.5)));
   return new ChunkManager(engine.scene, engine.materials, engine.initPayload, {
     world: props.world,
     dimension: props.dimension,
@@ -1039,22 +1045,7 @@ function createWorldManager(engine: Engine, props: ViewerProps): ChunkManager {
     dimensionDef: dimDef,
     topMapSurfaceYAt: (cx, cz) => engine.topMap.surfaceYAtChunk(cx, cz),
     disableLod: false,
-    scheduling: {
-      activeRadiusChunks: schedulerRadiusChunks,
-      maxCandidates: schedulerMaxCandidates,
-      maxFrameCandidates: schedulerMaxFrameCandidates,
-      tauImportance: 0.6,
-      nearImportanceHalfLife: 0.72,
-      farImportanceHalfLife: 0.12,
-      importanceDecayDistancePower: 1.45,
-      tauSatisfaction: 1.25,
-      angleSigmaRad: 0.8,
-      distanceInverseSquareRadiusChunks: Math.max(10, schedulerRadiusChunks * 0.4),
-      overshootEta: 0.12,
-      neighborSatisfactionPenaltyByCount: [0, 0, 0.04, 0.085, 0.14, 0.21, 0.3, 0.4, 0.52],
-      minImportanceToSchedule: 0.008,
-      minGapToSchedule: 0.014,
-    }
+    scheduling: schedulerTuningForPreset(props.schedulerPreset, props.viewDistance, props.lodDistance),
   });
 }
 
@@ -1209,6 +1200,20 @@ export function Viewer(props: ViewerProps) {
   }, [props.inertiaEnabled]);
 
   useEffect(() => {
+    const engine = engineRef.current;
+    const manager = managerRef.current;
+    if (!ready || !engine || !manager) return;
+    manager.setScheduling(schedulerTuningForPreset(props.schedulerPreset, props.viewDistance, props.lodDistance));
+    manager.update(
+      engine.activeCamera,
+      performance.now(),
+      true,
+      isTopViewMode(props.viewMode),
+      props.topClipRange,
+    );
+  }, [ready, props.schedulerPreset, props.viewDistance, props.lodDistance]);
+
+  useEffect(() => {
     const register = props.onDiagnosticSnapshotProvider;
     if (!register) return;
     register(() => {
@@ -1219,6 +1224,7 @@ export function Viewer(props: ViewerProps) {
         managerRef.current,
         latestStatsRef.current,
         propsRef.current.viewMode,
+        propsRef.current.schedulerPreset,
       );
     });
     return () => register(null);

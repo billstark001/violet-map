@@ -24,7 +24,7 @@ const BLOCKED_RENDER_HASH_BATCH_SIZE = 4;
 const BLOCKED_RENDER_FETCH_BATCH_SIZE = 3;
 const MAX_IO_QUEUE = 384;
 const MAX_MESH_QUEUE = 64;
-const MAX_TRACKED_CHUNKS = 384;
+const DEFAULT_MAX_TRACKED_CHUNKS = 384;
 
 const IO_QUEUE_RETENTION_MS = 3000;
 const RECORD_RETENTION_MS = 6000;
@@ -33,7 +33,6 @@ const LOW_VALUE_ACTIVE_DROP_MS = 3000;
 const LOW_VALUE_ACTIVE_EVICT_LIMIT = 24;
 const LOW_VALUE_ACTIVE_MAX_IMPORTANCE = 0.008;
 const LOW_VALUE_ACTIVE_MAX_GAP = 0.002;
-const LOW_VALUE_ACTIVE_MIN_DISTANCE_CHUNKS = 3;
 const MESH_RETRY_COOLDOWN_MS = 180;
 const IO_RENDER_SHARE_TARGET = 0.92;
 const MIN_EXISTING_CHUNKS_BEFORE_BALANCE = 12;
@@ -41,8 +40,8 @@ const RENDER_BACKLOG_IO_PAUSE = 4;
 const MAX_FRAME_CANDIDATES = 56;
 // Keep a view-direction-independent inner disk ready. This prevents nearby
 // holes from waiting until the player turns toward them.
-const CRITICAL_NEAR_RADIUS_CHUNKS = 4;
-const NEAR_PRESENCE_RADIUS_CHUNKS = 8;
+const DEFAULT_CRITICAL_NEAR_RADIUS_CHUNKS = 4;
+const DEFAULT_NEAR_PRESENCE_RADIUS_CHUNKS = 8;
 const CRITICAL_CENTER_RAY_MAX_CHUNKS = 8;
 const CRITICAL_CENTER_RAY_STEP_CHUNKS = 0.75;
 const MIN_CRITICAL_RAY_HORIZONTAL = 0.08;
@@ -78,6 +77,9 @@ export type LodStep = typeof LOD_STEPS[number];
 export type MeshTaskKind = 'full' | 'lod';
 export type ChunkSchedulerCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 
+export const SCHEDULER_PRESETS = ['potato', 'low', 'medium', 'high', 'extreme'] as const;
+export type SchedulerPreset = typeof SCHEDULER_PRESETS[number];
+
 export interface ChunkSchedulingTuning {
   /** Camera-grid active radius in chunks. This is independent from fog/view-distance UI settings. */
   activeRadiusChunks?: number;
@@ -85,6 +87,12 @@ export interface ChunkSchedulingTuning {
   maxCandidates?: number;
   /** Maximum scheduler candidates materialized from the current tracker ranking each frame. */
   maxFrameCandidates?: number;
+  /** Maximum tracked chunk entries retained after eviction. */
+  maxTrackedChunks?: number;
+  /** Inner, direction-independent full-detail disk radius. */
+  criticalNearRadiusChunks?: number;
+  /** Direction-independent disk that guarantees at least the current target LOD. */
+  nearPresenceRadiusChunks?: number;
   /** Time constant, in seconds, for camera attention to react and decay. */
   tauImportance?: number;
   /** Importance half-life, in seconds, for cells near the camera. */
@@ -395,6 +403,9 @@ interface TrackerRuntimeConfig {
   activeRadiusBlocks: number;
   maxCandidates: number;
   maxFrameCandidates: number;
+  maxTrackedChunks: number;
+  criticalNearRadiusChunks: number;
+  nearPresenceRadiusChunks: number;
   tauImportance: number;
   nearImportanceHalfLife: number;
   farImportanceHalfLife: number;
@@ -415,6 +426,155 @@ interface TrackerRuntimeConfig {
 function clampFinite(value: number | undefined, fallback: number, min: number, max: number): number {
   if (value === undefined || !Number.isFinite(value)) return fallback;
   return Math.max(min, Math.min(max, value));
+}
+
+function presetRadius(viewDistance: number, lodDistance: number, min: number, max: number, scale: number): number {
+  const requested = Math.max(2, Math.ceil(Math.max(0, viewDistance) + Math.max(0, lodDistance)));
+  return Math.max(min, Math.min(max, Math.ceil(requested * scale)));
+}
+
+/**
+ * Complete scheduler profiles exposed in the settings UI. The medium profile
+ * intentionally matches the previous runtime tuning.
+ */
+export function schedulerTuningForPreset(
+  preset: SchedulerPreset,
+  viewDistance: number,
+  lodDistance: number,
+): ChunkSchedulingTuning {
+  switch (preset) {
+    case 'potato': {
+      const activeRadiusChunks = presetRadius(viewDistance, lodDistance, 8, 12, 0.5);
+      return {
+        activeRadiusChunks,
+        maxCandidates: 256,
+        maxFrameCandidates: 32,
+        maxTrackedChunks: 128,
+        criticalNearRadiusChunks: 2,
+        nearPresenceRadiusChunks: 4,
+        tauImportance: 0.42,
+        nearImportanceHalfLife: 0.48,
+        farImportanceHalfLife: 0.06,
+        importanceDecayDistancePower: 1.9,
+        tauSatisfaction: 0.8,
+        angleSigmaRad: 0.62,
+        fovRadiusRad: null,
+        distanceWeightPower: 0.8,
+        distanceInverseSquareRadiusChunks: Math.max(3, activeRadiusChunks * 0.28),
+        overshootEta: 0.08,
+        neighborPrecisionEpsilon: 1e-6,
+        neighborSatisfactionPenaltyByCount: [0, 0, 0.025, 0.05, 0.09, 0.14, 0.2, 0.28, 0.36],
+        minSatisfaction: -0.36,
+        minImportanceToSchedule: 0.016,
+        minGapToSchedule: 0.026,
+      };
+    }
+    case 'low': {
+      const activeRadiusChunks = presetRadius(viewDistance, lodDistance, 12, 20, 0.75);
+      return {
+        activeRadiusChunks,
+        maxCandidates: 512,
+        maxFrameCandidates: 56,
+        maxTrackedChunks: 256,
+        criticalNearRadiusChunks: 3,
+        nearPresenceRadiusChunks: 6,
+        tauImportance: 0.5,
+        nearImportanceHalfLife: 0.6,
+        farImportanceHalfLife: 0.09,
+        importanceDecayDistancePower: 1.65,
+        tauSatisfaction: 1.0,
+        angleSigmaRad: 0.7,
+        fovRadiusRad: null,
+        distanceWeightPower: 0.72,
+        distanceInverseSquareRadiusChunks: Math.max(6, activeRadiusChunks * 0.34),
+        overshootEta: 0.1,
+        neighborPrecisionEpsilon: 1e-6,
+        neighborSatisfactionPenaltyByCount: [0, 0, 0.03, 0.065, 0.11, 0.17, 0.24, 0.33, 0.43],
+        minSatisfaction: -0.43,
+        minImportanceToSchedule: 0.012,
+        minGapToSchedule: 0.02,
+      };
+    }
+    case 'high': {
+      const activeRadiusChunks = presetRadius(viewDistance, lodDistance, 24, 48, 1.25);
+      return {
+        activeRadiusChunks,
+        maxCandidates: Math.max(1536, activeRadiusChunks * 36),
+        maxFrameCandidates: 160,
+        maxTrackedChunks: 640,
+        criticalNearRadiusChunks: 5,
+        nearPresenceRadiusChunks: 10,
+        tauImportance: 0.85,
+        nearImportanceHalfLife: 1.0,
+        farImportanceHalfLife: 0.2,
+        importanceDecayDistancePower: 1.25,
+        tauSatisfaction: 1.8,
+        angleSigmaRad: 0.95,
+        fovRadiusRad: null,
+        distanceWeightPower: 0.55,
+        distanceInverseSquareRadiusChunks: Math.max(12, activeRadiusChunks * 0.5),
+        overshootEta: 0.16,
+        neighborPrecisionEpsilon: 1e-6,
+        neighborSatisfactionPenaltyByCount: [0, 0, 0.045, 0.095, 0.16, 0.24, 0.34, 0.46, 0.58],
+        minSatisfaction: -0.58,
+        minImportanceToSchedule: 0.004,
+        minGapToSchedule: 0.006,
+      };
+    }
+    case 'extreme': {
+      const activeRadiusChunks = presetRadius(viewDistance, lodDistance, 32, 64, 1.5);
+      return {
+        activeRadiusChunks,
+        maxCandidates: Math.max(2304, activeRadiusChunks * 40),
+        maxFrameCandidates: 256,
+        maxTrackedChunks: 1024,
+        criticalNearRadiusChunks: 6,
+        nearPresenceRadiusChunks: 12,
+        tauImportance: 1.2,
+        nearImportanceHalfLife: 1.5,
+        farImportanceHalfLife: 0.32,
+        importanceDecayDistancePower: 1.1,
+        tauSatisfaction: 2.5,
+        angleSigmaRad: 1.2,
+        fovRadiusRad: null,
+        distanceWeightPower: 0.45,
+        distanceInverseSquareRadiusChunks: Math.max(16, activeRadiusChunks * 0.6),
+        overshootEta: 0.2,
+        neighborPrecisionEpsilon: 1e-6,
+        neighborSatisfactionPenaltyByCount: [0, 0, 0.05, 0.11, 0.18, 0.28, 0.4, 0.54, 0.68],
+        minSatisfaction: -0.68,
+        minImportanceToSchedule: 0.002,
+        minGapToSchedule: 0.003,
+      };
+    }
+    case 'medium':
+    default: {
+      const activeRadiusChunks = presetRadius(viewDistance, lodDistance, 8, 32, 1);
+      return {
+        activeRadiusChunks,
+        maxCandidates: Math.min(1536, Math.max(896, activeRadiusChunks * 32)),
+        maxFrameCandidates: Math.min(112, Math.max(72, Math.ceil(activeRadiusChunks * 2.5))),
+        maxTrackedChunks: DEFAULT_MAX_TRACKED_CHUNKS,
+        criticalNearRadiusChunks: DEFAULT_CRITICAL_NEAR_RADIUS_CHUNKS,
+        nearPresenceRadiusChunks: DEFAULT_NEAR_PRESENCE_RADIUS_CHUNKS,
+        tauImportance: 0.6,
+        nearImportanceHalfLife: 0.72,
+        farImportanceHalfLife: 0.12,
+        importanceDecayDistancePower: 1.45,
+        tauSatisfaction: 1.25,
+        angleSigmaRad: 0.8,
+        fovRadiusRad: null,
+        distanceWeightPower: 0.65,
+        distanceInverseSquareRadiusChunks: Math.max(10, activeRadiusChunks * 0.4),
+        overshootEta: 0.12,
+        neighborPrecisionEpsilon: 1e-6,
+        neighborSatisfactionPenaltyByCount: [0, 0, 0.04, 0.085, 0.14, 0.21, 0.3, 0.4, 0.52],
+        minSatisfaction: -0.52,
+        minImportanceToSchedule: 0.008,
+        minGapToSchedule: 0.014,
+      };
+    }
+  }
 }
 
 function normalizeNeighborPenalty(value: readonly number[] | undefined): readonly number[] {
@@ -489,6 +649,9 @@ function trackerConfigKey(cfg: TrackerRuntimeConfig): string {
   return [
     cfg.activeRadiusChunks,
     cfg.maxCandidates,
+    cfg.maxTrackedChunks,
+    cfg.criticalNearRadiusChunks,
+    cfg.nearPresenceRadiusChunks,
     cfg.tauImportance,
     cfg.nearImportanceHalfLife,
     cfg.farImportanceHalfLife,
@@ -523,6 +686,9 @@ export class ChunkScheduler {
   private lastCenterCz = 0;
   private lastActiveRadiusChunks = DEFAULT_ACTIVE_RADIUS_CHUNKS;
   private lastMaxCandidates = activeCellCapacity(DEFAULT_ACTIVE_RADIUS_CHUNKS);
+  private lastMaxTrackedChunks = DEFAULT_MAX_TRACKED_CHUNKS;
+  private lastCriticalNearRadiusChunks = DEFAULT_CRITICAL_NEAR_RADIUS_CHUNKS;
+  private lastNearPresenceRadiusChunks = DEFAULT_NEAR_PRESENCE_RADIUS_CHUNKS;
   private tmpDirection = new THREE.Vector3();
 
   constructor(private opts: ChunkSchedulerOptions = {}) { }
@@ -573,10 +739,10 @@ export class ChunkScheduler {
       center: { cx: this.lastCenterCx, cz: this.lastCenterCz },
       activeRadiusChunks: this.lastActiveRadiusChunks,
       maxCandidates: this.lastMaxCandidates,
-      trackedChunkLimit: MAX_TRACKED_CHUNKS,
+      trackedChunkLimit: this.lastMaxTrackedChunks,
       lodDisabled: this.lodDisabled(),
-      criticalNearRadiusChunks: CRITICAL_NEAR_RADIUS_CHUNKS,
-      nearPresenceRadiusChunks: NEAR_PRESENCE_RADIUS_CHUNKS,
+      criticalNearRadiusChunks: this.lastCriticalNearRadiusChunks,
+      nearPresenceRadiusChunks: this.lastNearPresenceRadiusChunks,
       queues: {
         hash: [...this.hashQueue].sort((a, b) => this.compareQueuedKeys(a, b)),
         fetch: [...this.fetchQueue].sort((a, b) => this.compareQueuedKeys(a, b)),
@@ -728,15 +894,18 @@ export class ChunkScheduler {
     const topDownView = input.topDownView ?? false;
     const cfg = this.resolveTrackerConfig(input.camera, topDownView);
     this.lastMaxCandidates = cfg.maxCandidates;
+    this.lastMaxTrackedChunks = cfg.maxTrackedChunks;
+    this.lastCriticalNearRadiusChunks = cfg.criticalNearRadiusChunks;
+    this.lastNearPresenceRadiusChunks = cfg.nearPresenceRadiusChunks;
     this.ensureTracker(cfg, input.force);
 
     const pose = this.poseFromCamera(input.camera);
     const ranking = this.rankCells(pose, nowSeconds, cfg);
     const centerCx = Math.floor(input.camera.position.x / CHUNK_SIZE_BLOCKS);
     const centerCz = Math.floor(input.camera.position.z / CHUNK_SIZE_BLOCKS);
-    const nearPresenceCells = this.nearPresenceCells(centerCx, centerCz);
+    const nearPresenceCells = this.nearPresenceCells(centerCx, centerCz, cfg.nearPresenceRadiusChunks);
     const nearPresenceKeys = new Set(nearPresenceCells.map((cell) => input.keyFor(cell.i, cell.j)));
-    const nearCriticalCells = this.nearCriticalCells(centerCx, centerCz);
+    const nearCriticalCells = this.nearCriticalCells(centerCx, centerCz, cfg.criticalNearRadiusChunks);
     const nearCriticalKeys = new Set(nearCriticalCells.map((cell) => input.keyFor(cell.i, cell.j)));
     const criticalCells = this.criticalCellsForPose(pose, centerCx, centerCz, cfg);
     const criticalKeys = new Set(criticalCells.map((cell) => input.keyFor(cell.i, cell.j)));
@@ -872,7 +1041,7 @@ export class ChunkScheduler {
     centerCz: number,
     cfg: TrackerRuntimeConfig,
   ): CriticalCell[] {
-    const out = this.nearCriticalCells(centerCx, centerCz);
+    const out = this.nearCriticalCells(centerCx, centerCz, cfg.criticalNearRadiusChunks);
     const seen = new Set(out.map((cell) => `${cell.i},${cell.j}`));
     const add = (i: number, j: number): void => {
       const key = `${i},${j}`;
@@ -900,14 +1069,14 @@ export class ChunkScheduler {
     return out;
   }
 
-  private nearCriticalCells(centerCx: number, centerCz: number): CriticalCell[] {
-    return this.nearPresenceCells(centerCx, centerCz, CRITICAL_NEAR_RADIUS_CHUNKS);
+  private nearCriticalCells(centerCx: number, centerCz: number, radius: number): CriticalCell[] {
+    return this.nearPresenceCells(centerCx, centerCz, radius);
   }
 
   private nearPresenceCells(
     centerCx: number,
     centerCz: number,
-    radius = NEAR_PRESENCE_RADIUS_CHUNKS,
+    radius: number,
   ): CriticalCell[] {
     const out: CriticalCell[] = [];
     for (let di = -radius; di <= radius; di++) {
@@ -1298,7 +1467,7 @@ export class ChunkScheduler {
     }
 
     const activeCapacity = activeCellCapacity(this.lastActiveRadiusChunks);
-    const residentLimit = Math.min(activeCapacity, MAX_TRACKED_CHUNKS);
+    const residentLimit = Math.min(activeCapacity, this.lastMaxTrackedChunks);
     const existingProtectedCount = all.reduce((count, entry) => count + (protectedKeys.has(entry.key) ? 1 : 0), 0);
     const softLimit = Math.max(existingProtectedCount, residentLimit - Math.max(0, reservedSlots));
     const hardLimit = softLimit;
@@ -1474,6 +1643,24 @@ export class ChunkScheduler {
       1,
       activeCellCapacity(MAX_ACTIVE_RADIUS_CHUNKS),
     )));
+    const maxTrackedChunks = Math.max(64, Math.floor(clampFinite(
+      scheduling.maxTrackedChunks,
+      DEFAULT_MAX_TRACKED_CHUNKS,
+      64,
+      4096,
+    )));
+    const criticalNearRadiusChunks = Math.max(1, Math.floor(clampFinite(
+      scheduling.criticalNearRadiusChunks,
+      DEFAULT_CRITICAL_NEAR_RADIUS_CHUNKS,
+      1,
+      24,
+    )));
+    const nearPresenceRadiusChunks = Math.max(criticalNearRadiusChunks, Math.floor(clampFinite(
+      scheduling.nearPresenceRadiusChunks,
+      DEFAULT_NEAR_PRESENCE_RADIUS_CHUNKS,
+      criticalNearRadiusChunks,
+      32,
+    )));
     const tauImportance = clampFinite(scheduling.tauImportance, 0.85, 0.05, 10);
     const baseImportanceHalfLife = tauImportance * Math.LN2;
     const nearImportanceHalfLife = clampFinite(
@@ -1510,6 +1697,9 @@ export class ChunkScheduler {
       activeRadiusBlocks: activeRadiusChunks * CHUNK_SIZE_BLOCKS,
       maxCandidates,
       maxFrameCandidates,
+      maxTrackedChunks,
+      criticalNearRadiusChunks,
+      nearPresenceRadiusChunks,
       tauImportance,
       nearImportanceHalfLife,
       farImportanceHalfLife,
@@ -1888,7 +2078,7 @@ export class ChunkScheduler {
     if (entry.pendingFull || entry.pendingLod) return false;
     if (now - this.lastWantedAt(entry) < LOW_VALUE_ACTIVE_DROP_MS) return false;
     if (this.priorityFresh(entry, now)) return false;
-    if (Math.hypot(entry.cx - this.lastCenterCx, entry.cz - this.lastCenterCz) < LOW_VALUE_ACTIVE_MIN_DISTANCE_CHUNKS) {
+    if (Math.hypot(entry.cx - this.lastCenterCx, entry.cz - this.lastCenterCz) < this.lastCriticalNearRadiusChunks + 1) {
       return false;
     }
 

@@ -493,6 +493,10 @@ export class ChunkManager {
     return out;
   }
 
+  setScheduling(scheduling: ChunkSchedulingTuning | undefined) {
+    this.opts = { ...this.opts, scheduling };
+  }
+
   /** A JSON-safe, point-in-time view used by the settings diagnosis export. */
   diagnosticSnapshot(): ChunkManagerDiagnosticSnapshot {
     const now = performance.now();
