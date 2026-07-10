@@ -13,11 +13,15 @@ import {
   type WorldCapabilities,
 } from '../api';
 import { buildAtlas, collectTextureIds, loadColormap } from '../atlas';
-import { ChunkManager, type TopClipRange } from './chunkManager';
+import {
+  ChunkManager,
+  type ChunkManagerDiagnosticSnapshot,
+  type TopClipRange,
+} from './chunkManager';
 import { EMPTY_CHUNK_SCHEDULER_STATS, type ChunkSchedulerStats } from './chunkScheduler';
 import { clampFlyPitch, FlyControls, normalizeFlyYaw, TopDownControls, type FlyView } from './controls';
 import { createMaterials, createSharedUniforms, SharedUniforms, TerrainMaterials } from './materials';
-import { TopMapManager } from './topMapManager';
+import { TopMapManager, type TopMapDiagnosticSnapshot } from './topMapManager';
 import type { WorkerInit } from '../worker/protocol';
 
 const VIEW_STORAGE_KEY = 'violet-map:view';
@@ -26,7 +30,9 @@ const SKY_PLANE_FORWARD = new THREE.Vector3(0, 0, 1);
 const TOP_CAMERA_HEIGHT = 1024;
 const TOP_ORTHO_HEIGHT = 512;
 const TOP_PERSPECTIVE_FOV = 50;
-const TOP_MAP_VISIBLE_RADIUS_BLOCKS = 1024;
+const TOP_MAP_FREE_VIEW_MAX_DISTANCE_CHUNKS = 1024;
+const TOP_MAP_FREE_VIEW_MAX_DISTANCE_BLOCKS = TOP_MAP_FREE_VIEW_MAX_DISTANCE_CHUNKS * 16;
+const LONG_RANGE_CAMERA_FAR = TOP_MAP_FREE_VIEW_MAX_DISTANCE_BLOCKS + 2 * 512;
 const DEFAULT_VIEW: FlyView = { x: 8, y: 120, z: 8, yaw: 0, pitch: 0 };
 const DEFAULT_DIMENSION_DEF = {
   hasSkyLight: true,
@@ -60,6 +66,7 @@ export interface ViewerProps {
   timeOfDay: number; // 0=正午, 0.5=午夜
   cameraTarget?: CameraPositionRequest;
   onStats?: (s: ViewerStatsPayload) => void;
+  onDiagnosticSnapshotProvider?: (provider: (() => ViewerDiagnosticSnapshot | null) | null) => void;
 }
 
 export type ViewerStatsPayload = ChunkSchedulerStats & {
@@ -68,6 +75,19 @@ export type ViewerStatsPayload = ChunkSchedulerStats & {
   pitch: number;
   viewMode: ViewMode;
 };
+
+export interface ViewerDiagnosticSnapshot {
+  schema: 1;
+  capturedAt: string;
+  browser: {
+    userAgent: string;
+    language: string;
+    devicePixelRatio: number;
+  };
+  camera: ViewerStatsPayload;
+  chunkManager: ChunkManagerDiagnosticSnapshot | null;
+  topMap: TopMapDiagnosticSnapshot;
+}
 
 type ActiveCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 type InitialView = FlyView & { hasAngles: boolean };
@@ -300,6 +320,26 @@ function statsForCamera(s: ChunkSchedulerStats, camera: THREE.Camera, viewMode: 
     yaw: orientation.yaw,
     pitch: orientation.pitch,
     viewMode,
+  };
+}
+
+function diagnosticSnapshotForViewer(
+  engine: Engine,
+  manager: ChunkManager | null,
+  stats: ChunkSchedulerStats,
+  viewMode: ViewMode,
+): ViewerDiagnosticSnapshot {
+  return {
+    schema: 1,
+    capturedAt: new Date().toISOString(),
+    browser: {
+      userAgent: navigator.userAgent,
+      language: navigator.language,
+      devicePixelRatio: window.devicePixelRatio,
+    },
+    camera: statsForCamera(stats, engine.activeCamera, viewMode),
+    chunkManager: manager?.diagnosticSnapshot() ?? null,
+    topMap: engine.topMap.diagnosticSnapshot(),
   };
 }
 
@@ -627,7 +667,7 @@ function createScene(): THREE.Scene {
 }
 
 function createPerspectiveCamera(container: HTMLElement, initialView: InitialView, params: URLSearchParams): THREE.PerspectiveCamera {
-  const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 2000);
+  const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, LONG_RANGE_CAMERA_FAR);
   camera.rotation.order = 'YXZ';
   camera.position.set(initialView.x, initialView.y, initialView.z);
   const lookAtTarget = initialView.hasAngles ? null : lookAtTargetFromParams(params, camera.position);
@@ -640,7 +680,7 @@ function createTopPerspectiveCamera(container: HTMLElement, initialView: Initial
     TOP_PERSPECTIVE_FOV,
     container.clientWidth / Math.max(1, container.clientHeight),
     1,
-    6000,
+    LONG_RANGE_CAMERA_FAR,
   );
   camera.rotation.order = 'YXZ';
   camera.position.set(initialView.x, Math.max(TOP_CAMERA_HEIGHT, initialView.y), initialView.z);
@@ -834,7 +874,8 @@ function updateChunksAndTopMap(
   );
   engine.topMap.update(engine.activeCamera, now, {
     mode: topView ? 'top' : 'perspective',
-    radiusBlocks: TOP_MAP_VISIBLE_RADIUS_BLOCKS,
+    radiusBlocks: TOP_MAP_FREE_VIEW_MAX_DISTANCE_BLOCKS,
+    maxDistanceBlocks: TOP_MAP_FREE_VIEW_MAX_DISTANCE_BLOCKS,
     onlineChunks: manager?.displayedChunkKeys(),
   });
 
@@ -997,20 +1038,22 @@ function createWorldManager(engine: Engine, props: ViewerProps): ChunkManager {
     renderKey: engine.renderKey,
     dimensionDef: dimDef,
     topMapSurfaceYAt: (cx, cz) => engine.topMap.surfaceYAtChunk(cx, cz),
-    // 十分抽象，渲染一个lod耗时是渲染完整区块的85%左右，完全没有优化性能的意义，不如直接拔了
-    disableLod: true,
+    disableLod: false,
     scheduling: {
       activeRadiusChunks: schedulerRadiusChunks,
       maxCandidates: schedulerMaxCandidates,
       maxFrameCandidates: schedulerMaxFrameCandidates,
-      tauImportance: 0.7,
-      tauSatisfaction: 1.8,
+      tauImportance: 0.6,
+      nearImportanceHalfLife: 0.72,
+      farImportanceHalfLife: 0.12,
+      importanceDecayDistancePower: 1.45,
+      tauSatisfaction: 1.25,
       angleSigmaRad: 0.8,
       distanceInverseSquareRadiusChunks: Math.max(10, schedulerRadiusChunks * 0.4),
       overshootEta: 0.12,
       neighborSatisfactionPenaltyByCount: [0, 0, 0.04, 0.085, 0.14, 0.21, 0.3, 0.4, 0.52],
-      minImportanceToSchedule: 0.004,
-      minGapToSchedule: 0.008,
+      minImportanceToSchedule: 0.008,
+      minGapToSchedule: 0.014,
     }
   });
 }
@@ -1164,6 +1207,22 @@ export function Viewer(props: ViewerProps) {
   useEffect(() => {
     engineRef.current?.flyControls.setInertiaEnabled(props.inertiaEnabled);
   }, [props.inertiaEnabled]);
+
+  useEffect(() => {
+    const register = props.onDiagnosticSnapshotProvider;
+    if (!register) return;
+    register(() => {
+      const engine = engineRef.current;
+      if (!engine) return null;
+      return diagnosticSnapshotForViewer(
+        engine,
+        managerRef.current,
+        latestStatsRef.current,
+        propsRef.current.viewMode,
+      );
+    });
+    return () => register(null);
+  }, [props.onDiagnosticSnapshotProvider]);
 
   // 外部手动设置坐标
   useEffect(() => {

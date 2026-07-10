@@ -131,6 +131,28 @@ export const fetchChunkSourceCoverage = (world: string, dim: string) =>
     `/api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/chunk-coverage`,
   );
 
+export interface DiagnosticUploadResponse {
+  ok: true;
+  id: string;
+}
+
+export async function uploadDiagnosticSnapshot(snapshot: unknown, token?: string): Promise<DiagnosticUploadResponse> {
+  const res = await fetch('/api/diagnostics', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(token ? { 'x-violet-admin-token': token } : {}),
+    },
+    body: JSON.stringify(snapshot),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null) as { error?: unknown } | null;
+    const message = typeof detail?.error === 'string' ? `: ${detail.error}` : '';
+    throw new Error(`diagnostic upload failed: ${res.status}${message}`);
+  }
+  return res.json() as Promise<DiagnosticUploadResponse>;
+}
+
 export async function fetchTopMapTile(
   world: string,
   dim: string,

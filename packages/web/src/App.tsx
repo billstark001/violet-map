@@ -1,12 +1,18 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge, Box, Button, Card, Flex, Select, Slider, Switch, Tabs, Text, TextField, Theme } from '@radix-ui/themes';
 import { useTranslation } from 'react-i18next';
-import { fetchWorlds } from './api';
+import { fetchWorlds, uploadDiagnosticSnapshot } from './api';
 import { Compass } from './Compass';
 import { languageOptions } from './i18n';
 import { clearDebugLog, setDebugLoggingEnabled } from './logger';
 import { clearMeshCache, getMeshCacheStats } from './meshCache';
-import { Viewer, type CameraPositionRequest, type ViewerStatsPayload, type ViewMode } from './render/Viewer';
+import {
+  Viewer,
+  type CameraPositionRequest,
+  type ViewerDiagnosticSnapshot,
+  type ViewerStatsPayload,
+  type ViewMode,
+} from './render/Viewer';
 import { EMPTY_CHUNK_SCHEDULER_STATS } from './render/chunkScheduler';
 import type { TopClipRange } from './render/chunkManager';
 
@@ -19,6 +25,7 @@ type ViewerStats = ViewerStatsPayload;
 const SETTINGS_STORAGE_KEY = 'violet-map:settings';
 const PANEL_STORAGE_KEY = 'violet-map:panel-collapsed';
 const DIAGNOSTIC_PANEL_STORAGE_KEY = 'violet-map:diagnostic-panel-collapsed';
+const DIAGNOSTIC_TOKEN_STORAGE_KEY = 'violet-map:diagnostic-server-token';
 const TOP_CLIP_MIN_Y = -80;
 const TOP_CLIP_MAX_Y = 384;
 const TOP_CLIP_STEP = 16;
@@ -210,8 +217,19 @@ export default function App() {
   const [diagnosticDetail, setDiagnosticDetail] = useState<DiagnosticDetail>(() => diagnosticDetailSetting());
   const [panelCollapsed, setPanelCollapsed] = useState(() => localStorage.getItem(PANEL_STORAGE_KEY) === 'true');
   const [diagnosticCollapsed, setDiagnosticCollapsed] = useState(() => localStorage.getItem(DIAGNOSTIC_PANEL_STORAGE_KEY) === 'true');
+  const [diagnosticServerToken, setDiagnosticServerToken] = useState(() => {
+    try {
+      return sessionStorage.getItem(DIAGNOSTIC_TOKEN_STORAGE_KEY) ?? '';
+    } catch {
+      return '';
+    }
+  });
+  const [diagnosticUploadStatus, setDiagnosticUploadStatus] = useState<'idle' | 'uploading' | 'uploaded' | 'error'>('idle');
+  const [diagnosticUploadMessage, setDiagnosticUploadMessage] = useState('');
+  const [diagnosticSnapshotAvailable, setDiagnosticSnapshotAvailable] = useState(false);
   const [stats, setStats] = useState<ViewerStats>(() => initialViewerStats(viewMode));
   const latestStatsRef = useRef<ViewerStats>(initialViewerStats(viewMode));
+  const diagnosticSnapshotProviderRef = useRef<(() => ViewerDiagnosticSnapshot | null) | null>(null);
   const [panelTab, setPanelTab] = useState('view');
   const [cacheStats, setCacheStats] = useState({ entries: 0, bytes: 0 });
   const [coordDirty, setCoordDirty] = useState(false);
@@ -391,6 +409,46 @@ export default function App() {
       .then(refreshCacheStats)
       .catch(console.error);
   };
+  const setDiagnosticSnapshotProvider = useCallback((provider: (() => ViewerDiagnosticSnapshot | null) | null) => {
+    diagnosticSnapshotProviderRef.current = provider;
+    setDiagnosticSnapshotAvailable(provider !== null);
+  }, []);
+  const setDiagnosticToken = (value: string) => {
+    setDiagnosticServerToken(value);
+    try {
+      if (value) sessionStorage.setItem(DIAGNOSTIC_TOKEN_STORAGE_KEY, value);
+      else sessionStorage.removeItem(DIAGNOSTIC_TOKEN_STORAGE_KEY);
+    } catch {
+      // Session storage may be unavailable in restricted contexts.
+    }
+  };
+  const captureDiagnosticSnapshot = (): ViewerDiagnosticSnapshot | null => diagnosticSnapshotProviderRef.current?.() ?? null;
+  const handleDownloadDiagnosticSnapshot = () => {
+    const snapshot = captureDiagnosticSnapshot();
+    if (!snapshot) return;
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `violet-map-diagnosis-${snapshot.capturedAt.replace(/[:.]/g, '-')}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+  const handleUploadDiagnosticSnapshot = () => {
+    const snapshot = captureDiagnosticSnapshot();
+    if (!snapshot || !diagnosticServerToken.trim()) return;
+    setDiagnosticUploadStatus('uploading');
+    setDiagnosticUploadMessage('');
+    void uploadDiagnosticSnapshot(snapshot, diagnosticServerToken.trim())
+      .then(({ id }) => {
+        setDiagnosticUploadStatus('uploaded');
+        setDiagnosticUploadMessage(id);
+      })
+      .catch((error) => {
+        setDiagnosticUploadStatus('error');
+        setDiagnosticUploadMessage(error instanceof Error ? error.message : String(error));
+      });
+  };
 
   return (
     <Theme appearance="dark" accentColor="grass" style={{ height: '100%' }}>
@@ -402,6 +460,7 @@ export default function App() {
             fastMoveMultiplier={fastMoveMultiplier} inertiaEnabled={inertiaEnabled} viewMode={viewMode}
             topClipRange={topClipRange}
             timeOfDay={timeOfDay} cameraTarget={cameraTarget} onStats={handleStats}
+            onDiagnosticSnapshotProvider={setDiagnosticSnapshotProvider}
           />
         )}
         {viewMode === 'perspective' && (
@@ -580,6 +639,44 @@ export default function App() {
                       <Flex gap="2">
                         <Button size="1" variant="soft" onClick={clearDebugLog}>{t('clearDebugLog')}</Button>
                       </Flex>
+                      <Box>
+                        <Text size="1" weight="bold">{t('diagnosticSnapshot')}</Text>
+                        <Text size="1" color="gray" style={{ display: 'block', marginTop: 4 }}>
+                          {t('diagnosticSnapshotHint')}
+                        </Text>
+                        <Flex gap="2" mt="2" wrap="wrap">
+                          <Button size="1" variant="soft" onClick={handleDownloadDiagnosticSnapshot} disabled={!diagnosticSnapshotAvailable}>
+                            {t('downloadDiagnosticSnapshot')}
+                          </Button>
+                          <Button
+                            size="1"
+                            variant="soft"
+                            onClick={handleUploadDiagnosticSnapshot}
+                            disabled={!diagnosticSnapshotAvailable || !diagnosticServerToken.trim() || diagnosticUploadStatus === 'uploading'}
+                          >
+                            {diagnosticUploadStatus === 'uploading' ? t('uploadingDiagnosticSnapshot') : t('uploadDiagnosticSnapshot')}
+                          </Button>
+                        </Flex>
+                        <Text as="label" size="1" htmlFor="diagnostic-server-token" style={{ display: 'block', marginTop: 10, marginBottom: 4 }}>
+                          {t('diagnosticServerToken')}
+                        </Text>
+                        <TextField.Root
+                          id="diagnostic-server-token"
+                          size="1"
+                          type="password"
+                          autoComplete="off"
+                          value={diagnosticServerToken}
+                          placeholder={t('diagnosticServerTokenHint')}
+                          onChange={(event) => setDiagnosticToken(event.currentTarget.value)}
+                        />
+                        {diagnosticUploadStatus !== 'idle' && diagnosticUploadStatus !== 'uploading' && (
+                          <Text size="1" color={diagnosticUploadStatus === 'uploaded' ? 'green' : 'red'} style={{ display: 'block', marginTop: 6, wordBreak: 'break-word' }}>
+                            {diagnosticUploadStatus === 'uploaded'
+                              ? t('diagnosticUploaded', { id: diagnosticUploadMessage })
+                              : t('diagnosticUploadFailed', { message: diagnosticUploadMessage })}
+                          </Text>
+                        )}
+                      </Box>
                       <Box>
                         <Text size="1" weight="bold">{t('meshCache')}</Text>
                         <Flex gap="2" wrap="wrap" mt="2">

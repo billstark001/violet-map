@@ -1,7 +1,9 @@
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { decode, encode } from '@msgpack/msgpack';
 import { config } from './config.js';
 import { requireRole } from './auth.js';
@@ -30,6 +32,8 @@ const app = new Hono();
 app.use('*', cors());
 app.use('/api/admin/*', requireRole('ci'));
 
+const MAX_DIAGNOSTIC_BYTES = 2 * 1024 * 1024;
+
 function msgpackBody(value: unknown): ArrayBuffer {
   const bytes = encode(value);
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
@@ -44,6 +48,32 @@ function requestedChunks(raw: unknown): { cx: number; cz: number }[] {
   const body = raw as { chunks?: { cx: number; cz: number }[] };
   return Array.isArray(body?.chunks) ? body.chunks.slice(0, 256) : [];
 }
+
+app.post('/api/diagnostics', requireRole('viewer'), async (c) => {
+  const bytes = new Uint8Array(await c.req.arrayBuffer());
+  if (bytes.byteLength > MAX_DIAGNOSTIC_BYTES) {
+    return c.json({ error: 'diagnostic payload too large' }, 413);
+  }
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return c.json({ error: 'invalid diagnostic JSON' }, 400);
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return c.json({ error: 'diagnostic payload must be an object' }, 400);
+  }
+
+  const id = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`;
+  const dir = path.join(config.dataDir, 'diagnostics');
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, `${id}.json`), JSON.stringify({
+    receivedAt: new Date().toISOString(),
+    payload,
+  }, null, 2), { encoding: 'utf8', flag: 'wx' });
+  return c.json({ ok: true, id });
+});
 
 app.get('/api/worlds', async (c) => c.json(await listWorlds()));
 app.get('/api/worlds/:world/capabilities', async (c) => c.json(await getWorldCapabilities(c.req.param('world'))));

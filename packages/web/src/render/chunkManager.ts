@@ -23,6 +23,7 @@ import {
   type ChunkSchedulingTuning,
   type SchedulerAction,
   type ChunkSchedulerCamera,
+  type ChunkSchedulerDiagnosticSnapshot,
   type ChunkSchedulerEntry,
   type ChunkSchedulerStats,
   type ChunkState,
@@ -100,6 +101,65 @@ interface ChunkSourceCoverage {
 export interface TopClipRange {
   minY: number;
   maxY: number;
+}
+
+export interface ChunkEntryDiagnosticSnapshot {
+  key: string;
+  cx: number;
+  cz: number;
+  state: ChunkState;
+  source: ChunkEntry['source'];
+  sourceHash: string | null;
+  nbtHash: string | null;
+  biome: string;
+  surfaceY: number;
+  displayed: ChunkEntry['displayed'];
+  displayedLodStep: number;
+  fullReady: boolean;
+  lodReadyStep: number;
+  dirty: boolean;
+  dirtyToken: number;
+  pendingFull: boolean;
+  pendingLod: boolean;
+  pendingLodStep: number;
+  workerReadyCount: number;
+  meshBytes: number;
+  targetStep: LodStep;
+  lastWantedAt: number;
+  lastTier: number;
+  lastScore: number;
+  importance: number;
+  satisfaction: number;
+  gap: number;
+  precision: number | null;
+  height: number | null;
+  bump: number | null;
+}
+
+export interface ChunkManagerDiagnosticSnapshot {
+  schema: 1;
+  capturedAt: string;
+  world: string;
+  dimension: string;
+  renderKey: string;
+  topDownView: boolean;
+  topClipRange: TopClipRange;
+  scheduling: ChunkSchedulerDiagnosticSnapshot;
+  stats: ChunkSchedulerStats;
+  workers: {
+    count: number;
+    loads: number[];
+    activeMeshTasks: number;
+    checking: number;
+    fetching: number;
+  };
+  coverage: {
+    loaded: boolean;
+    regionCount: number;
+    regionMaskCount: number;
+    directChunkCount: number;
+  };
+  chunks: ChunkEntryDiagnosticSnapshot[];
 }
 
 type IoQueueKind = 'hash' | 'fetch';
@@ -433,6 +493,76 @@ export class ChunkManager {
     return out;
   }
 
+  /** A JSON-safe, point-in-time view used by the settings diagnosis export. */
+  diagnosticSnapshot(): ChunkManagerDiagnosticSnapshot {
+    const now = performance.now();
+    const stats = this.syncSchedulerStats();
+    const coverage = this.chunkCoverage;
+    const chunks = [...this.chunks.values()]
+      .sort((a, b) => a.cz - b.cz || a.cx - b.cx)
+      .map((entry): ChunkEntryDiagnosticSnapshot => {
+        const tracker = this.scheduler.diagnosticCell(entry.cx, entry.cz);
+        return {
+          key: entry.key,
+          cx: entry.cx,
+          cz: entry.cz,
+          state: entry.state,
+          source: entry.source,
+          sourceHash: entry.sourceHash,
+          nbtHash: entry.nbtHash,
+          biome: entry.biome,
+          surfaceY: entry.surfaceY,
+          displayed: entry.displayed,
+          displayedLodStep: entry.displayedLodStep,
+          fullReady: entry.fullReady,
+          lodReadyStep: entry.lodReadyStep,
+          dirty: entry.dirty,
+          dirtyToken: entry.dirtyToken,
+          pendingFull: entry.pendingFull,
+          pendingLod: entry.pendingLod,
+          pendingLodStep: entry.pendingLodStep,
+          workerReadyCount: this.workerReadyCount(entry),
+          meshBytes: entry.meshBytes,
+          targetStep: entry.lastTargetStep,
+          lastWantedAt: entry.lastWantedAt,
+          lastTier: entry.lastTier,
+          lastScore: entry.lastScore,
+          importance: tracker?.importance ?? entry.lastImportance,
+          satisfaction: tracker?.satisfaction ?? entry.lastSatisfaction,
+          gap: tracker?.gap ?? entry.lastGap,
+          precision: tracker?.precision ?? null,
+          height: tracker?.height ?? null,
+          bump: tracker?.bump ?? null,
+        };
+      });
+
+    return {
+      schema: 1,
+      capturedAt: new Date().toISOString(),
+      world: this.opts.world,
+      dimension: this.opts.dimension,
+      renderKey: this.opts.renderKey,
+      topDownView: this.topDownView,
+      topClipRange: { ...this.topClipRange },
+      scheduling: this.scheduler.diagnosticSnapshot(now),
+      stats: { ...stats, diagnostics: [...stats.diagnostics] },
+      workers: {
+        count: this.workers.length,
+        loads: [...this.workerLoads],
+        activeMeshTasks: this.activeMeshTasks,
+        checking: this.checking,
+        fetching: this.fetching,
+      },
+      coverage: {
+        loaded: coverage !== null,
+        regionCount: coverage?.regions.size ?? 0,
+        regionMaskCount: coverage?.regionMasks.size ?? 0,
+        directChunkCount: coverage?.chunks.size ?? 0,
+      },
+      chunks,
+    };
+  }
+
   // #endregion
 
   // #region Scheduler bridge
@@ -442,7 +572,17 @@ export class ChunkManager {
   }
 
   private schedulerEntries(): Iterable<ChunkSchedulerEntry> {
-    return this.chunks.values();
+    // Map#values returns a single-use iterator. The scheduler intentionally
+    // walks entries several times per frame (ranking, queue selection and
+    // eviction), so expose a re-iterable view instead. Returning the iterator
+    // here caused the full->LOD scan to consume it before eviction, allowing
+    // tracked chunks to grow far beyond the resident limit.
+    const chunks = this.chunks;
+    return {
+      [Symbol.iterator](): Iterator<ChunkSchedulerEntry> {
+        return chunks.values();
+      },
+    };
   }
 
   private schedulerOptions() {
@@ -797,12 +937,33 @@ export class ChunkManager {
   }
 
   private markDirty(e: ChunkEntry) {
+    const now = performance.now();
     e.dirty = true;
     e.dirtyToken++;
+    e.lastWantedAt = now;
+    e.lastTier = Math.min(e.lastTier, 0);
+    e.lastScore = Math.min(e.lastScore, -180);
+    if (e.displayed === 'full' || e.pendingFull) e.lastTargetStep = 1;
+    else if (e.displayed === 'lod' && e.displayedLodStep > 0) e.lastTargetStep = e.displayedLodStep as LodStep;
+    else if (e.pendingLodStep > 0) e.lastTargetStep = e.pendingLodStep as LodStep;
+    this.scheduler.notify({ type: 'meshInvalidated', entry: e, now });
+  }
+
+  private workerReadyCount(e: ChunkEntry): number {
+    let count = 0;
+    for (let i = 0; i < this.workers.length; i++) {
+      if ((e.workerReadyMask & (1 << i)) !== 0) count++;
+    }
+    return count;
   }
 
   private clearDirtyIfUnchanged(e: ChunkEntry, dirtyToken: number) {
     if (e.dirtyToken === dirtyToken) e.dirty = false;
+    // A neighbor may have arrived while this mesh was being built. Keep the
+    // just-produced mesh visible, but immediately queue another pass with the
+    // newer neighborhood instead of waiting for it to rank as a candidate
+    // again.
+    if (e.dirty && e.state === 'stored') this.rescheduleStoredIfFresh(e);
   }
 
   private markNeighborsDirty(e: ChunkEntry) {
@@ -1244,6 +1405,10 @@ export class ChunkManager {
   private maybeReleaseDisplayedFullData(e: ChunkEntry) {
     if (e.state !== 'stored') return;
     if (e.displayed !== 'full' || e.dirty) return;
+    // Retain the worker column just long enough to produce the lower-detail
+    // replacement. Releasing it here forced an unnecessary fetch before every
+    // far full -> LOD transition.
+    if (e.lastTargetStep !== 1) return;
     if (e.pendingFull || e.pendingLod || !this.contentHash(e)) return;
     this.releaseWorkerData(e);
   }
