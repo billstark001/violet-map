@@ -5,7 +5,7 @@ import { fetchWorlds, uploadDiagnosticSnapshot } from './api';
 import { Compass } from './Compass';
 import { languageOptions } from './i18n';
 import { clearDebugLog, setDebugLoggingEnabled } from './logger';
-import { clearMeshCache, getMeshCacheStats } from './meshCache';
+import { clearMeshCache, getMeshCacheStats, setMeshCacheEnabled } from './meshCache';
 import {
   Viewer,
   type CameraPositionRequest,
@@ -43,6 +43,7 @@ interface ViewerSettings {
   debugLoggingEnabled?: boolean;
   diagnosticDetail?: DiagnosticDetail;
   schedulerPreset?: SchedulerPreset;
+  idbCacheEnabled?: boolean;
 }
 
 const params = new URLSearchParams(location.search);
@@ -224,6 +225,7 @@ export default function App() {
   const [debugLoggingEnabled, setDebugLoggingEnabledState] = useState(() => booleanSetting('debugLoggingEnabled', false));
   const [diagnosticDetail, setDiagnosticDetail] = useState<DiagnosticDetail>(() => diagnosticDetailSetting());
   const [schedulerPreset, setSchedulerPreset] = useState<SchedulerPreset>(() => schedulerPresetSetting());
+  const [idbCacheEnabled, setIdbCacheEnabled] = useState(() => booleanSetting('idbCacheEnabled', true));
   const [panelCollapsed, setPanelCollapsed] = useState(() => localStorage.getItem(PANEL_STORAGE_KEY) === 'true');
   const [diagnosticCollapsed, setDiagnosticCollapsed] = useState(() => localStorage.getItem(DIAGNOSTIC_PANEL_STORAGE_KEY) === 'true');
   const [diagnosticServerToken, setDiagnosticServerToken] = useState(() => {
@@ -285,6 +287,7 @@ export default function App() {
       if (!params.has('debugLoggingEnabled')) next.debugLoggingEnabled = debugLoggingEnabled;
       if (!params.has('diagnosticDetail')) next.diagnosticDetail = diagnosticDetail;
       if (!params.has('schedulerPreset')) next.schedulerPreset = schedulerPreset;
+      if (!params.has('idbCacheEnabled')) next.idbCacheEnabled = idbCacheEnabled;
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(next));
     } catch {
       // Storage may be unavailable in restricted contexts.
@@ -302,12 +305,18 @@ export default function App() {
     debugLoggingEnabled,
     diagnosticDetail,
     schedulerPreset,
+    idbCacheEnabled,
     worldsLoaded,
   ]);
 
   useEffect(() => {
     setDebugLoggingEnabled(debugLoggingEnabled);
   }, [debugLoggingEnabled]);
+
+  useEffect(() => {
+    setMeshCacheEnabled(idbCacheEnabled);
+    if (!idbCacheEnabled) setCacheStats({ entries: 0, bytes: 0 });
+  }, [idbCacheEnabled]);
 
   useEffect(() => {
     try {
@@ -326,7 +335,7 @@ export default function App() {
   }, [diagnosticCollapsed]);
 
   useEffect(() => {
-    const cacheStatsVisible = (!panelCollapsed && panelTab === 'settings') || (diagnosticDetail === 'detailed' && !diagnosticCollapsed);
+    const cacheStatsVisible = idbCacheEnabled && ((!panelCollapsed && panelTab === 'settings') || (diagnosticDetail === 'detailed' && !diagnosticCollapsed));
     if (!cacheStatsVisible) return;
     let cancelled = false;
     const refresh = () => {
@@ -340,7 +349,7 @@ export default function App() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [panelCollapsed, panelTab, diagnosticDetail, diagnosticCollapsed]);
+  }, [panelCollapsed, panelTab, diagnosticDetail, diagnosticCollapsed, idbCacheEnabled]);
 
   const dims = worlds.find((w) => w.id === world)?.dimensions ?? [];
   const draftValues = [Number(coordDraft.x), Number(coordDraft.y), Number(coordDraft.z)] as const;
@@ -661,6 +670,10 @@ export default function App() {
                         <Text as="label" size="1" htmlFor="debug-logging-toggle">{t('debugLogging')}</Text>
                         <Switch id="debug-logging-toggle" checked={debugLoggingEnabled} onCheckedChange={setDebugLoggingEnabledState} />
                       </Flex>
+                      <Flex gap="2" align="center" justify="between">
+                        <Text as="label" size="1" htmlFor="idb-cache-toggle">{t('idbCache')}</Text>
+                        <Switch id="idb-cache-toggle" checked={idbCacheEnabled} onCheckedChange={setIdbCacheEnabled} />
+                      </Flex>
                       <Flex gap="2">
                         <Button size="1" variant="soft" onClick={clearDebugLog}>{t('clearDebugLog')}</Button>
                       </Flex>
@@ -702,14 +715,14 @@ export default function App() {
                           </Text>
                         )}
                       </Box>
-                      <Box>
+                      <Box style={{ opacity: idbCacheEnabled ? 1 : 0.55 }}>
                         <Text size="1" weight="bold">{t('meshCache')}</Text>
                         <Flex gap="2" wrap="wrap" mt="2">
                           <Badge color="blue">{t('cacheEntries', { value: cacheStats.entries })}</Badge>
                           <Badge color="green">{t('cacheSize', { value: formatBytes(cacheStats.bytes) })}</Badge>
                         </Flex>
                         <Flex gap="2" mt="3">
-                          <Button size="1" variant="soft" onClick={refreshCacheStats}>{t('refreshCache')}</Button>
+                          <Button size="1" variant="soft" disabled={!idbCacheEnabled} onClick={refreshCacheStats}>{t('refreshCache')}</Button>
                           <Button size="1" color="red" variant="soft" onClick={handleClearCache}>{t('clearCache')}</Button>
                         </Flex>
                       </Box>

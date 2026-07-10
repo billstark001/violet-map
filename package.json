@@ -10,7 +10,8 @@
     "start": "pnpm run start:light",
     "start:light": "pnpm --filter=@violet-map/server --filter=@violet-map/web --parallel -r run start",
     "start:full": "pnpm --filter=@violet-map/server --filter=@violet-map/web --filter=@violet-map/admin --parallel -r run start",
-    "typecheck": "pnpm -r run typecheck"
+    "typecheck": "pnpm -r run typecheck",
+    "admin": "pnpm --filter @violet-map/server admin"
   },
   "devDependencies": {
     "typescript": "^6.0.3"

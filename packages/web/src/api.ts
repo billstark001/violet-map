@@ -141,7 +141,7 @@ export async function uploadDiagnosticSnapshot(snapshot: unknown, token?: string
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      ...(token ? { 'x-violet-admin-token': token } : {}),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify(snapshot),
   });

@@ -1,179 +1,179 @@
 # Violet Map
 
-Violet Map is a browser-first toolkit for exploring Minecraft Java worlds without opening the game client. It combines offline preprocessing with interactive Three.js rendering, so large worlds can be scanned quickly while nearby chunks still render with model-aware full meshes.
+Violet Map is a browser-first Minecraft Java world explorer. It combines a Hono API, a Three.js viewer, offline asset/top-map tooling, and an optional admin console. It reads standard Java region layouts (`region`, `DIM-1`, `DIM1`, and modern `dimensions/…`) without requiring the Minecraft client to run.
 
-The project is split into a lightweight server-backed viewer mode and a full mode with the admin UI enabled. That makes it useful both as a local visualization/debugging tool and as a small web service for browsing uploaded worlds, editing supporting data, and serving baked top-map tiles.
-
-Its rendering path is intentionally data-oriented: parsing, light baking, LOD generation, and top-map generation live in the core package, while the web app focuses on scheduling, caching, and presenting those meshes smoothly in the browser.
-
-Violet Map is a pnpm workspace with these packages:
+## Packages
 
 | Package | Purpose |
 | --- | --- |
-| `@violet-map/core` | Pure data and rendering algorithms: NBT parsing, region extraction, model baking, lighting, colors, and the `mesher` module (`full`, `lod`, `topMap`). |
-| `@violet-map/assets` | CLI utilities for downloading/extracting Mojang client assets and generating data files. |
-| `@violet-map/server` | Hono API server for worlds, chunks, assets, generated atlases, uploads, and editable data. |
-| `@violet-map/web` | Three.js viewer with worker-side chunk parsing, meshing, LOD rendering, and fly controls. |
-| `@violet-map/admin` | React admin UI for world inspection, region/chunk upload, and biome data editing. |
+| `@violet-map/core` | NBT, regions, lighting, meshing, top-map code, plus the shared local/S3/server `WorldStorage` adapters. |
+| `@violet-map/assets` | CLI for vanilla assets, top-map baking, profiling, and verified world-file synchronization. |
+| `@violet-map/server` | Hono API, world service, storage-backed administration, and the Drizzle user database. |
+| `@violet-map/web` | Three.js world viewer with worker meshing and an optional IndexedDB mesh cache. |
+| `@violet-map/admin` | Admin UI for worlds, uploads, biome data, users, and temporary credentials. |
 
-## Setup
+## Quick start
 
-1. Install dependencies:
-
-   ```bash
-   pnpm install
-   ```
-
-2. Prepare vanilla assets. Choose one of the following options.
-
-   Recommended: extract assets with the CLI:
-
-   ```bash
-   pnpm --filter @violet-map/assets dev assets list
-   pnpm --filter @violet-map/assets dev assets extract --version 1.21.4 --output packages/server/data/assets
-   ```
-
-   Manual alternative: extract assets from a local client jar. Minecraft assets are copyrighted and should only be used locally.
-
-   ```bash
-   mkdir -p packages/server/data/assets
-   cd packages/server/data/assets
-   unzip <.minecraft>/versions/1.20.4/1.20.4.jar 'assets/*'
-   mv assets/* . && rmdir assets
-   ```
-
-   The final layout should be:
-
-   ```text
-   packages/server/data/assets/minecraft/{blockstates,models,textures}
-   ```
-
-   Additional resource packs can be appended with `ASSETS_DIRS=dirA,dirB`; later directories override earlier ones.
-
-3. Add worlds under:
-
-   ```text
-   packages/server/data/worlds/<world-name>/
-   ```
-
-   Standard Java world layouts such as `region/`, `DIM-1/`, and `DIM1/` are supported. You can also upload `.mca` region files or individual chunk NBT files from the admin UI.
-
-## Runtime Modes
-
-Violet Map supports two modes:
-
-| Mode | Services | Use |
-| --- | --- | --- |
-| `light` | API server and viewer | Normal browsing without the admin UI. This is the default development and start mode. |
-| `full` | API server, viewer, admin | Everything in light mode plus uploads, editable data, and admin workflows. |
-
-Default ports:
-
-| Service | URL |
-| --- | --- |
-| API server | <http://localhost:3300> |
-| Viewer | <http://localhost:3305> |
-| Admin | <http://localhost:3310> |
-
-## Development Without Docker
-
-Using pnpm:
+Requires Node.js 20+ and pnpm.
 
 ```bash
 pnpm install
-pnpm dev
-```
-
-For the full stack:
-
-```bash
 pnpm dev:full
 ```
 
-Using npm workspaces:
+| Service | URL |
+| --- | --- |
+| API | <http://localhost:3300> |
+| Viewer | <http://localhost:3305> |
+| Admin | <http://localhost:3310> |
+
+`pnpm dev` and `pnpm start` run the server plus viewer. Use `pnpm dev:full` / `pnpm start:full` when the admin UI is also needed. Production checks are:
 
 ```bash
-npm install
-npm --workspace @violet-map/server run dev
-npm --workspace @violet-map/web run dev
+pnpm typecheck
+pnpm build
 ```
 
-For the full stack with npm, start these in separate terminals:
+Docker equivalents are `docker compose --profile light up` and `docker compose --profile full up`.
+
+## Assets and local worlds
+
+Extract client assets (only use Minecraft assets you are entitled to use):
 
 ```bash
-npm --workspace @violet-map/server run dev
-npm --workspace @violet-map/web run dev
-npm --workspace @violet-map/admin run dev
+pnpm --filter @violet-map/assets dev assets extract --version 1.21.4 --dir packages/server/data/assets
 ```
 
-The viewer URL supports camera parameters such as `?x=&y=&z=&yaw=&pitch=`.
+The server default expects worlds under `packages/server/data/worlds/<world-name>/`. Set `WORLDS_DIR` to use another directory. Region files can also be uploaded through Admin.
 
-For built assets, run `pnpm build` first and then start either mode:
+```text
+<world>/
+├── level.dat
+├── region/r.<x>.<z>.mca
+├── DIM-1/region/…
+├── DIM1/region/…
+└── dimensions/<namespace>/<path>/region/…
+```
+
+Additional packs are supplied with `ASSETS_DIRS=base,override`; later paths take precedence.
+
+## Authentication and users
+
+The server has five ordered roles: `guest`, `viewer`, `ci`, `admin`, and `root`. `guest` is anonymous/public access; it is not a creatable account. `root` is a virtual environment-managed account and is also not creatable. `viewer` can submit diagnostics, `ci` can use world/admin storage APIs, and `admin` can manage data and users. `root` includes all permissions.
+
+Root exists only when **both** environment variables are non-empty:
 
 ```bash
-pnpm start
-pnpm start:full
+ROOT_USERNAME=operator
+ROOT_PASSWORD='use-a-long-unique-secret'
 ```
 
-## Development With Docker
-
-Light mode:
+If either variable is omitted, no root account exists. Bootstrap the first normal admin through the server CLI instead:
 
 ```bash
-docker compose --profile light up
+pnpm admin users create \
+  --username alice --password 'a-long-unique-password' --role admin
+pnpm admin users list
+pnpm admin users update --username alice --role ci
+pnpm admin users delete --username alice
 ```
 
-Full mode:
+The command rejects `root` and `guest` roles. The Admin UI also provides sign-in, full user CRUD, enable/disable controls, and credential issuance. A root or admin can issue a credential bound to one enabled user for 60 seconds to 365 days; the raw token is displayed exactly once. Password login produces a 12-hour bearer credential. Send credentials with `Authorization: Bearer <token>`.
+
+### Database drivers
+
+Both drivers use the same Drizzle schema and create their tables/indexes at startup:
+
+- Default: persistent PGlite at `DATA_DIR/users.pglite`.
+- PostgreSQL: set `DATABASE_URL` (for example `postgres://user:password@host:5432/violet_map`).
+
+Set `DATABASE_DIR` to override the PGlite path. `DATABASE_URL` takes precedence. Never commit either database directory or a connection string containing a password.
+
+## World storage and safe synchronization
+
+`WorldStorage` lives in `@violet-map/core/storage` and has three interchangeable adapters:
+
+1. `local` — a filesystem root.
+2. `s3` — AWS S3 or S3-compatible object storage.
+3. `server` — a remote Violet Map server through authenticated storage APIs.
+
+The server selects `local` or `s3` with `WORLD_STORAGE`. The assets CLI syncs a **local world archive** to any of the three. It creates `.violet-map/identity.json` in the source archive and checks it against the target before writing. A different or missing marker on a non-empty target emits a warning and aborts unless `--force` is explicitly supplied.
 
 ```bash
-docker compose --profile full up
+# Local archive -> another filesystem worlds root
+pnpm --filter @violet-map/assets dev world sync \
+  --from /backups/my-world --world survival --target local \
+  --target-dir /srv/violet-map/worlds --delete
+
+# Local archive -> S3-compatible storage (credentials may also come from S3_* env vars)
+pnpm --filter @violet-map/assets dev world sync \
+  --from /backups/my-world --world survival --target s3 \
+  --s3-endpoint https://s3.example.com --s3-bucket violet-worlds --s3-prefix production
+
+# Local archive -> remote Violet Map server, using a CI/admin/root credential
+pnpm --filter @violet-map/assets dev world sync \
+  --from /backups/my-world --world survival --target server \
+  --server-url https://map.example.com --server-token "$VIOLET_SERVER_TOKEN"
 ```
 
-The compose file mounts the repository into Node containers and runs the same workspace scripts as local development.
+`--dry-run` prints changes without writing. `--delete` mirrors deletions from source to target. `--force` is intentionally separate and should only be used after confirming the target is the same world. Sync hashes same-size files before skipping them, so it works across local filesystems, S3 etags, and server storage consistently.
 
-## Environment
+The server exposes its shared storage adapter under protected `/api/admin/storage/*` endpoints. This is what makes remote CLI sync work, while regular Admin uploads and world edits use the same adapter directly.
+
+## CI/CD
+
+`.github/workflows/ci.yml` installs immutable dependencies, runs the workspace typecheck, and builds all packages on pushes and pull requests.
+
+`.github/workflows/world-sync.yml` is manually dispatched. Configure repository secrets for either destination:
+
+- Server: `VIOLET_SERVER_URL`, `VIOLET_SERVER_TOKEN`
+- S3: `S3_BUCKET`, `S3_ENDPOINT` (optional), `S3_REGION`, `S3_PREFIX` (optional), `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`
+
+The workflow accepts the checked-in archive directory, target world name, destination type, and explicit `delete`/`force` switches. Use an issued CI credential with the least privilege necessary.
+
+## Configuration
+
+Non-sensitive values can be set as environment variables or in `violet-map.yaml` / `violet-map.yml`; use `VIOLET_MAP_CONFIG` to select another file.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `PORT` | `3300` | API server port. |
-| `WORLDS_DIR` | `data/worlds` | Directory containing Minecraft world folders. |
-| `ASSETS_DIRS` | `data/assets` | Comma-separated asset directories; later entries override earlier entries. |
-| `DATA_DIR` | `data` | Runtime data directory for editable defaults. |
-| `VIOLET_MAP_CONFIG` / `CONFIG_YAML` | | Optional YAML file for non-sensitive server settings. If unset, `violet-map.yaml` or `violet-map.yml` in the working directory is loaded when present. |
-| `MC_VERSION` | `1.21.4` | Preferred Minecraft version for generated data and generated `level.dat`. |
-| `MC_DATA_VERSION` | `MC_VERSION` | Optional `minecraft-data` version override. |
-| `WORLD_STORAGE` | `osfs` | World storage driver. Use `osfs`, `s3`, or `s3-compatible`. |
-| `S3_BUCKET` | | Bucket for S3-compatible world storage. |
-| `S3_ENDPOINT` | | Optional S3-compatible endpoint. |
-| `S3_REGION` | `auto` | S3 region. |
-| `S3_PREFIX` | | Optional object key prefix for worlds. |
-| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | | S3 credentials when not supplied by the environment. |
-| `S3_FORCE_PATH_STYLE` | `true` | Set to `false` for virtual-hosted-style buckets. |
-| `ADMIN_TOKENS` | `dev-admin-token:admin,dev-ci-token:ci` | Comma-separated hardcoded tokens and roles. Roles are `admin`, `ci`, and `viewer`; `admin` includes `ci`. |
-| `REGION_CACHE_BYTES` | `268435456` | Byte cap for full `.mca` region cache. |
-| `CHUNK_NBT_CACHE_BYTES` | `134217728` | Byte cap for decompressed chunk NBT cache. |
+| `PORT` | `3300` | API port. |
+| `WORLDS_DIR` | `data/worlds` | Local world directory. |
+| `DATA_DIR` | `data` | Runtime data directory, including default PGlite data. |
+| `DATABASE_URL` | unset | PostgreSQL connection string; enables PostgreSQL instead of PGlite. |
+| `DATABASE_DIR` | `DATA_DIR/users.pglite` | PGlite data directory override. |
+| `ROOT_USERNAME`, `ROOT_PASSWORD` | unset | Define the optional virtual root account; both are required. |
+| `WORLD_STORAGE` | `local` | `local` or `s3`. |
+| `S3_BUCKET`, `S3_ENDPOINT`, `S3_REGION`, `S3_PREFIX` | — | World-storage S3 configuration. |
+| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | — | S3 credentials. |
+| `S3_FORCE_PATH_STYLE` | `true` | Set false for virtual-hosted-style S3. |
+| `ASSETS_DIRS` | `data/assets` | Comma-separated resource pack directories. |
+| `MC_VERSION` | `1.21.4` | Default version for generated data/minimal `level.dat`. |
+| `MC_DATA_VERSION` | `MC_VERSION` | `minecraft-data` version override. |
+| `REGION_CACHE_BYTES` | `268435456` | Full region cache cap. |
+| `CHUNK_NBT_CACHE_BYTES` | `134217728` | NBT cache cap. |
 
-Non-sensitive server settings can also be supplied by YAML:
+Example:
 
 ```yaml
 server:
   port: 3300
-worldsDir: packages/server/data/worlds
-assetsDirs:
-  - packages/server/data/assets
-dataDir: packages/server/data
-worldStorage: osfs
+worldsDir: /srv/violet-map/worlds
+dataDir: /srv/violet-map/data
+worldStorage: s3
 s3:
-  endpoint: http://localhost:9000
+  endpoint: https://s3.example.com
   region: auto
-  bucket: violet-map
-  prefix: worlds
+  bucket: violet-worlds
+  prefix: production
   forcePathStyle: true
 ```
 
-Sensitive values stay in environment variables only: `ADMIN_TOKENS`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY`.
+Secrets (`DATABASE_URL`, root password, S3 secrets, credentials) must remain in environment variables or your deployment secret manager.
 
-## Asset CLI
+## Viewer and asset tooling
+
+The viewer persists its selected world, camera, scheduler, diagnostics, and settings in local storage. The **Settings** tab includes **Enable IndexedDB cache**. Disabling it bypasses all mesh-cache reads and writes without deleting existing cache data; clear it explicitly if desired. Viewer initialization errors appear in the center of the screen so the tabs never obscure them.
 
 ```bash
 pnpm --filter @violet-map/assets dev --help
@@ -181,46 +181,20 @@ pnpm --filter @violet-map/assets dev --help
 
 | Command | Description |
 | --- | --- |
-| `assets list` | List available Minecraft release versions. |
-| `assets extract --version <id> --output <dir>` | Download a Mojang client jar and extract blockstates, models, and textures. |
-| `assets extract-all --min-version <id>` | Extract assets for every release at or above a version. |
-| `assets generate-biomes --version <id>` | Generate `biomes.json` with sky, fog, water, grass, and foliage color data. |
-| `assets generate-dimensions --version <id>` | Generate `dimensions.json` for the standard dimensions. |
-| `profile-mca <file.mca>` | Profile parse, height, full mesh, and LOD mesh work for one region file. |
-| `bake-topmap <world>` | Bake top-map height/color tiles plus sky/block light cache and update `.violet-map/top-map/manifest.json`. |
+| `assets list` | List available Minecraft releases. |
+| `assets extract --version <id> --dir <dir>` | Download a Mojang client jar and extract blockstates/models/textures. |
+| `assets extract-all --min-version <id> --dir <dir>` | Extract every selected release. |
+| `assets generate-biomes --version <id> --output <file>` | Generate biome color data. |
+| `assets generate-dimensions --version <id> --output <file>` | Generate standard dimension data. |
+| `profile-mca <file.mca>` | Profile region parsing and meshing. |
+| `bake-topmap <world>` | Bake top-map tiles and manifest under `.violet-map/top-map`. |
+| `world sync …` | Sync a local archive to local/S3/server storage with identity protection. |
 
-`bake-topmap` supports `--approach top|bottom` for top-down worlds or underside/floating-island worlds, and `--light-mode stored-first|rebake`. `stored-first` uses saved light data when present and fills missing light per column; `rebake` ignores saved light and recomputes sky/block light for the tile cache. Transparent overlays such as water, glass, and ice tint the baked top-map color while the output tile remains a single opaque color sample.
+`bake-topmap` supports `--approach top|bottom` and `--light-mode stored-first|rebake`.
 
-## Runtime APIs
+## Limits
 
-- Chunk payloads are served as MessagePack. The single-chunk endpoint is available at `/api/worlds/:world/:dim/chunk/:cx/:cz`, and the viewer uses `/api/worlds/:world/:dim/chunk-hashes` before incrementally requesting changed or evicted chunks from `/api/worlds/:world/:dim/chunks`.
-- Chunk responses include the source file hash (`hash`/`fileHash`), source type (`region` or `chunk`), and chunk NBT hash (`nbtHash`). For chunks inside `.mca` files, the source hash is the whole region file hash.
-- Top-map capabilities are exposed at `/api/worlds/:world/capabilities` with per-dimension `hasTopMap`. Offline tiles are served from `/api/worlds/:world/:dim/top-map/tile/:rx/:rz`.
-- Texture loading supports both individual PNG requests and a generated atlas mode. The viewer first requests `/api/assets/atlas` and falls back to individual textures if atlas generation fails.
-- The worker receives transferable binary chunk buffers and builds typed-array mesh buffers for return to the main thread.
-
-## Admin and CI APIs
-
-Write APIs require `Authorization: Bearer <token>` or `x-violet-admin-token`. The default development token is `dev-admin-token`.
-
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /api/admin/worlds` | Create an empty world and generate a minimal modern `level.dat`. |
-| `GET /api/admin/worlds/:world/manifest` | Return all files in a world with size, mtime/etag, and sha256 hash. |
-| `POST /api/admin/worlds/:world/diff` | Compare a client manifest and return `upload`, `same`, and `remoteExtra` paths for incremental sync. |
-| `PUT /api/admin/worlds/:world/files/*` | Upload or replace one world file by relative path. |
-| `POST /api/admin/worlds/:world/files` | Multipart file upload with `file` and `path` fields. |
-| `POST /api/admin/upload` | Compatibility upload for `.mca` region files or single chunk NBT. |
-| `DELETE /api/admin/worlds/:world/:dim/chunks` | Delete chunk overrides and clear chunk entries from region headers. |
-| `DELETE /api/admin/worlds/:world/:dim/regions/:rx/:rz` | Delete a region file. |
-| `DELETE /api/admin/worlds/:world` | Delete a whole world. |
-
-Uploaded worlds do not need to include `level.dat`; the server generates a minimal Java 1.21-style file when the world is first created or written.
-
-## Current Limits
-
-- Only 1.18+ chunk sections using `sections` and `block_states` palettes are supported.
+- Rendering targets modern (1.18+) `sections` / `block_states` chunk layouts.
 - Entities and block entities are not rendered.
-- Biome tinting is sampled per block; radius blending is not implemented yet.
-- If stored light is missing, fallback lighting is baked per column and may have subtle chunk-boundary seams. `bake-topmap --light-mode rebake` can build a fresh top-map sky/block light cache without trusting saved light data.
-- Fluid rendering approximates vanilla levels and neighbor seams but does not simulate animated flow textures.
+- Biome tinting is sampled per block; radius blending is not implemented.
+- Fluid surfaces approximate vanilla flow and are not animated.

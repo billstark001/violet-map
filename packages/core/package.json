@@ -3,10 +3,26 @@
   "version": "0.1.0",
   "type": "module",
   "exports": {
-    ".": { "types": "./src/index.ts", "default": "./src/index.ts" },
-    "./mesher": { "types": "./src/mesher/index.ts", "default": "./src/mesher/index.ts" },
-    "./nbt": { "types": "./src/nbt.ts", "default": "./src/nbt.ts" },
-    "./region": { "types": "./src/region.ts", "default": "./src/region.ts" }
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./mesher": {
+      "types": "./src/mesher/index.ts",
+      "default": "./src/mesher/index.ts"
+    },
+    "./nbt": {
+      "types": "./src/nbt.ts",
+      "default": "./src/nbt.ts"
+    },
+    "./region": {
+      "types": "./src/region.ts",
+      "default": "./src/region.ts"
+    },
+    "./storage": {
+      "types": "./src/storage/index.ts",
+      "default": "./src/storage/index.ts"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
@@ -14,9 +30,13 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1079.0",
+    "buffer": "^6.0.3",
     "pako": "^3.0.0",
-    "prismarine-nbt": "^2.8.0",
-    "buffer": "^6.0.3"
+    "prismarine-nbt": "^2.8.0"
   },
-  "devDependencies": { "@types/pako": "^2.0.4", "typescript": "^6.0.3" }
+  "devDependencies": {
+    "@types/pako": "^2.0.4",
+    "typescript": "^6.0.3"
+  }
 }

@@ -1244,7 +1244,15 @@ export function Viewer(props: ViewerProps) {
 
   return (
     <div ref={containerRef} style={{ position: 'absolute', inset: 0 }}>
-      {error && <div style={{ position: 'absolute', top: 8, left: 8, color: '#f66' }}>{t('initFailed', { message: error })}</div>}
+      {error && (
+        <div style={{
+          position: 'fixed', left: '50%', top: '50%', transform: 'translate(-50%, -50%)', zIndex: 100,
+          maxWidth: 'min(560px, calc(100vw - 32px))', padding: '14px 18px', borderRadius: 8,
+          color: '#fecaca', background: 'rgba(69, 10, 10, .96)', border: '1px solid #ef4444', textAlign: 'center',
+        }}>
+          {t('initFailed', { message: error })}
+        </div>
+      )}
     </div>
   );
 }

@@ -233,12 +233,12 @@ export async function runAssetsCommand(args: string[]) {
       await listVersions(reader.flag('--include-snapshots'));
       break;
     case 'extract':
-      await extractAssets(reader.get('--version', '1.21.4')!, reader.get(['--dir', '--output'], './assets')!, reader.flag('--dry-run'));
+      await extractAssets(reader.get('--version', '1.21.4')!, reader.get('--dir', './assets')!, reader.flag('--dry-run'));
       break;
     case 'extract-all':
       await extractAllAssets(
         reader.get('--min-version', '1.18')!,
-        reader.get(['--dir', '--output'], './assets')!,
+        reader.get('--dir', './assets')!,
         reader.flag('--include-snapshots'),
         reader.flag('--dry-run'),
       );

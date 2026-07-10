@@ -3,6 +3,7 @@ import { getRegionChunk } from '@violet-map/core/region';
 import { parseNbt, decompress } from '@violet-map/core/nbt';
 import { createMinimalLevelDat } from './levelDat.js';
 import { cleanStoragePath, worldStorage, type StoredFileInfo } from './storage.js';
+import { ensureWorldIdentity, PrefixedWorldStorage } from '@violet-map/core/storage';
 
 const VANILLA_DIMS: Record<string, string[]> = {
   'minecraft:overworld': ['region', 'dimensions/minecraft/overworld/region'],
@@ -92,9 +93,16 @@ const MAX_CHUNK_NBT_CACHE_BYTES = Number(process.env.CHUNK_NBT_CACHE_BYTES ?? 12
 const REGION_LOCATION_BYTES = 4096;
 let regionCacheBytes = 0;
 let chunkNbtCacheBytes = 0;
+const WORLD_LIST_CACHE_MS = 15_000;
+let worldListCache: { expiresAt: number; worlds: WorldInfo[] } | null = null;
+let worldListInflight: Promise<WorldInfo[]> | null = null;
 
 export function assertWorldName(world: string) {
   if (!WORLD_RE.test(world)) throw new Error('invalid world name');
+}
+
+function invalidateWorldList(): void {
+  worldListCache = null;
 }
 
 const dimDirName = (dim: string) => encodeURIComponent(dim);
@@ -355,6 +363,8 @@ export async function ensureLevelDat(world: string, levelName = world, dimension
     invalidatePath(levelDatPath(world));
   }
   await writeWorldMeta(world, dimensions);
+  await ensureWorldIdentity(new PrefixedWorldStorage(worldStorage, world));
+  invalidateWorldList();
 }
 
 function addDimensionFromPath(rest: string[], dims: Set<string>) {
@@ -372,7 +382,7 @@ function addDimensionFromPath(rest: string[], dims: Set<string>) {
   }
 }
 
-export async function listWorlds(): Promise<WorldInfo[]> {
+async function listWorldsUncached(): Promise<WorldInfo[]> {
   const byWorld = new Map<string, Set<string>>();
   for (const world of await worldStorage.listDirectories()) {
     if (!WORLD_RE.test(world)) continue;
@@ -409,6 +419,21 @@ export async function listWorlds(): Promise<WorldInfo[]> {
     .map(([id, dimensions]) => ({ id, dimensions: [...dimensions].sort() }))
     .filter((w) => w.dimensions.length > 0)
     .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+export async function listWorlds(): Promise<WorldInfo[]> {
+  const now = Date.now();
+  if (worldListCache && worldListCache.expiresAt > now) return worldListCache.worlds;
+  if (worldListInflight) return worldListInflight;
+  const pending = listWorldsUncached();
+  worldListInflight = pending;
+  try {
+    const worlds = await pending;
+    worldListCache = { worlds, expiresAt: Date.now() + WORLD_LIST_CACHE_MS };
+    return worlds;
+  } finally {
+    if (worldListInflight === pending) worldListInflight = null;
+  }
 }
 
 export async function listRegions(world: string, dim: string): Promise<{ x: number; z: number }[]> {
@@ -592,11 +617,6 @@ export async function getChunkNbtWithMeta(world: string, dim: string, cx: number
   return (await getChunksNbtWithMetaBatch(world, dim, [{ cx, cz }]))[0] ?? null;
 }
 
-/** 取一个区块的未压缩 NBT。保留给旧调用点。 */
-export async function getChunkNbt(world: string, dim: string, cx: number, cz: number): Promise<Uint8Array | null> {
-  return (await getChunkNbtWithMeta(world, dim, cx, cz))?.data ?? null;
-}
-
 export async function saveRegionFile(world: string, dim: string, name: string, bytes: Uint8Array): Promise<void> {
   if (!REGION_RE.test(name)) throw new Error('invalid region file name');
   const dir = await regionDir(world, dim);
@@ -637,6 +657,7 @@ export async function deleteWorld(world: string): Promise<{ deleted: number }> {
   assertWorldName(world);
   const deleted = await worldStorage.deletePrefix(world);
   clearChunkCacheFor(world);
+  invalidateWorldList();
   return { deleted };
 }
 

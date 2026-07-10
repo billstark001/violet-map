@@ -74,7 +74,7 @@ function parseSimpleYaml(text: string): YamlConfig {
 }
 
 function findYamlConfig(): { file: string; data: YamlConfig } | null {
-  const explicit = process.env.VIOLET_MAP_CONFIG ?? process.env.CONFIG_YAML;
+  const explicit = process.env.VIOLET_MAP_CONFIG;
   if (explicit) {
     const file = path.resolve(explicit);
     try {
@@ -157,13 +157,21 @@ function stringListConfig(envName: string, fallback: string[], ...yamlKeys: stri
 }
 
 const mcVersion = stringConfig('MC_VERSION', '1.21.4', 'mcVersion', 'minecraft.version');
-const worldStorage = stringConfig('WORLD_STORAGE', 'osfs', 'worldStorage', 'storage.driver').toLowerCase();
+const worldStorage = stringConfig('WORLD_STORAGE', 'local', 'worldStorage', 'storage.driver').toLowerCase();
+if (worldStorage !== 'local' && worldStorage !== 's3') {
+  throw new Error(`WORLD_STORAGE must be local or s3; received ${worldStorage}`);
+}
+const dataDir = pathConfig('DATA_DIR', 'data', 'dataDir', 'data.dir');
+const databaseDirOverride = process.env.DATABASE_DIR ?? yamlValue('databaseDir', 'database.dir');
+const databaseDir = databaseDirOverride === undefined
+  ? path.join(dataDir, 'users.pglite')
+  : path.resolve(process.env.DATABASE_DIR ? String(databaseDirOverride) : path.resolve(yamlBase, String(databaseDirOverride)));
 
 export const config = {
   port: numberConfig('PORT', 3300, 'port', 'server.port'),
   /** 世界目录：<worldsDir>/<world>/region 等 */
   worldsDir: pathConfig('WORLDS_DIR', 'data/worlds', 'worldsDir', 'worlds.dir'),
-  worldStorage: worldStorage === 's3-compatible' ? 's3' : worldStorage,
+  worldStorage,
   s3: {
     endpoint: stringConfig('S3_ENDPOINT', '', 's3.endpoint') || undefined,
     region: stringConfig('S3_REGION', 'auto', 's3.region'),
@@ -173,10 +181,15 @@ export const config = {
     secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
     forcePathStyle: booleanConfig('S3_FORCE_PATH_STYLE', true, 's3.forcePathStyle'),
   },
-  adminTokens: process.env.ADMIN_TOKENS ?? 'dev-admin-token:admin,dev-ci-token:ci',
+  /** Set DATABASE_URL to use PostgreSQL; otherwise PGlite persists below DATA_DIR. */
+  databaseUrl: process.env.DATABASE_URL || undefined,
+  databaseDir,
+  /** Root is virtual and exists only when both values are configured. */
+  rootUsername: process.env.ROOT_USERNAME?.trim() || undefined,
+  rootPassword: process.env.ROOT_PASSWORD || undefined,
   /** 资源目录列表（后者覆盖前者），每个目录下为 <namespace>/blockstates|models|textures */
   assetsDirs: stringListConfig('ASSETS_DIRS', ['data/assets'], 'assetsDirs', 'assets.dirs'),
-  dataDir: pathConfig('DATA_DIR', 'data', 'dataDir', 'data.dir'),
+  dataDir,
   mcVersion,
   mcDataVersion: stringConfig('MC_DATA_VERSION', mcVersion, 'mcDataVersion', 'minecraft.dataVersion'),
 };
