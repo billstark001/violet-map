@@ -770,6 +770,7 @@ export class ChunkScheduler {
 
     const actions: SchedulerAction[] = [];
     const entryUpdates: SchedulerEntryUpdate[] = [];
+    let newCandidateCount = 0;
 
     for (const candidate of frame.candidates) {
       const entry = input.entryFor(candidate.key);
@@ -778,6 +779,7 @@ export class ChunkScheduler {
       entryUpdates.push(update);
 
       if (!entry) {
+        newCandidateCount++;
         this.enqueueHash(candidate.key);
         actions.push({ type: 'wantChunk', key: candidate.key, cx: candidate.cx, cz: candidate.cz });
         continue;
@@ -790,10 +792,6 @@ export class ChunkScheduler {
     this.pruneQueues(input.now, input.entryFor);
     this.expirePriorities(input.now);
 
-    const newCandidateCount = frame.candidates.reduce(
-      (count, candidate) => count + (input.entryFor(candidate.key) ? 0 : 1),
-      0,
-    );
     const evictedKeys = this.evictKeys(frame.keepKeys, frame.protectedKeys, input.entries, input.now, newCandidateCount);
     for (const key of evictedKeys) actions.push({ type: 'dropChunk', key });
 
@@ -1221,11 +1219,10 @@ export class ChunkScheduler {
     now: number,
     selectedKeys: ReadonlySet<string>,
   ): MeshTask | null {
-    const tasks = [...this.meshQueue.values()].sort((a, b) => this.comparePriority(a, b) || a.step - b.step);
     let best: MeshTask | null = null;
     let bestQueueKey: string | null = null;
 
-    for (const task of tasks) {
+    for (const task of this.meshQueue.values()) {
       const queueKey = priorityKey(task);
       const entry = entryFor(task.key);
       if (!entry || entry.state !== 'stored') {
@@ -1388,17 +1385,17 @@ export class ChunkScheduler {
   ) {
     const keepQueued = (key: string): boolean => this.priorityFreshByKey(key, now) || this.recordFreshByKey(key, now);
 
-    for (const key of [...this.hashQueue]) {
+    for (const key of this.hashQueue) {
       const entry = entryFor(key);
       if (!keepQueued(key) || entry?.state !== 'checking') this.hashQueue.delete(key);
     }
 
-    for (const key of [...this.fetchQueue]) {
+    for (const key of this.fetchQueue) {
       const entry = entryFor(key);
       if (!keepQueued(key) || (entry?.state !== 'hashed' && entry?.state !== 'fetching')) this.fetchQueue.delete(key);
     }
 
-    for (const [queueKey, task] of [...this.meshQueue]) {
+    for (const [queueKey, task] of this.meshQueue) {
       if (!keepQueued(task.key)) {
         this.meshQueue.delete(queueKey);
         continue;
@@ -1411,17 +1408,17 @@ export class ChunkScheduler {
   }
 
   private expirePriorities(now: number) {
-    for (const [key, priority] of [...this.priorityByKey]) {
+    for (const [key, priority] of this.priorityByKey) {
       if (now - priority.updatedAt > RECORD_RETENTION_MS) this.priorityByKey.delete(key);
     }
 
-    for (const [key, record] of [...this.recordByKey]) {
+    for (const [key, record] of this.recordByKey) {
       if (now - record.lastWantedAt > RECORD_RETENTION_MS && !this.hashQueue.has(key) && !this.fetchQueue.has(key)) {
         this.recordByKey.delete(key);
       }
     }
 
-    for (const [key, until] of [...this.meshCooldownUntil]) {
+    for (const [key, until] of this.meshCooldownUntil) {
       if (now >= until + MESH_RETRY_COOLDOWN_MS) this.meshCooldownUntil.delete(key);
     }
   }
@@ -1562,7 +1559,7 @@ export class ChunkScheduler {
   private deleteKey(key: string) {
     this.hashQueue.delete(key);
     this.fetchQueue.delete(key);
-    for (const [queueKey, task] of [...this.meshQueue]) {
+    for (const [queueKey, task] of this.meshQueue) {
       if (task.key === key) this.meshQueue.delete(queueKey);
     }
     this.meshCooldownUntil.delete(key);

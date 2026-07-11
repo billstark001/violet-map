@@ -122,9 +122,10 @@ export const textureUrl = (id: string) => `/api/assets/texture/${id}`;
 export const fetchWorldCapabilities = (world: string) =>
   json<WorldCapabilities>(`/api/worlds/${encodeURIComponent(world)}/capabilities`);
 
-export const fetchTopMapManifest = (world: string, dim: string) =>
+export const fetchTopMapManifest = (world: string, dim: string, signal?: AbortSignal) =>
   json<TopMapDimensionManifest>(
     `/api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/top-map/manifest`,
+    { signal },
   );
 
 export const fetchChunkSourceCoverage = (world: string, dim: string) =>
@@ -159,9 +160,11 @@ export async function fetchTopMapTile(
   dim: string,
   rx: number,
   rz: number,
+  signal?: AbortSignal,
 ): Promise<TopMapTilePayload> {
   const res = await fetch(`/api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/top-map/tile/${rx}/${rz}`, {
     headers: { accept: 'application/msgpack' },
+    signal,
   });
   if (!res.ok) throw new Error(`top-map tile fetch failed: ${res.status}`);
   return decode(new Uint8Array(await res.arrayBuffer())) as TopMapTilePayload;

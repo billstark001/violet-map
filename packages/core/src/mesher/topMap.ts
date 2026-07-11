@@ -95,6 +95,9 @@ export interface TopMapSurfaceSample {
 export interface BuildTopMapMeshOptions {
   step: number;
   onlineChunks?: ReadonlySet<string>;
+  /** 32x32 local chunk occupancy bitmap (128 bytes), used to avoid allocating
+   * thousands of coordinate strings while rebuilding an offline tile. */
+  onlineChunkMask?: Uint8Array;
 }
 
 interface TopMapMeshBuilder {
@@ -117,8 +120,10 @@ const CELL_STATUS_ABSENT = 0;
 const CELL_STATUS_PRESENT = 1;
 const CELL_STATUS_ONLINE_BOUNDARY = 2;
 const FULL_TILE_CHUNKS = 32 * 32;
+const TOP_MAP_CHUNK_MASK_BYTES = FULL_TILE_CHUNKS / 8;
 const FULL_COVERAGE_KEY = '*';
 const EPS = 1e-4;
+const PLATFORM_LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -217,6 +222,13 @@ export function sampleTopMapSurface(
 
 function decodeInt16Le(bytes: Uint8Array, count: number): Int16Array {
   if (bytes.byteLength !== count * 2) throw new Error(`bad top-map height payload size: ${bytes.byteLength}`);
+  // Msgpack commonly hands us an aligned, standalone buffer. On all mainstream
+  // browsers that buffer already has the wire format's little-endian layout,
+  // so retain a zero-copy view instead of keeping a second height array for
+  // every resident 512x512 tile.
+  if (PLATFORM_LITTLE_ENDIAN && bytes.byteOffset % Int16Array.BYTES_PER_ELEMENT === 0) {
+    return new Int16Array(bytes.buffer, bytes.byteOffset, count);
+  }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const out = new Int16Array(count);
   for (let i = 0; i < count; i++) out[i] = view.getInt16(i * 2, true);
@@ -444,6 +456,23 @@ export function topMapCoverageKeyForTile(
   return parts.join('.');
 }
 
+export function topMapCoverageKeyFromMask(mask: Uint8Array | undefined): string {
+  if (!mask?.byteLength) return '';
+  const parts: string[] = [];
+  let covered = 0;
+  const byteLength = Math.min(mask.byteLength, TOP_MAP_CHUNK_MASK_BYTES);
+  for (let byteIndex = 0; byteIndex < byteLength; byteIndex++) {
+    let bits = mask[byteIndex];
+    if (!bits) continue;
+    for (let bit = 0; bit < 8; bit++) {
+      if ((bits & (1 << bit)) === 0) continue;
+      covered++;
+      parts.push((byteIndex * 8 + bit).toString(36));
+    }
+  }
+  return covered === FULL_TILE_CHUNKS ? FULL_COVERAGE_KEY : parts.join('.');
+}
+
 export function topMapCoverageChunkCount(coverageKey: string): number {
   if (!coverageKey) return 0;
   if (coverageKey === FULL_COVERAGE_KEY) return FULL_TILE_CHUNKS;
@@ -454,6 +483,7 @@ function buildCells(
   data: PreparedTopMapTile,
   step: number,
   onlineChunks: ReadonlySet<string> | undefined,
+  onlineChunkMask: Uint8Array | undefined,
 ): CellBuildResult {
   const size = data.payload.size.blocks;
   const cellCount = Math.floor(size / step);
@@ -464,8 +494,16 @@ function buildCells(
   cellHeights.fill(TOP_MAP_MISSING_HEIGHT);
 
   const isOnlineCell = (cx: number, cz: number): boolean => {
-    if (!onlineChunks) return false;
     if (cx < 0 || cz < 0 || cx >= cellCount || cz >= cellCount) return false;
+    if (onlineChunkMask) {
+      const chunkX = Math.floor(cx * step / 16);
+      const chunkZ = Math.floor(cz * step / 16);
+      const index = chunkZ * 32 + chunkX;
+      return index >= 0
+        && index < FULL_TILE_CHUNKS
+        && (onlineChunkMask[index >> 3] & (1 << (index & 7))) !== 0;
+    }
+    if (!onlineChunks) return false;
     return onlineChunks.has(chunkKeyForLocal(data, cx * step, cz * step));
   };
 
@@ -482,7 +520,9 @@ function buildCells(
       const x0 = cx * step;
       const z0 = cz * step;
       const currentOnline = isOnlineCell(cx, cz);
-      const onlineBoundaryCell = onlineChunks !== undefined && currentOnline && hasOfflineNeighbor(cx, cz);
+      const onlineBoundaryCell = (onlineChunkMask !== undefined || onlineChunks !== undefined)
+        && currentOnline
+        && hasOfflineNeighbor(cx, cz);
       if (currentOnline && !onlineBoundaryCell) continue;
 
       const x1 = Math.min(size, x0 + step);
@@ -539,7 +579,12 @@ export function buildTopMapMesh(data: PreparedTopMapTile, opts: BuildTopMapMeshO
   const step = Math.max(1, Math.floor(opts.step));
   if (!Number.isFinite(step)) return null;
   const size = data.payload.size.blocks;
-  const { cellCount, cellHeights, cellStatus, cellLights } = buildCells(data, step, opts.onlineChunks);
+  const { cellCount, cellHeights, cellStatus, cellLights } = buildCells(
+    data,
+    step,
+    opts.onlineChunks,
+    opts.onlineChunkMask,
+  );
   const skirtBaseY = data.payload.minY - 16;
   const builder = createBuilder();
   const flipTop = data.payload.approach === 'bottom';

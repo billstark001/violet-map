@@ -53,6 +53,8 @@ const DEFAULT_DIMENSION_DEF = {
 };
 const celestialFacing = new THREE.Vector3();
 const cameraDirection = new THREE.Vector3();
+const sunDirection = new THREE.Vector3();
+const moonDirection = new THREE.Vector3();
 
 export type ViewMode = 'perspective' | 'topPerspective' | 'topOrthographic';
 
@@ -166,7 +168,7 @@ interface ViewerControls {
 }
 
 interface FrameState {
-  clock: THREE.Clock;
+  timer: THREE.Timer;
   skyColor: THREE.Color;
   horizonColor: THREE.Color;
   activeViewMode: ViewMode;
@@ -650,12 +652,12 @@ function updateSkyObjects(
   sky.group.visible = visible;
   if (!visible) return;
   const angle = timeOfDay * Math.PI * 2;
-  const sunDir = new THREE.Vector3(Math.sin(angle), Math.cos(angle), -0.25).normalize();
-  const moonDir = sunDir.clone().multiplyScalar(-1);
+  const sunDir = sunDirection.set(Math.sin(angle), Math.cos(angle), -0.25).normalize();
+  const moonDir = moonDirection.copy(sunDir).multiplyScalar(-1);
   sky.sun.position.copy(sunDir).multiplyScalar(850);
-  sky.moon.position.copy(moonDir.multiplyScalar(850));
+  sky.moon.position.copy(moonDir).multiplyScalar(850);
   sky.sun.quaternion.setFromUnitVectors(SKY_PLANE_FORWARD, celestialFacing.copy(sunDir).negate());
-  sky.moon.quaternion.setFromUnitVectors(SKY_PLANE_FORWARD, celestialFacing.copy(moonDir).negate().normalize());
+  sky.moon.quaternion.setFromUnitVectors(SKY_PLANE_FORWARD, celestialFacing.copy(moonDir).negate());
   const night = clamp01((0.55 - dayFactor) / 0.55);
   const sunset = Math.max(0, 1 - Math.abs(sunDir.y) / 0.34) * Math.min(1, dayFactor * 1.6);
   sky.domeMaterial.uniforms.topColor.value.copy(topColor);
@@ -669,8 +671,17 @@ function updateSkyObjects(
 }
 
 function createRenderer(container: HTMLElement): THREE.WebGLRenderer {
-  const renderer = new THREE.WebGLRenderer({ antialias: false });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const renderer = new THREE.WebGLRenderer({
+    antialias: false,
+    alpha: false,
+    depth: true,
+    stencil: false,
+    powerPreference: 'high-performance',
+    preserveDrawingBuffer: false,
+  });
+  const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  const pixelRatioCap = memory !== undefined && memory <= 4 ? 1 : 1.5;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, pixelRatioCap));
   renderer.setSize(container.clientWidth, container.clientHeight);
   container.appendChild(renderer.domElement);
   return renderer;
@@ -835,12 +846,13 @@ function disposeEngine(engine: Engine) {
   engine.terrainTexture.dispose();
   engine.renderer.renderLists.dispose();
   engine.renderer.dispose();
+  engine.renderer.forceContextLoss();
   engine.renderer.domElement.remove();
 }
 
 function createFrameState(initialViewMode: ViewMode): FrameState {
   return {
-    clock: new THREE.Clock(),
+    timer: new THREE.Timer(),
     skyColor: new THREE.Color(),
     horizonColor: new THREE.Color(),
     activeViewMode: initialViewMode,
@@ -879,7 +891,7 @@ function updateChunksAndTopMap(
   props: ViewerProps,
   capabilities: WorldCapabilities | null,
   now: number,
-): { topView: boolean; dimDef: ViewerDimensionDef; offlineTopMap: boolean } {
+): ViewerDimensionDef {
   const topView = isTopViewMode(props.viewMode);
   const dimDef = dimensionDefinition(engine.dimensions, props.dimension);
   const offlineTopMap = topMapAvailable(capabilities, props.dimension);
@@ -900,7 +912,7 @@ function updateChunksAndTopMap(
     onlineChunks: manager?.displayedChunkKeys(),
   });
 
-  return { topView, dimDef, offlineTopMap };
+  return dimDef;
 }
 
 function dayFactorForDimension(dimDef: ViewerDimensionDef, timeOfDay: number): number {
@@ -1039,13 +1051,15 @@ function maybePersistActiveView(state: FrameState, now: number, engine: Engine, 
 }
 
 function renderFrame({ engine, manager, latestStats, props, capabilities, state }: FrameContext) {
-  const dt = Math.min(state.clock.getDelta(), 0.1);
   const now = performance.now();
+  state.timer.update(now);
+  const dt = Math.min(state.timer.getDelta(), 0.1);
   engine.shared.animationTime.value = now / 1000;
   state.activeViewMode = syncViewMode(engine, state.activeViewMode, props.viewMode);
   updateActiveControls(engine, props.viewMode, dt);
 
-  const { topView, dimDef } = updateChunksAndTopMap(engine, manager, props, capabilities, now);
+  const topView = isTopViewMode(props.viewMode);
+  const dimDef = updateChunksAndTopMap(engine, manager, props, capabilities, now);
   applyLightingAndFog(engine, manager, props, dimDef, topView, state.skyColor, state.horizonColor);
 
   const camera = engine.activeCamera;

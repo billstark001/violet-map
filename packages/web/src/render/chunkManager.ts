@@ -32,6 +32,7 @@ import {
 } from './chunkScheduler';
 
 const UPDATE_INTERVAL_MS = 80;
+const STATS_REPORT_INTERVAL_MS = 100;
 const MAX_ACTIVE_MESH_TASKS = 4;
 const DEFAULT_MAX_MESH_WORKERS = 2;
 const ABSOLUTE_MAX_MESH_WORKERS = 4;
@@ -44,7 +45,9 @@ const WORKER_NEIGHBOR_HOLD_MS = 3500;
 const DEFERRED_MESH_RETRY_MS = 140;
 const MIN_WORKER_RESIDENT_COLUMNS = 192;
 const MAX_WORKER_RESIDENT_COLUMNS = 1400;
-const TARGET_WORKER_RESIDENT_COLUMNS = 768;
+// Every resident column is cloned into every meshing worker. Budget the total
+// number of copies, rather than letting worker count multiply memory usage.
+const TARGET_WORKER_RESIDENT_COPIES = 768;
 const CHUNK_WORLD_MIN_Y = -80;
 const CHUNK_WORLD_MAX_Y = 384;
 const DIAGNOSTIC_HISTORY_LIMIT = 32;
@@ -254,7 +257,7 @@ interface ChunkEntry extends ChunkSchedulerEntry {
   lodReadyStep: number;
   fullReady: boolean;
   dirtyToken: number;
-  group: THREE.Group | null;
+  group: THREE.Object3D | null;
   fullSections: FullSectionRender[];
   meshBytes: number;
   biome: string;
@@ -302,6 +305,7 @@ export class ChunkManager {
   private meshDiagnosticByVersion = new Map<number, number>();
   private activeDiagnosticSeq = 0;
   private lastDiagnosticDelayCheck = 0;
+  private lastStatsReport = -Infinity;
   private chunkBytesFetched = 0;
   private displayedMeshBytes = 0;
   private fullCacheHits = 0;
@@ -343,6 +347,20 @@ export class ChunkManager {
   private topDownView = false;
   private topClipRange: TopClipRange = { minY: CHUNK_WORLD_MIN_Y, maxY: CHUNK_WORLD_MAX_Y };
   private latestCamera: ChunkSchedulerCamera | null = null;
+  private displayedChunkKeyCache: ReadonlySet<string> = new Set();
+  private displayedChunkKeyCacheDirty = true;
+  private visibilityRevision = 0;
+  private lastVisibilityRevision = -1;
+  private lastVisibilityStartKey = '';
+  private lastVisibilityAboveSurface = false;
+  private visibleSectionKeys = new Set<string>();
+  private visibilityQueueSections: FullSectionRender[] = [];
+  private visibilityQueueEntries: number[] = [];
+  private sectionVisibilityRevision = 0;
+  private lastSpecialVisibilityRevision = -1;
+  private lastSpecialCenterCx = Number.NaN;
+  private lastSpecialCenterCz = Number.NaN;
+  private lastSpecialRadius = Number.NaN;
   readonly root = new THREE.Group();
   onStats?: (s: ChunkSchedulerStats) => void;
 
@@ -495,12 +513,15 @@ export class ChunkManager {
     return e && e.state !== 'absent' && e.state !== 'error' && e.displayed !== 'none' ? e.surfaceY : null;
   }
 
-  displayedChunkKeys(): Set<string> {
+  displayedChunkKeys(): ReadonlySet<string> {
+    if (!this.displayedChunkKeyCacheDirty) return this.displayedChunkKeyCache;
     const out = new Set<string>();
     for (const e of this.chunks.values()) {
       if (e.displayed === 'none' || !this.entryHasDisplayedMesh(e)) continue;
       out.add(`${e.cx},${e.cz}`);
     }
+    this.displayedChunkKeyCache = out;
+    this.displayedChunkKeyCacheDirty = false;
     return out;
   }
 
@@ -640,8 +661,8 @@ export class ChunkManager {
     if (viewChanged || clipChanged) {
       this.topDownView = topDownView;
       this.topClipRange = nextTopClipRange;
-      if (viewChanged) this.setMeshFrustumCulled(!topDownView);
       this.applyTopClipVisibility();
+      if (viewChanged) this.lastVisibilityRevision = -1;
     }
     if (!force && now - this.lastUpdate < UPDATE_INTERVAL_MS) return;
     this.lastUpdate = now;
@@ -679,7 +700,6 @@ export class ChunkManager {
     this.releaseDisplayedWorkerData();
     this.releaseWorkerDataOverBudget();
     this.checkDelayedOperations(now);
-    this.syncSchedulerStats();
     this.flushMeshQueue();
     this.flushHashQueue();
     this.flushFetchQueue();
@@ -687,6 +707,7 @@ export class ChunkManager {
     this.updateFullSectionVisibility(camera);
     this.updateSpecialRenderVisibility(camera);
     if (isDebugLoggingEnabled()) {
+      this.syncSchedulerStats();
       debugLog('chunk-manager', 'update', {
         world: this.opts.world,
         dimension: this.opts.dimension,
@@ -1455,7 +1476,16 @@ export class ChunkManager {
   }
 
   private maxWorkerResidentColumns(): number {
-    return Math.max(MIN_WORKER_RESIDENT_COLUMNS, Math.min(MAX_WORKER_RESIDENT_COLUMNS, TARGET_WORKER_RESIDENT_COLUMNS));
+    const memory = typeof navigator !== 'undefined'
+      ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory
+      : undefined;
+    const copyBudget = memory !== undefined && memory <= 4
+      ? 256
+      : memory !== undefined && memory <= 8
+        ? 512
+        : TARGET_WORKER_RESIDENT_COPIES;
+    const perWorkerBudget = Math.floor(copyBudget / Math.max(1, this.workers.length));
+    return Math.max(MIN_WORKER_RESIDENT_COLUMNS, Math.min(MAX_WORKER_RESIDENT_COLUMNS, perWorkerBudget));
   }
 
   private releaseWorkerDataOverBudget() {
@@ -1702,11 +1732,20 @@ export class ChunkManager {
     return Math.floor(mask / (2 ** (from * 6 + to))) % 2 >= 1;
   }
 
+  private invalidateDisplayedChunkKeys() {
+    this.displayedChunkKeyCacheDirty = true;
+  }
+
+  private setSectionVisible(section: FullSectionRender, visible: boolean) {
+    if (section.visible === visible) return;
+    section.visible = visible;
+    for (const mesh of section.meshes) mesh.visible = visible;
+    this.sectionVisibilityRevision++;
+    this.invalidateDisplayedChunkKeys();
+  }
+
   private setAllFullSectionsVisible(visible: boolean) {
-    for (const section of this.fullSectionIndex.values()) {
-      section.visible = visible;
-      for (const mesh of section.meshes) mesh.visible = visible;
-    }
+    for (const section of this.fullSectionIndex.values()) this.setSectionVisible(section, visible);
   }
 
   private fullSectionWithinTopClip(sy: number): boolean {
@@ -1722,16 +1761,16 @@ export class ChunkManager {
 
   private applyFullSectionTopClip() {
     for (const section of this.fullSectionIndex.values()) {
-      const visible = this.fullSectionWithinTopClip(section.sy);
-      section.visible = visible;
-      for (const mesh of section.meshes) mesh.visible = visible;
+      this.setSectionVisible(section, this.fullSectionWithinTopClip(section.sy));
     }
   }
 
   private applyLodTopClip() {
     const visible = this.lodVisibleForTopClip();
     for (const e of this.chunks.values()) {
-      if (e.displayed === 'lod' && e.group) e.group.visible = visible;
+      if (e.displayed !== 'lod' || !e.group || e.group.visible === visible) continue;
+      e.group.visible = visible;
+      this.invalidateDisplayedChunkKeys();
     }
   }
 
@@ -1741,30 +1780,29 @@ export class ChunkManager {
     this.applyLodTopClip();
   }
 
-  private setMeshFrustumCulled(value: boolean) {
-    for (const entry of this.chunks.values()) {
-      entry.group?.traverse((child) => {
-        if (child instanceof THREE.Mesh) child.frustumCulled = value;
-      });
-    }
-  }
-
   private updateFullSectionVisibility(camera: ChunkSchedulerCamera) {
     if (!this.fullSectionIndex.size) return;
-    if (this.topDownView) {
-      this.applyFullSectionTopClip();
-      return;
-    }
+    if (this.topDownView) return;
     const startCx = Math.floor(camera.position.x / 16);
     const startSy = Math.floor(camera.position.y / 16);
     const startCz = Math.floor(camera.position.z / 16);
-    const start = this.fullSectionIndex.get(this.sectionKey(startCx, startSy, startCz));
+    const startKey = this.sectionKey(startCx, startSy, startCz);
+    const startEntry = this.chunks.get(this.key(startCx, startCz));
+    const aboveSurface = !!startEntry && camera.position.y >= startEntry.surfaceY + 2;
+    if (
+      this.lastVisibilityRevision === this.visibilityRevision
+      && this.lastVisibilityStartKey === startKey
+      && this.lastVisibilityAboveSurface === aboveSurface
+    ) return;
+    this.lastVisibilityRevision = this.visibilityRevision;
+    this.lastVisibilityStartKey = startKey;
+    this.lastVisibilityAboveSurface = aboveSurface;
+    const start = this.fullSectionIndex.get(startKey);
     if (!start || start.visibility <= 0) {
       this.setAllFullSectionsVisible(true);
       return;
     }
-    const startEntry = this.chunks.get(this.key(startCx, startCz));
-    if (startEntry && camera.position.y >= startEntry.surfaceY + 2) {
+    if (aboveSurface) {
       this.setAllFullSectionsVisible(true);
       return;
     }
@@ -1773,13 +1811,20 @@ export class ChunkManager {
       return;
     }
 
-    const visible = new Set<string>();
-    const queue: { section: FullSectionRender; entry: number }[] = [{ section: start, entry: -1 }];
+    const visible = this.visibleSectionKeys;
+    const queueSections = this.visibilityQueueSections;
+    const queueEntries = this.visibilityQueueEntries;
+    visible.clear();
+    queueSections.length = 1;
+    queueEntries.length = 1;
+    queueSections[0] = start;
+    queueEntries[0] = -1;
     let head = 0;
     visible.add(start.key);
 
-    while (head < queue.length) {
-      const { section, entry } = queue[head++];
+    while (head < queueSections.length) {
+      const section = queueSections[head];
+      const entry = queueEntries[head++];
       const mask = section.visibility || SECTION_VISIBILITY_ALL;
       for (let dir = 0; dir < SECTION_VISIBILITY_DIRS.length; dir++) {
         if (entry >= 0 && !this.visibilityAllows(mask, entry, dir)) continue;
@@ -1788,15 +1833,12 @@ export class ChunkManager {
         if (!next) continue;
         if (visible.has(next.key)) continue;
         visible.add(next.key);
-        queue.push({ section: next, entry: SECTION_OPPOSITE[dir] });
+        queueSections.push(next);
+        queueEntries.push(SECTION_OPPOSITE[dir]);
       }
     }
 
-    for (const section of this.fullSectionIndex.values()) {
-      const show = visible.has(section.key);
-      section.visible = show;
-      for (const mesh of section.meshes) mesh.visible = show;
-    }
+    for (const section of this.fullSectionIndex.values()) this.setSectionVisible(section, visible.has(section.key));
   }
 
   private specialRenderRadiusChunks(): number {
@@ -1809,13 +1851,29 @@ export class ChunkManager {
     const radius = this.specialRenderRadiusChunks();
     const centerCx = Math.floor(camera.position.x / 16);
     const centerCz = Math.floor(camera.position.z / 16);
+    if (
+      this.lastSpecialVisibilityRevision === this.sectionVisibilityRevision
+      && this.lastSpecialCenterCx === centerCx
+      && this.lastSpecialCenterCz === centerCz
+      && this.lastSpecialRadius === radius
+    ) return;
     const radius2 = radius * radius;
+    let changed = false;
     for (const section of this.fullSectionIndex.values()) {
       const dx = section.cx - centerCx;
       const dz = section.cz - centerCz;
       const allowed = section.visible && dx * dx + dz * dz <= radius2;
-      for (const mesh of section.specialMeshes) mesh.visible = allowed;
+      for (const mesh of section.specialMeshes) {
+        if (mesh.visible === allowed) continue;
+        mesh.visible = allowed;
+        changed = true;
+      }
     }
+    this.lastSpecialVisibilityRevision = this.sectionVisibilityRevision;
+    this.lastSpecialCenterCx = centerCx;
+    this.lastSpecialCenterCz = centerCz;
+    this.lastSpecialRadius = radius;
+    if (changed) this.invalidateDisplayedChunkKeys();
   }
 
   // #endregion
@@ -1836,7 +1894,7 @@ export class ChunkManager {
         meshBytes += built.bytes;
         const mesh = new THREE.Mesh(built.geometry, this.materials[layer]);
         mesh.position.set(e.cx * 16, s.sy * 16, e.cz * 16);
-        mesh.frustumCulled = !this.topDownView;
+        mesh.frustumCulled = true;
         mesh.visible = sectionVisible;
         mesh.matrixAutoUpdate = false;
         mesh.updateMatrix();
@@ -1857,6 +1915,10 @@ export class ChunkManager {
       e.fullSections.push(section);
       this.fullSectionIndex.set(section.key, section);
     }
+    if (e.fullSections.length > 0) {
+      this.visibilityRevision++;
+      this.sectionVisibilityRevision++;
+    }
     e.meshBytes = meshBytes;
     this.displayedMeshBytes += e.meshBytes;
     if (group.children.length > 0) {
@@ -1868,6 +1930,7 @@ export class ChunkManager {
     e.displayedVersion = version;
     e.displayedLodStep = 0;
     e.fullReady = meshBytes > 0;
+    this.invalidateDisplayedChunkKeys();
     this.scheduler.notify({ type: 'meshDisplayed', entry: e, kind: 'full', step: 1, version, now: performance.now() });
     debugLog('chunk-manager', 'display-full', {
       key: e.key,
@@ -1887,14 +1950,12 @@ export class ChunkManager {
       this.displayedMeshBytes += e.meshBytes;
       const mesh = new THREE.Mesh(built.geometry, this.materials.lod);
       mesh.position.set(e.cx * 16, 0, e.cz * 16);
-      mesh.frustumCulled = !this.topDownView;
+      mesh.frustumCulled = true;
       mesh.matrixAutoUpdate = false;
       mesh.updateMatrix();
-      const group = new THREE.Group();
-      group.add(mesh);
-      group.visible = this.lodVisibleForTopClip();
-      this.root.add(group);
-      e.group = group;
+      mesh.visible = this.lodVisibleForTopClip();
+      this.root.add(mesh);
+      e.group = mesh;
     } else {
       e.meshBytes = 0;
     }
@@ -1902,6 +1963,7 @@ export class ChunkManager {
     e.displayedVersion = version;
     e.displayedLodStep = step;
     e.lodReadyStep = e.meshBytes > 0 ? step : 0;
+    this.invalidateDisplayedChunkKeys();
     this.scheduler.notify({ type: 'meshDisplayed', entry: e, kind: 'lod', step: step as LodStep, version, now: performance.now() });
     if (e.lastTargetStep === 1) {
       this.flushMeshQueue();
@@ -1948,8 +2010,10 @@ export class ChunkManager {
   }
 
   private removeMesh(e: ChunkEntry) {
+    const hadSections = e.fullSections.length > 0;
+    const hadDisplay = e.displayed !== 'none' || e.group !== null;
     for (const section of e.fullSections) this.fullSectionIndex.delete(section.key);
-    e.fullSections = [];
+    e.fullSections.length = 0;
     if (e.group) {
       this.root.remove(e.group);
       e.group.traverse((o) => { if (o instanceof THREE.Mesh) o.geometry.dispose(); });
@@ -1961,6 +2025,11 @@ export class ChunkManager {
     e.displayedLodStep = 0;
     e.lodReadyStep = 0;
     e.fullReady = false;
+    if (hadSections) {
+      this.visibilityRevision++;
+      this.sectionVisibilityRevision++;
+    }
+    if (hadDisplay) this.invalidateDisplayedChunkKeys();
   }
 
   // #endregion
@@ -1968,18 +2037,16 @@ export class ChunkManager {
   // #region Stats
 
   private entryHasVisibleMesh(e: ChunkEntry): boolean {
-    if (!e.group || !e.group.visible) return false;
-    let visible = false;
-    e.group.traverse((child) => {
-      if (visible) return;
-      if (child instanceof THREE.Mesh && child.visible) visible = true;
-    });
-    return visible;
+    return this.entryHasDisplayedMesh(e);
   }
 
   private entryHasDisplayedMesh(e: ChunkEntry): boolean {
     if (!e.group || !e.group.visible) return false;
-    if (e.displayed === 'lod') return e.group.children.some((child) => child instanceof THREE.Mesh && child.visible);
+    if (e.displayed === 'lod') {
+      return e.group instanceof THREE.Mesh
+        ? e.group.visible
+        : e.group.children.some((child) => child instanceof THREE.Mesh && child.visible);
+    }
     if (e.displayed !== 'full') return false;
     return e.fullSections.some((section) => section.meshes.some((mesh) => mesh.visible));
   }
@@ -2022,8 +2089,12 @@ export class ChunkManager {
     return this.schedulerStats;
   }
 
-  private reportStats() {
-    this.onStats?.(this.syncSchedulerStats());
+  private reportStats(force = false) {
+    if (!this.onStats) return;
+    const now = performance.now();
+    if (!force && now - this.lastStatsReport < STATS_REPORT_INTERVAL_MS) return;
+    this.lastStatsReport = now;
+    this.onStats(this.syncSchedulerStats());
   }
 
   // #endregion
