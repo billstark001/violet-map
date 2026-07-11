@@ -32,10 +32,14 @@ export interface ChunkMetadata {
   source?: 'region' | 'chunk';
   sourcePath?: string;
   region?: { x: number; z: number };
+  /** Validator for the optional modern `entities/` region chunk. */
+  entityHash?: string;
+  entitySourcePath?: string;
   missing?: boolean;
 }
 export interface ChunkReadResult extends ChunkMetadata {
   data: Uint8Array;
+  entities?: Uint8Array;
   hash: string;
   fileHash: string;
   source: 'region' | 'chunk';
@@ -75,6 +79,8 @@ interface ChunkCacheEntry {
   fileHash: string;
   data: Uint8Array;
   nbtHash: string;
+  entityHash?: string;
+  entities?: Uint8Array;
 }
 
 const fileHashCache = new Map<string, HashCacheEntry>();
@@ -83,6 +89,7 @@ const regionHeaderCache = new Map<string, RegionHeaderCacheEntry>();
 const regionReadInflight = new Map<string, Promise<RegionCacheEntry | null>>();
 const regionHeaderInflight = new Map<string, Promise<RegionHeaderCacheEntry | null>>();
 const regionDirCache = new Map<string, string>();
+const entityDirCache = new Map<string, string>();
 const chunkNbtCache = new Map<string, ChunkCacheEntry>();
 const MAX_REGION_CACHE = 16;
 const MAX_REGION_HEADER_CACHE = 256;
@@ -112,6 +119,15 @@ const worldMetaPath = (world: string) => `${world}/.violet-map/world.json`;
 
 function sha256(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
+}
+
+function chunkPayloadHash(data: Uint8Array, entities?: Uint8Array): string {
+  const hash = createHash('sha256');
+  hash.update(data);
+  // Delimiters prevent an accidental equivalent concatenation of two chunks.
+  hash.update(new Uint8Array([0]));
+  if (entities) hash.update(entities);
+  return hash.digest('hex');
 }
 
 function validator(info: StoredFileInfo): string {
@@ -212,6 +228,10 @@ function dimensionRegionCandidates(dim: string): string[] {
   return [`dimensions/${encodeURIComponent(namespace)}/${dimPath}/region`];
 }
 
+function dimensionEntityCandidates(dim: string): string[] {
+  return dimensionRegionCandidates(dim).map((candidate) => candidate.replace(/\/region$/, '/entities'));
+}
+
 async function prefixHasRegionFiles(prefix: string): Promise<boolean> {
   const files = await worldStorage.list(prefix);
   return files.some((f) => REGION_RE.test(f.path.split('/').pop() ?? ''));
@@ -230,6 +250,22 @@ async function regionDir(world: string, dim: string): Promise<string> {
     }
   }
   regionDirCache.set(key, candidates[0]);
+  return candidates[0];
+}
+
+async function entityDir(world: string, dim: string): Promise<string> {
+  assertWorldName(world);
+  const key = `${world}|${dim}`;
+  const cached = entityDirCache.get(key);
+  if (cached) return cached;
+  const candidates = dimensionEntityCandidates(dim).map((sub) => `${world}/${sub}`);
+  for (const candidate of candidates) {
+    if (await prefixHasRegionFiles(candidate)) {
+      entityDirCache.set(key, candidate);
+      return candidate;
+    }
+  }
+  entityDirCache.set(key, candidates[0]);
   return candidates[0];
 }
 
@@ -504,7 +540,7 @@ export async function getChunkMetadataBatch(
   chunks: { cx: number; cz: number }[],
 ): Promise<ChunkMetadata[]> {
   assertWorldName(world);
-  const regionBase = await regionDir(world, dim);
+  const [regionBase, entityBase] = await Promise.all([regionDir(world, dim), entityDir(world, dim)]);
   const out = new Array<ChunkMetadata>(chunks.length);
   const byRegion = new Map<string, { rx: number; rz: number; filePath: string; items: { index: number; cx: number; cz: number }[] }>();
 
@@ -550,6 +586,34 @@ export async function getChunkMetadataBatch(
     }
   }));
 
+  // Since 1.17 entities live in a sibling region directory. Attach its
+  // validator to the terrain metadata so a changed entity chunk invalidates
+  // the browser mesh cache even when block data stayed identical.
+  const entityRegions = new Map<string, { filePath: string; items: { index: number; cx: number; cz: number }[] }>();
+  for (let index = 0; index < out.length; index++) {
+    const meta = out[index];
+    if (!meta || meta.missing || !meta.hash) continue;
+    const rx = meta.cx >> 5;
+    const rz = meta.cz >> 5;
+    const filePath = regionPathFromDir(entityBase, rx, rz);
+    const group = entityRegions.get(filePath) ?? { filePath, items: [] };
+    group.items.push({ index, cx: meta.cx, cz: meta.cz });
+    entityRegions.set(filePath, group);
+  }
+  await Promise.all([...entityRegions.values()].map(async (group) => {
+    const region = await readRegionHeader(group.filePath);
+    if (!region) return;
+    for (const item of group.items) {
+      const meta = out[item.index];
+      if (!meta || !hasRegionChunkHeader(region.header, item.cx & 31, item.cz & 31)) continue;
+      meta.entityHash = region.hash;
+      meta.entitySourcePath = group.filePath;
+      // `hash` is a source validator used before full NBT is fetched. Include
+      // entities here; `nbtHash` below remains the precise payload hash.
+      meta.hash = `v3:${sha256(new TextEncoder().encode(`${meta.hash}|${region.hash}`))}`;
+    }
+  }));
+
   return out;
 }
 
@@ -571,9 +635,9 @@ export async function getChunksNbtWithMetaBatch(
 
     const cacheKey = chunkCacheKey(world, dim, meta.cx, meta.cz);
     const hit = chunkNbtCache.get(cacheKey);
-    if (hit?.sourcePath === meta.sourcePath && hit.fileHash === meta.fileHash) {
+    if (hit?.sourcePath === meta.sourcePath && hit.fileHash === meta.fileHash && hit.entityHash === meta.entityHash) {
       touchLru(chunkNbtCache, cacheKey, hit);
-      out[index] = { ...meta, data: hit.data, nbtHash: hit.nbtHash } as ChunkReadResult;
+      out[index] = { ...meta, data: hit.data, entities: hit.entities, nbtHash: hit.nbtHash } as ChunkReadResult;
       return;
     }
 
@@ -581,9 +645,7 @@ export async function getChunksNbtWithMetaBatch(
       const bytes = await worldStorage.read(meta.sourcePath);
       const data = bytes ? decompress(bytes) : null;
       if (!data) return;
-      const nbtHash = sha256(data);
-      rememberChunkNbtCache(cacheKey, { sourcePath: meta.sourcePath, fileHash: meta.fileHash, data, nbtHash });
-      out[index] = { ...meta, data, nbtHash } as ChunkReadResult;
+      out[index] = { ...meta, data, nbtHash: chunkPayloadHash(data) } as ChunkReadResult;
       return;
     }
 
@@ -599,16 +661,42 @@ export async function getChunksNbtWithMetaBatch(
       if (!meta.fileHash || !meta.sourcePath) continue;
       const data = getRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31);
       if (!data) continue;
-      const nbtHash = sha256(data);
-      rememberChunkNbtCache(chunkCacheKey(world, dim, meta.cx, meta.cz), {
-        sourcePath: meta.sourcePath,
-        fileHash: meta.fileHash,
-        data,
-        nbtHash,
-      });
-      out[index] = { ...meta, data, nbtHash } as ChunkReadResult;
+      out[index] = { ...meta, data, nbtHash: chunkPayloadHash(data) } as ChunkReadResult;
     }
   }));
+
+  const byEntityRegion = new Map<string, { meta: ChunkMetadata; index: number }[]>();
+  for (let index = 0; index < metas.length; index++) {
+    const meta = metas[index];
+    if (!out[index]?.data || !meta?.entitySourcePath) continue;
+    const group = byEntityRegion.get(meta.entitySourcePath) ?? [];
+    group.push({ meta, index });
+    byEntityRegion.set(meta.entitySourcePath, group);
+  }
+  await Promise.all([...byEntityRegion.entries()].map(async ([filePath, items]) => {
+    const region = await readRegionFile(filePath);
+    if (!region) return;
+    for (const { meta, index } of items) {
+      const result = out[index];
+      if (!result) continue;
+      const entities = getRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31) ?? undefined;
+      result.entities = entities;
+      result.nbtHash = chunkPayloadHash(result.data, entities);
+    }
+  }));
+
+  // Cache only after both terrain and optional entity NBT have been merged.
+  for (const result of out) {
+    if (!result?.data || !result.sourcePath || !result.fileHash) continue;
+    rememberChunkNbtCache(chunkCacheKey(world, dim, result.cx, result.cz), {
+      sourcePath: result.sourcePath,
+      fileHash: result.fileHash,
+      data: result.data,
+      nbtHash: result.nbtHash ?? chunkPayloadHash(result.data, result.entities),
+      entityHash: result.entityHash,
+      entities: result.entities,
+    });
+  }
 
   return out;
 }

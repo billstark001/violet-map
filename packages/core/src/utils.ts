@@ -30,6 +30,11 @@ class TypedArrayWriter<T extends TypedArray> {
     this.length = i + 2;
   }
 
+  push1(a: number) {
+    this.reserve(1);
+    this.data[this.length++] = a;
+  }
+
   push3(a: number, b: number, c: number) {
     this.reserve(3);
     const i = this.length;

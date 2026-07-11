@@ -1,0 +1,11 @@
+{
+  "texture_size": [64, 32],
+  "textures": { "all": "minecraft:entity/signs/hanging/oak" },
+  "elements": [
+    { "from": [1, 0, 7], "to": [15, 10, 9], "faces": {
+      "down": { "uv": [2, 12, 16, 14], "texture": "#all" }, "up": { "uv": [16, 12, 30, 14], "texture": "#all" },
+      "north": { "uv": [2, 14, 16, 24], "texture": "#all" }, "south": { "uv": [18, 14, 32, 24], "texture": "#all" },
+      "west": { "uv": [0, 14, 2, 24], "texture": "#all" }, "east": { "uv": [16, 14, 18, 24], "texture": "#all" }
+    } }
+  ]
+}

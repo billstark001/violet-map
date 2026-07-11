@@ -25,12 +25,18 @@ import {
   type SchedulerPreset,
 } from './chunkScheduler';
 import { clampFlyPitch, FlyControls, normalizeFlyYaw, TopDownControls, type FlyView } from './controls';
-import { createMaterials, createSharedUniforms, SharedUniforms, TerrainMaterials } from './materials';
+import {
+  createMaterials, createSharedUniforms, createTextureAnimationUniforms,
+  type SharedUniforms, type TerrainMaterials, type TextureAnimationUniforms,
+} from './materials';
 import { TopMapManager, type TopMapDiagnosticSnapshot } from './topMapManager';
 import type { WorkerInit } from '../worker/protocol';
 
 const VIEW_STORAGE_KEY = 'violet-map:view';
-const MESH_CACHE_SCHEMA = 'mesh-v7-neighborhood-resident';
+// Fluid UVs, exterior AO for partial models, and special-model transforms all
+// changed mesh bytes. Keep stale IndexedDB entries from reviving the old
+// water/stair artifacts after an upgrade.
+const MESH_CACHE_SCHEMA = 'mesh-v13-fluid-height-flow-decoupled';
 const SKY_PLANE_FORWARD = new THREE.Vector3(0, 0, 1);
 const TOP_CAMERA_HEIGHT = 1024;
 const TOP_ORTHO_HEIGHT = 512;
@@ -128,6 +134,7 @@ interface Engine {
   topMap: TopMapManager;
   materials: TerrainMaterials;
   terrainTexture: THREE.Texture;
+  textureAnimations: TextureAnimationUniforms;
   shared: SharedUniforms;
   sky: SkyObjects;
   renderKey: string;
@@ -751,6 +758,7 @@ function createInitPayload(resources: ViewerResources): Omit<WorkerInit, 'type'>
     atlasIndex: resources.atlas.index,
     avgColors: resources.atlas.avgColors,
     textureHasAlpha: resources.atlas.hasAlpha,
+    textureAnimationIds: resources.atlas.animations.ids,
     grassColormap: resources.grassMap,
     foliageColormap: resources.foliageMap,
   };
@@ -770,7 +778,8 @@ function createEngine(
   const cameras = createCameras(container, initialView);
   const terrainTexture = createTerrainTexture(resources.atlas, renderer);
   const shared = createSharedUniforms();
-  const materials = createMaterials(terrainTexture, shared);
+  const textureAnimations = createTextureAnimationUniforms(resources.atlas.animations);
+  const materials = createMaterials(terrainTexture, shared, textureAnimations);
   const controls = createControls(renderer.domElement, cameras, initialView, fastMoveMultiplier, inertiaEnabled);
   const topMap = new TopMapManager(scene, shared);
 
@@ -787,6 +796,7 @@ function createEngine(
     topMap,
     materials,
     terrainTexture,
+    textureAnimations,
     shared,
     sky: skyObjects,
     biomes: resources.biomes,
@@ -820,6 +830,8 @@ function disposeEngine(engine: Engine) {
   engine.topMap.dispose();
   engine.sky.dispose();
   for (const material of engine.materials.all) material.dispose();
+  engine.textureAnimations.info.dispose();
+  engine.textureAnimations.frames.dispose();
   engine.terrainTexture.dispose();
   engine.renderer.renderLists.dispose();
   engine.renderer.dispose();
@@ -926,7 +938,10 @@ function skyDimFactor(dimensionSky: 'normal' | 'nether' | 'end'): number {
 function fogDensity(dimensionSky: 'normal' | 'nether' | 'end'): number {
   if (dimensionSky === 'normal') return 0.0016;
   if (dimensionSky === 'nether') return 0.009;
-  return 0.0035;
+  // End terrain should recede into the vanilla lavender void, not an opaque
+  // overworld-grey volume. The linear render-distance fog still handles the
+  // far edge, so only a light environmental component is needed here.
+  return 0.0006;
 }
 
 function applyFogRange(engine: Engine, topView: boolean, dense: boolean, viewDistance: number, lodDistance: number) {
@@ -952,7 +967,7 @@ function applyLightingAndFog(
 ) {
   const camera = engine.activeCamera;
   const dayFactor = dayFactorForDimension(dimDef, props.timeOfDay);
-  const dense = dimDef?.sky !== 'normal';
+  const dense = dimDef?.sky === 'nether';
 
   engine.shared.skyDarken.value = dimDef?.hasSkyLight ? 0.05 + 0.95 * dayFactor : 0;
   engine.shared.ambient.value = dimDef?.ambientLight ?? 0.18;
@@ -963,7 +978,9 @@ function applyLightingAndFog(
   if (!biome) return;
 
   const dimensionSky = dimensionSkyMode(dimDef);
-  const fog = hexToRgb(biome.effects.fog_color);
+  // The End's biome JSON historically carries a generic fog colour. Vanilla
+  // supplies its own lavender End fog instead.
+  const fog = dimensionSky === 'end' ? hexToRgb(0xa080a0) : hexToRgb(biome.effects.fog_color);
   const sky = hexToRgb(skyHexForBiome(dimensionSky, biome));
   const bright = 0.15 + 0.85 * (dimDef?.hasSkyLight ? dayFactor : 1);
   const skyDim = skyDimFactor(dimensionSky);
@@ -981,7 +998,7 @@ function applyLightingAndFog(
     .lerp(engine.scene.background as THREE.Color, dense ? 0.15 : 0.45);
   engine.shared.envFogColor.value
     .copy(engine.shared.fogColor.value)
-    .lerp(engine.scene.background as THREE.Color, dimensionSky === 'normal' ? 0.35 : 0.1);
+    .lerp(engine.scene.background as THREE.Color, dimensionSky === 'normal' ? 0.35 : dimensionSky === 'end' ? 0.3 : 0.1);
   if (!topView) engine.shared.envFogDensity.value = fogDensity(dimensionSky);
 
   updateSkyObjects(
@@ -1024,6 +1041,7 @@ function maybePersistActiveView(state: FrameState, now: number, engine: Engine, 
 function renderFrame({ engine, manager, latestStats, props, capabilities, state }: FrameContext) {
   const dt = Math.min(state.clock.getDelta(), 0.1);
   const now = performance.now();
+  engine.shared.animationTime.value = now / 1000;
   state.activeViewMode = syncViewMode(engine, state.activeViewMode, props.viewMode);
   updateActiveControls(engine, props.viewMode, dt);
 

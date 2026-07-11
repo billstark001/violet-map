@@ -5,7 +5,7 @@ import {
   SectionMeshes, TextureAlphaMap, TintType,
 } from '../types.js';
 import type { Rgb } from '../colors.js';
-import { Float32Writer, Uint32Writer } from '../utils.js';
+import { Float32Writer, Uint16Writer, Uint32Writer } from '../utils.js';
 
 export interface WorldView {
   getBlock(x: number, y: number, z: number): BlockStateRef;
@@ -42,6 +42,25 @@ export interface MesherResources {
   tint(type: TintType, fixed: number | undefined, biome: string, state?: BlockStateRef): Rgb;
   atlas: AtlasIndex;
   textureHasAlpha?: TextureAlphaMap;
+  /** Stable ids prepared by the viewer for animated atlas sprites. */
+  textureAnimationIds?: Record<string, number>;
+}
+
+/** A resolved, resource-declared model placement. The worker intentionally
+ * supplies these instead of naming chests/signs/entities in meshing code. */
+export interface RenderModelInstance {
+  model: string;
+  x: number;
+  y: number;
+  z: number;
+  layer: 'opaque' | 'cutout' | 'translucent';
+  offset?: [number, number, number];
+  scale?: [number, number, number];
+  rotationY?: number;
+  /** Optional resource-declared replacement for every texture in this
+   * instance. This lets one geometry definition serve all sign woods and
+   * chest variants without baking game ids into the mesher. */
+  texture?: string;
 }
 
 const SHADE: Record<Direction, number> = { up: 1, down: 0.5, north: 0.8, south: 0.8, west: 0.6, east: 0.6 };
@@ -104,16 +123,23 @@ interface BlockStateMeshMeta {
   bi: BlockInfo;
   blockLayer: RenderLayer;
   waterlogged: boolean;
+  fullOccluder: boolean;
   simpleEligible: boolean;
 }
 
-const SIMPLE_CUBE_CACHE = new WeakMap<BakedQuad[], { alpha: TextureAlphaMap | undefined; value: SimpleCubeDef | null }>();
+const SIMPLE_CUBE_CACHE = new WeakMap<BakedQuad[], {
+  alpha: TextureAlphaMap | undefined;
+  animations: Record<string, number> | undefined;
+  value: SimpleCubeDef | null;
+}>();
 
-function cachedSimpleCube(quads: BakedQuad[], textureHasAlpha?: TextureAlphaMap): SimpleCubeDef | null {
+function cachedSimpleCube(
+  quads: BakedQuad[], textureHasAlpha?: TextureAlphaMap, textureAnimationIds?: Record<string, number>,
+): SimpleCubeDef | null {
   const hit = SIMPLE_CUBE_CACHE.get(quads);
-  if (hit && hit.alpha === textureHasAlpha) return hit.value;
-  const value = simpleCubeFromQuads(quads, textureHasAlpha);
-  SIMPLE_CUBE_CACHE.set(quads, { alpha: textureHasAlpha, value });
+  if (hit && hit.alpha === textureHasAlpha && hit.animations === textureAnimationIds) return hit.value;
+  const value = simpleCubeFromQuads(quads, textureHasAlpha, textureAnimationIds);
+  SIMPLE_CUBE_CACHE.set(quads, { alpha: textureHasAlpha, animations: textureAnimationIds, value });
   return value;
 }
 
@@ -139,7 +165,14 @@ class SectionViewCache implements WorldView {
     const occlusionOf = (state: BlockStateRef): number => {
       const hit = occlusionByState.get(state);
       if (hit !== undefined) return hit;
-      const value = res.info(state.name).occludes ? 1 : 0;
+      // Only a genuine opaque, full cube may seal light/visibility or cull a
+      // neighbour's cullface. It may still have extra decorative quads: grass
+      // blocks add their tinted side overlay, for example. Minecraft-data's
+      // bounding-box flag alone marks a number of partial blocks as full (for
+      // example sculk shriekers), which previously made visible sides vanish.
+      const value = res.info(state.name).occludes
+        && opaqueFullCubeFromQuads(res.baker.getQuads(state, 0), res.textureHasAlpha)
+        ? 1 : 0;
       occlusionByState.set(state, value);
       return value;
     };
@@ -383,6 +416,7 @@ class MeshBuilder {
   atlas: Float32Writer | null;
   col = new Float32Writer(4096 * 3);
   light = new Float32Writer(4096 * 2);
+  animation: Uint16Writer | null = null;
   idx = new Uint32Writer(4096 * 6);
   verts = 0;
   constructor(withAtlasRects = false) {
@@ -393,6 +427,7 @@ class MeshBuilder {
     x: number, y: number, z: number, u: number, v: number,
     r: number, g: number, b: number, sky: number, block: number,
     atlasRect?: AtlasRect,
+    animationId = 0,
   ) {
     this.pos.push3(x, y, z);
     this.uv.push2(u, v);
@@ -402,6 +437,11 @@ class MeshBuilder {
     }
     this.col.push3(r, g, b);
     this.light.push2(sky, block);
+    if (animationId > 0 && !this.animation) {
+      this.animation = new Uint16Writer(Math.max(4096, this.verts + 1));
+      for (let i = 0; i < this.verts; i++) this.animation.push1(0);
+    }
+    if (this.animation) this.animation.push1(animationId);
     this.verts++;
   }
   quadIndices() {
@@ -414,6 +454,7 @@ class MeshBuilder {
     const atlasRects = this.atlas?.view();
     const colors = this.col.view();
     const lights = this.light.view();
+    const animations = this.animation?.view();
     const indices = this.idx.view();
     return {
       positions: packSectionPositions(positions),
@@ -421,6 +462,7 @@ class MeshBuilder {
       atlasRects: atlasRects ? packNormalizedUint16(atlasRects) : undefined,
       colors: packNormalizedUint8(colors),
       lights: packNormalizedUint8(lights),
+      animations,
       indices: packIndices(indices, this.verts),
     };
   }
@@ -432,12 +474,14 @@ function builderFor(builders: MeshBuilderStore, layer: RenderLayer): MeshBuilder
   return builders[layer] ??= new MeshBuilder(layer === 'opaqueTiled');
 }
 
-function atlasUv(rect: AtlasRect, u: number, v: number): [number, number] {
-  const tu = Math.min(16 - UV_EPS, Math.max(UV_EPS, u));
-  const tv = Math.min(16 - UV_EPS, Math.max(UV_EPS, v));
+function atlasUv(rect: AtlasRect, u: number, v: number, uvScale: [number, number] = [16, 16]): [number, number] {
+  const width = Math.max(UV_EPS * 2, uvScale[0]);
+  const height = Math.max(UV_EPS * 2, uvScale[1]);
+  const tu = Math.min(width - UV_EPS, Math.max(UV_EPS, u));
+  const tv = Math.min(height - UV_EPS, Math.max(UV_EPS, v));
   return [
-    rect.u0 + (tu / 16) * (rect.u1 - rect.u0),
-    rect.v0 + (tv / 16) * (rect.v1 - rect.v0),
+    rect.u0 + (tu / width) * (rect.u1 - rect.u0),
+    rect.v0 + (tv / height) * (rect.v1 - rect.v0),
   ];
 }
 
@@ -499,18 +543,34 @@ function emitQuad(
 ) {
   const rect = res.atlas[q.texture] ?? res.atlas[MISSING_TEXTURE];
   const shade = q.shade ? SHADE[q.face] : 1;
-  const d = DIR_VEC[q.face];
-  const outside = q.cullFace !== null;
+  // `cullface` controls neighbour face removal only. It is deliberately
+  // omitted on quite a few exterior partial-model faces (notably stairs) so
+  // that they are not removed by a block beside them. Those faces still need
+  // their real outside AO/light sample. Treat a quad as exterior when its
+  // plane lies on the matching unit-cube boundary.
+  const lightFace = q.cullFace ?? exteriorFace(q);
+  const d = DIR_VEC[lightFace ?? q.face];
+  const outside = lightFace !== null;
   const bx = outside ? wx + d[0] : wx;
   const by = outside ? wy + d[1] : wy;
   const bz = outside ? wz + d[2] : wz;
   let flatSky = 0, flatBlock = 0;
-  if (!smooth || !outside) {
+  // A model can explicitly disable ambient occlusion (hoppers do). That is a
+  // request for ordinary flat face lighting, not zero light; leaving it out
+  // made every exterior hopper quad nearly black.
+  if (!smooth || !outside || !q.ao) {
     flatSky = view.getSkyLight(bx, by, bz) / 15;
     flatBlock = view.getBlockLight(bx, by, bz) / 15;
     if (!outside) {
-      flatSky = Math.max(flatSky, view.getSkyLight(wx + d[0], wy + d[1], wz + d[2]) / 15);
-      flatBlock = Math.max(flatBlock, view.getBlockLight(wx + d[0], wy + d[1], wz + d[2]) / 15);
+      // Internal/non-cullface model faces (hopper bowls, door planes, etc.)
+      // are often visible from a direction unrelated to their mathematical
+      // normal. Sampling only that normal used the solid block below for many
+      // of them, turning otherwise sunlit geometry pure black.
+      for (const direction of OCCLUSION_DIRECTIONS) {
+        const n = DIR_VEC[direction];
+        flatSky = Math.max(flatSky, view.getSkyLight(wx + n[0], wy + n[1], wz + n[2]) / 15);
+        flatBlock = Math.max(flatBlock, view.getBlockLight(wx + n[0], wy + n[1], wz + n[2]) / 15);
+      }
     }
   }
   for (let i = 0; i < 4; i++) {
@@ -522,14 +582,68 @@ function emitQuad(
       ao = AO_FACTOR[(s >> 16) & 3];
     }
     const m = shade * ao;
-    const [u, v] = atlasUv(rect, q.uvs[i * 2], q.uvs[i * 2 + 1]);
+    const [u, v] = atlasUv(rect, q.uvs[i * 2], q.uvs[i * 2 + 1], q.uvScale);
     builder.vertex(
       lx + q.positions[i * 3], ly + q.positions[i * 3 + 1], lz + q.positions[i * 3 + 2],
       u, v,
       tint[0] * m, tint[1] * m, tint[2] * m, sky, block,
+      undefined, res.textureAnimationIds?.[q.texture] ?? 0,
     );
   }
   builder.quadIndices();
+}
+
+function specialLayer(layer: RenderModelInstance['layer']): RenderLayer {
+  if (layer === 'translucent') return 'specialTranslucent';
+  return layer === 'cutout' ? 'specialCutout' : 'specialOpaque';
+}
+
+function transformedRenderQuad(q: BakedQuad, instance: RenderModelInstance): BakedQuad {
+  const scale = instance.scale ?? [1, 1, 1];
+  const offset = instance.offset ?? [0, 0, 0];
+  const radians = ((instance.rotationY ?? 0) * Math.PI) / 180;
+  const sin = Math.sin(radians);
+  const cos = Math.cos(radians);
+  const positions = new Float32Array(q.positions.length);
+  for (let i = 0; i < 4; i++) {
+    const x = q.positions[i * 3] - 0.5;
+    const z = q.positions[i * 3 + 2] - 0.5;
+    // Match ModelBaker's 90° rotation convention (`x' = 1-z, z' = x`),
+    // while allowing the 22.5° increments used by standing signs.
+    positions[i * 3] = (0.5 + x * cos - z * sin) * scale[0] + offset[0];
+    positions[i * 3 + 1] = q.positions[i * 3 + 1] * scale[1] + offset[1];
+    positions[i * 3 + 2] = (0.5 + x * sin + z * cos) * scale[2] + offset[2];
+  }
+  // These models are independent render objects. Their internal faces still
+  // use the model's geometry, but block-neighbour culling must never remove a
+  // chest/sign/entity face.
+  return {
+    ...q,
+    positions,
+    texture: instance.texture ?? q.texture,
+    face: rotatedFaceY(q.face, sin, cos),
+    cullFace: null,
+  };
+}
+
+function rotatedFaceY(face: Direction, sin: number, cos: number): Direction {
+  if (face === 'up' || face === 'down') return face;
+  const [x, , z] = DIR_VEC[face];
+  const rx = x * cos - z * sin;
+  const rz = x * sin + z * cos;
+  if (Math.abs(rx) >= Math.abs(rz)) return rx >= 0 ? 'east' : 'west';
+  return rz >= 0 ? 'south' : 'north';
+}
+
+function exteriorFace(q: BakedQuad): Direction | null {
+  const axis = q.face === 'up' || q.face === 'down' ? 1
+    : q.face === 'east' || q.face === 'west' ? 0
+      : 2;
+  const boundary = q.face === 'up' || q.face === 'east' || q.face === 'south' ? 1 : 0;
+  for (let i = 0; i < 4; i++) {
+    if (Math.abs(q.positions[i * 3 + axis] - boundary) > GEOMETRY_EPS) return null;
+  }
+  return q.face;
 }
 
 function arrayMatches(a: Float32Array, b: Float32Array): boolean {
@@ -544,16 +658,65 @@ function isDefaultCubeFace(q: BakedQuad, dir: Direction): boolean {
   return q.face === dir
     && q.cullFace === dir
     && q.tintIndex < 0
+    && q.uvScale[0] === 16
+    && q.uvScale[1] === 16
     && arrayMatches(q.positions, FULL_FACE_POSITIONS[dir])
     && arrayMatches(q.uvs, FULL_FACE_UVS);
 }
 
-function simpleCubeFromQuads(quads: BakedQuad[], textureHasAlpha?: TextureAlphaMap): SimpleCubeDef | null {
+/** A full cube can contain extra visual quads (such as the grass overlay),
+ * while the greedy path below intentionally accepts only the exact six-face
+ * case. Keep those notions separate so decoration never disables culling. */
+function opaqueFullCubeFromQuads(
+  quads: BakedQuad[], textureHasAlpha?: TextureAlphaMap,
+): boolean {
+  let mask = 0;
+  for (const q of quads) {
+    // Tint affects colour only; a biome-tinted full face still occludes.
+    if (q.face !== q.cullFace
+      || q.uvScale[0] !== 16
+      || q.uvScale[1] !== 16
+      || !arrayMatches(q.positions, FULL_FACE_POSITIONS[q.face])
+      || !arrayMatches(q.uvs, FULL_FACE_UVS)) continue;
+    // Animation changes a sprite frame, not whether its face is solid. Such a
+    // cube must still cull its neighbours (sculk is a notable example).
+    if (textureHasAlpha?.[q.texture]) continue;
+    mask |= 1 << DIRECTION_INDEX[q.face];
+  }
+  return mask === ALL_DIRECTIONS_OCCLUDED;
+}
+
+const OPPOSITE_DIRECTION: Record<Direction, Direction> = {
+  down: 'up', up: 'down', north: 'south', south: 'north', west: 'east', east: 'west',
+};
+
+function faceBounds(q: BakedQuad, dir: Direction): [number, number, number, number] {
+  const [a1, a2] = TANGENTS[dir];
+  let min1 = Infinity, max1 = -Infinity, min2 = Infinity, max2 = -Infinity;
+  for (let i = 0; i < 4; i++) {
+    const v1 = q.positions[i * 3 + a1];
+    const v2 = q.positions[i * 3 + a2];
+    min1 = Math.min(min1, v1); max1 = Math.max(max1, v1);
+    min2 = Math.min(min2, v2); max2 = Math.max(max2, v2);
+  }
+  return [min1, max1, min2, max2];
+}
+
+function faceCovers(candidate: BakedQuad, source: BakedQuad, sourceDirection: Direction): boolean {
+  const [sMin1, sMax1, sMin2, sMax2] = faceBounds(source, sourceDirection);
+  const [nMin1, nMax1, nMin2, nMax2] = faceBounds(candidate, sourceDirection);
+  return nMin1 <= sMin1 + GEOMETRY_EPS && nMax1 >= sMax1 - GEOMETRY_EPS
+    && nMin2 <= sMin2 + GEOMETRY_EPS && nMax2 >= sMax2 - GEOMETRY_EPS;
+}
+
+function simpleCubeFromQuads(
+  quads: BakedQuad[], textureHasAlpha?: TextureAlphaMap, textureAnimationIds?: Record<string, number>,
+): SimpleCubeDef | null {
   if (quads.length !== SECTION_VISIBILITY_DIRECTIONS.length) return null;
   const faces: Partial<SimpleCubeDef> = {};
   for (const q of quads) {
     if (!isDefaultCubeFace(q, q.face)) return null;
-    if (textureHasAlpha?.[q.texture]) return null;
+    if (textureHasAlpha?.[q.texture] || textureAnimationIds?.[q.texture]) return null;
     if (faces[q.face]) return null;
     faces[q.face] = q;
   }
@@ -718,7 +881,6 @@ function emitFluid(
   lx: number, ly: number, lz: number, wx: number, wy: number, wz: number,
 ) {
   const builder = builderFor(builders, fluid.layer ?? 'translucent');
-  const rect = res.atlas[fluid.texture] ?? res.atlas[MISSING_TEXTURE];
   const tint = res.tint(fluid.tint, undefined, view.getBiome(wx, wy, wz), state);
   const above = view.getBlock(wx, wy + 1, wz);
   const aboveSame = isSameFluid(res, fluid.texture, above);
@@ -726,15 +888,30 @@ function emitFluid(
   const sky = view.getSkyLight(wx, wy, wz) / 15;
   const block = view.getBlockLight(wx, wy, wz) / 15;
 
+  // Modern palettes expose the fluid `level` property (0 = source, 1..7 =
+  // horizontal flow, 8..15 = falling flow). A few converted worlds preserve
+  // the same value under a metadata/fluid_level key, so accept those too.
+  const fluidLevel = (s: BlockStateRef): number => {
+    const raw = s.properties.level ?? s.properties.fluid_level ?? s.properties.metadata ?? '0';
+    const level = Number(raw);
+    if (!Number.isFinite(level)) return s.properties.falling === 'true' ? 8 : 0;
+    return Math.max(0, Math.min(15, Math.floor(level)));
+  };
   const fluidLevelHeight = (s: BlockStateRef): number => {
-    const level = Number(s.properties.level ?? '0');
-    if (!Number.isFinite(level) || level <= 0 || level >= 8) return 14 / 16;
+    const level = fluidLevel(s);
+    // FluidState#getHeight uses 8 / 9 for a source or falling fluid. This is
+    // intentionally neither 14/16 nor a full block: the renderer adds a tiny
+    // top-surface offset below, exactly like vanilla's FluidRenderer.
+    if (!Number.isFinite(level) || level <= 0 || level >= 8) return 8 / 9;
     return Math.max(1 / 16, (8 - level) / 9);
   };
   const surfaceHeightAt = (x: number, z: number): number => {
     const s = x === wx && z === wz ? state : view.getBlock(x, wy, z);
     if (!isSameFluid(res, fluid.texture, s)) return 0;
     const a = view.getBlock(x, wy + 1, z);
+    // Cave fluids capped by a full occluder render as a full-height column;
+    // their top is hidden separately by `aboveOccludes` below. Keep this
+    // geometry rule out of the horizontal flow-vector calculation.
     if (isSameFluid(res, fluid.texture, a) || blockOccludes(res, view, x, wy + 1, z)) return 1;
     return fluidLevelHeight(s);
   };
@@ -754,24 +931,85 @@ function emitFluid(
   const hSE = cornerHeight(wx, wz, 1, 1);
   const hSW = cornerHeight(wx, wz, -1, 1);
 
+  // This mirrors FluidState#getFlow closely enough for a mesh renderer: a
+  // lower neighbouring surface pulls the flow toward itself. The sprite
+  // selection must be based on this state, not merely on which face happens
+  // to be exposed, otherwise a sloped/descending top keeps water_still.
+  // Rendering height and fluid velocity are related but not interchangeable.
+  // In particular, a solid cave roof promotes the rendered column to height 1
+  // without imparting horizontal velocity. Using `surfaceHeightAt` here made
+  // a still source next to covered tuff/deepslate/sculk select the flow sprite.
+  const flowHeightAt = (x: number, z: number): number => {
+    const s = x === wx && z === wz ? state : view.getBlock(x, wy, z);
+    if (!isSameFluid(res, fluid.texture, s)) return 0;
+    const aboveState = view.getBlock(x, wy + 1, z);
+    return isSameFluid(res, fluid.texture, aboveState) ? 1 : fluidLevelHeight(s);
+  };
+  const currentFlowHeight = flowHeightAt(wx, wz);
+  const flowSurfaceAt = (x: number, z: number): number => {
+    const neighborState = view.getBlock(x, wy, z);
+    // A solid boundary is not a lower fluid surface. Counting it as height 0
+    // gave every still pool edge a fake outward velocity and selected the
+    // flowing sprite around the entire shoreline.
+    if (!isSameFluid(res, fluid.texture, neighborState) && blockOccludes(res, view, x, wy, z)) {
+      return currentFlowHeight;
+    }
+    return flowHeightAt(x, z);
+  };
+  const flowX = flowSurfaceAt(wx - 1, wz) - flowSurfaceAt(wx + 1, wz);
+  const flowZ = flowSurfaceAt(wx, wz - 1) - flowSurfaceAt(wx, wz + 1);
+  // Vanilla selects the flowing sprite from the horizontal flow vector, not
+  // directly from the encoded fluid level. Equal-height non-source or falling
+  // columns can still have a zero horizontal vector and use the still sprite.
+  const flowingTop = !!fluid.flowTexture
+    && (Math.abs(flowX) > HEIGHT_EPS || Math.abs(flowZ) > HEIGHT_EPS);
+  const flowAngle = Math.atan2(flowZ, flowX) - Math.PI / 2;
+  const flowCos = Math.cos(flowAngle);
+  const flowSin = Math.sin(flowAngle);
+
   const faceUv = (dir: Direction, v: [number, number, number]): [number, number] => {
+    const s = 16;
+    const [v0, v1, v2] = v;
     switch (dir) {
-      case 'down': return [v[0] * 16, 16 - v[2] * 16];
-      case 'up': return [v[0] * 16, v[2] * 16];
-      case 'north': return [16 - v[0] * 16, 16 - v[1] * 16];
-      case 'south': return [v[0] * 16, 16 - v[1] * 16];
-      case 'west': return [v[2] * 16, 16 - v[1] * 16];
-      case 'east': return [16 - v[2] * 16, 16 - v[1] * 16];
+      case 'down': return [v0 * s, s - v2 * s];
+      case 'up': return [v0 * s, v2 * s];
+      case 'north': return [s - v0 * s, s - v1 * s];
+      case 'south': return [v0 * s, s - v1 * s];
+      case 'west': return [v2 * s, s - v1 * s];
+      case 'east': return [s - v2 * s, s - v1 * s];
     }
   };
+  const flowTopUv = (v: [number, number, number]): [number, number] => {
+    // These four coordinates deliberately form vanilla's rotated diamond,
+    // not an affine texture rotation. In particular, the south-east vertex
+    // has `cos - sin` for V; treating it as a square projection was the
+    // source of the discontinuity visible on flowing water.
+    const x = v[0], z = v[2];
+    const s = 8;
+    const q = 4;
+    if (x < 0.5 && z < 0.5) return [s + q * (-flowCos - flowSin), s + q * (-flowCos + flowSin)];
+    if (x < 0.5 && z >= 0.5) return [s + q * (-flowCos + flowSin), s + q * (flowCos + flowSin)];
+    if (x >= 0.5 && z >= 0.5) return [s + q * (flowCos + flowSin), s + q * (flowCos - flowSin)];
+    return [s + q * (flowCos - flowSin), s + q * (-flowCos - flowSin)];
+  };
 
-  const face = (dir: Direction, verts: [number, number, number][]) => {
+  const face = (
+    dir: Direction, verts: [number, number, number][], explicitUvs?: [number, number][],
+  ) => {
+    const texture = dir === 'up'
+      ? (flowingTop ? fluid.flowTexture! : fluid.texture)
+      : dir === 'down'
+        ? fluid.texture
+        : (fluid.flowTexture ?? fluid.texture);
+    const rect = res.atlas[texture] ?? res.atlas[MISSING_TEXTURE];
     const shade = SHADE[dir];
     verts.forEach((v) => {
-      const [u, vv] = atlasUv(rect, ...faceUv(dir, v));
+      const uv = explicitUvs?.[verts.indexOf(v)] ?? (dir === 'up' && flowingTop ? flowTopUv(v) : faceUv(dir, v));
+      const [u, vv] = atlasUv(rect, ...uv);
       builder.vertex(
         lx + v[0], ly + v[1], lz + v[2], u, vv,
         tint[0] * shade, tint[1] * shade, tint[2] * shade, sky, block,
+        undefined, res.textureAnimationIds?.[texture] ?? 0,
       );
     });
     builder.quadIndices();
@@ -792,19 +1030,50 @@ function emitFluid(
     bottomWhenAir: [[number, number, number], [number, number, number]],
     neighborBottom: () => [[number, number, number], [number, number, number]],
   ) => {
+    const inset = (v: [number, number, number]): [number, number, number] => {
+      if (dir === 'north') return [v[0], v[1], v[2] + 0.001];
+      if (dir === 'south') return [v[0], v[1], v[2] - 0.001];
+      if (dir === 'west') return [v[0] + 0.001, v[1], v[2]];
+      if (dir === 'east') return [v[0] - 0.001, v[1], v[2]];
+      return v;
+    };
+    const emitSide = (
+      topA: [number, number, number], topB: [number, number, number],
+      bottomB: [number, number, number], bottomA: [number, number, number],
+    ) => face(dir, [inset(topA), inset(topB), inset(bottomB), inset(bottomA)], sideUvs(topA, topB, bottomB, bottomA));
     const n = neighbor(dir);
     if (isSameFluid(res, fluid.texture, n)) {
       const bottom = neighborBottom();
       const visible = top[0][1] > bottom[0][1] + HEIGHT_EPS || top[1][1] > bottom[1][1] + HEIGHT_EPS;
-      if (visible) face(dir, [top[0], top[1], bottom[1], bottom[0]]);
+      if (visible) emitSide(top[0], top[1], bottom[1], bottom[0]);
     } else {
       const d = DIR_VEC[dir];
       if (blockOccludes(res, view, wx + d[0], wy + d[1], wz + d[2])) return;
-      face(dir, [top[0], top[1], bottomWhenAir[1], bottomWhenAir[0]]);
+      emitSide(top[0], top[1], bottomWhenAir[1], bottomWhenAir[0]);
     }
   };
 
-  if (!aboveSame && !aboveOccludes) face('up', [[0, hNW, 0], [1, hNE, 0], [1, hSE, 1], [0, hSW, 1]]);
+  const sideUvs = (
+    topA: [number, number, number], topB: [number, number, number],
+    bottomB: [number, number, number], bottomA: [number, number, number],
+  ): [number, number][] => {
+    // FluidRenderer maps every exposed side to the lower-left 8×8 region of
+    // the flowing sprite: U 0..8 and V (1-height)*8..8. The winding comes
+    // from the face vertices, so it must not be re-projected by world axis.
+    const vA = (1 - topA[1]) * 8;
+    const vB = (1 - topB[1]) * 8;
+    // `face` stores side vertices in the renderer's counter-clockwise order
+    // (the inverse of FluidRenderer's emission order), hence U is 8..0 here.
+    return [[8, vA], [0, vB], [0, 8], [8, 8]];
+  };
+
+  // Vanilla keeps the fluid surface just inside the block to avoid depth
+  // fighting with an adjacent top face. Apply the same 0.001 offset to all
+  // four corners, including still/source fluids.
+  const topY = (h: number) => Math.max(0, h - 0.001);
+  if (!aboveSame && !aboveOccludes) {
+    face('up', [[0, topY(hNW), 0], [1, topY(hNE), 0], [1, topY(hSE), 1], [0, topY(hSW), 1]]);
+  }
   if (shouldDraw('down')) face('down', [[0, 0, 1], [1, 0, 1], [1, 0, 0], [0, 0, 0]]);
   side('north',
     [[1, hNE, 0], [0, hNW, 0]],
@@ -833,6 +1102,7 @@ export function meshSection(
   res: MesherResources, view: WorldView,
   cx: number, sy: number, cz: number,
   smoothLighting = true,
+  renderInstances: readonly RenderModelInstance[] = [],
 ): MeshSectionResult {
   const infoCache = new Map<string, BlockInfo>();
   const cachedInfo = (name: string): BlockInfo => {
@@ -845,7 +1115,8 @@ export function meshSection(
   };
   const localRes: MesherResources = { ...res, info: cachedInfo };
   const cachedView = new SectionViewCache(localRes, view, cx, sy, cz);
-  if (cachedView.isSealedOccluderSection()) return { layers: {}, visibility: 0 };
+  const hasRenderInstances = renderInstances.some((instance) => Math.floor(instance.y / 16) === sy);
+  if (cachedView.isSealedOccluderSection() && !hasRenderInstances) return { layers: {}, visibility: 0 };
   const textureIds = new Map<string, number>();
   const textureKeyOf = (texture: string): number => {
     let id = textureIds.get(texture);
@@ -862,10 +1133,13 @@ export function meshSection(
       const bi = cachedInfo(state.name);
       const blockLayer = bi.layer === 'opaqueTiled' ? 'opaque' : bi.layer;
       const waterlogged = state.properties.waterlogged === 'true' || !!bi.waterlogged;
+      const fullOccluder = bi.occludes
+        && opaqueFullCubeFromQuads(localRes.baker.getQuads(state, 0), localRes.textureHasAlpha);
       hit = {
         bi,
         blockLayer,
         waterlogged,
+        fullOccluder,
         simpleEligible: !waterlogged
           && blockLayer === 'opaque'
           && bi.occludes
@@ -875,6 +1149,23 @@ export function meshSection(
       metaCache.set(state, hit);
     }
     return hit;
+  };
+  const faceOccluded = (q: BakedQuad, state: BlockStateRef, x: number, y: number, z: number): boolean => {
+    if (!q.cullFace) return false;
+    const d = DIR_VEC[q.cullFace];
+    const nx = x + d[0], ny = y + d[1], nz = z + d[2];
+    if (cachedView.occludesLocal(nx, ny, nz)) return true;
+    const neighbor = cachedView.blockLocal(nx, ny, nz);
+    if (AIR_NAMES.has(neighbor.name)) return false;
+    const nInfo = cachedInfo(neighbor.name);
+    const sameTranslucent = cachedInfo(state.name).layer === 'translucent' && neighbor.name === state.name;
+    if (nInfo.layer === 'translucent' && !sameTranslucent) return false;
+    const opposite = OPPOSITE_DIRECTION[q.cullFace];
+    const neighborQuads = localRes.baker.getQuads(neighbor, hash3(nx + ox, ny + oy, nz + oz));
+    return neighborQuads.some((candidate) => candidate.face === opposite
+      && candidate.cullFace === opposite
+      && (sameTranslucent || !localRes.textureHasAlpha?.[candidate.texture])
+      && faceCovers(candidate, q, q.cullFace!));
   };
   const builders: MeshBuilderStore = {};
   const greedyGrids = new Array<GreedyGrid | null>(6 * 17).fill(null);
@@ -886,7 +1177,7 @@ export function meshSection(
         const state = cachedView.blockLocal(x, y, z);
         if (AIR_NAMES.has(state.name)) continue;
         const meta = metaOf(state);
-        const { bi, blockLayer, waterlogged } = meta;
+        const { bi, blockLayer, waterlogged, fullOccluder } = meta;
 
         if (bi.fluid) {
           emitFluid(localRes, cachedView, builders, bi.fluid, state, x, y, z, wx, wy, wz);
@@ -897,7 +1188,7 @@ export function meshSection(
           if (water) emitFluid(localRes, cachedView, builders, water, { name: 'minecraft:water', properties: { level: '0' } }, x, y, z, wx, wy, wz);
         }
         let occludedFaceMask = -1;
-        if (!waterlogged && bi.occludes) {
+        if (!waterlogged && fullOccluder) {
           occludedFaceMask = 0;
           for (const dir of SECTION_VISIBILITY_DIRECTIONS) {
             const d = DIR_VEC[dir];
@@ -907,7 +1198,7 @@ export function meshSection(
         }
 
         const quads = localRes.baker.getQuads(state, hash3(wx, wy, wz));
-        const simple = meta.simpleEligible ? cachedSimpleCube(quads, localRes.textureHasAlpha) : null;
+        const simple = meta.simpleEligible ? cachedSimpleCube(quads, localRes.textureHasAlpha, localRes.textureAnimationIds) : null;
         if (simple) {
           for (const dir of SECTION_VISIBILITY_DIRECTIONS) {
             const q = simple[dir];
@@ -928,12 +1219,9 @@ export function meshSection(
 
         for (const q of quads) {
           if (q.cullFace) {
-            const d = DIR_VEC[q.cullFace];
             if (occludedFaceMask >= 0
               ? (occludedFaceMask & (1 << DIRECTION_INDEX[q.cullFace])) !== 0
-              : cachedView.occludesLocal(x + d[0], y + d[1], z + d[2])) continue;
-            const n = cachedView.blockLocal(x + d[0], y + d[1], z + d[2]);
-            if (bi.layer === 'translucent' && n.name === state.name) continue;
+              : faceOccluded(q, state, x, y, z)) continue;
           }
           const tint = q.tintIndex >= 0
             ? localRes.tint(bi.tint, bi.fixedTint, cachedView.getBiome(wx, wy, wz), state)
@@ -944,9 +1232,24 @@ export function meshSection(
       }
     }
   }
+  for (const instance of renderInstances) {
+    if (Math.floor(instance.y / 16) !== sy) continue;
+    const quads = localRes.baker.getModelQuads(instance.model);
+    const lx = instance.x - ox;
+    const ly = instance.y - oy;
+    const lz = instance.z - oz;
+    const builder = builderFor(builders, specialLayer(instance.layer));
+    for (const quad of quads) {
+      const q = transformedRenderQuad(quad, instance);
+      emitQuad(localRes, cachedView, builder, q, lx, ly, lz, instance.x, instance.y, instance.z, WHITE, false);
+    }
+  }
   if (greedyGrids.some(Boolean)) flushGreedyGrids(greedyGrids, builderFor(builders, 'opaqueTiled'));
   const layers: SectionMeshes = {};
-  for (const layer of ['opaque', 'opaqueTiled', 'cutout', 'translucent'] as RenderLayer[]) {
+  for (const layer of [
+    'opaque', 'opaqueTiled', 'cutout', 'translucent',
+    'specialOpaque', 'specialCutout', 'specialTranslucent',
+  ] as RenderLayer[]) {
     const builder = builders[layer];
     if (builder && !builder.empty) layers[layer] = builder.build();
   }

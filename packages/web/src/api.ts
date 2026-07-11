@@ -38,13 +38,14 @@ export interface TopMapDimensionManifest extends DimensionCapabilities {
   topMap?: TopMapTileSetManifest;
 }
 
-export interface ChunkPayload extends ChunkHashPayload { data?: Uint8Array }
+export interface ChunkPayload extends ChunkHashPayload { data?: Uint8Array; entities?: Uint8Array }
 export interface ChunkHashPayload {
   cx: number;
   cz: number;
   hash?: string;
   fileHash?: string;
   nbtHash?: string;
+  entityHash?: string;
   source?: 'region' | 'chunk';
   region?: { x: number; z: number };
   missing?: boolean;

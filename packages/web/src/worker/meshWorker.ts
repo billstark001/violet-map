@@ -1,9 +1,10 @@
 /// <reference lib="webworker" />
 import {
   BlockInfo, ChunkColumn, ChunkNeighborhood, MeshBuffers, MesherResources, ModelBaker,
-  computeColumnLight, hexToRgb, meshLodChunk, meshSection, parseChunkColumn,
-  resolveBiomeColors, type BlockStateRef, type Rgb, type TintType,
+  appendChunkEntities, computeColumnLight, hexToRgb, meshLodChunk, meshSection, parseChunkColumn,
+  resolveBiomeColors, type BlockStateRef, type RendererDefinitions, type RendererModelDef, type Rgb, type TintType,
 } from '@violet-map/core';
+import type { RenderModelInstance } from '@violet-map/core';
 import { parseNbt } from '@violet-map/core/nbt';
 import type { SectionMeshMsg, WorkerRequest, WorkerResponse } from './protocol';
 
@@ -25,6 +26,7 @@ let avgColors: Record<string, [number, number, number]> = {};
 let baker: ModelBaker;
 let blockInfo: Record<string, BlockInfo> = {};
 let biomeColors: ReturnType<typeof resolveBiomeColors> = {};
+let rendererDefinitions: RendererDefinitions | undefined;
 
 const columns = new Map<string, { col: ChunkColumn; hasSkyLight: boolean; litSky: boolean; litBlock: boolean }>();
 const topColorCache = new Map<string, Rgb>();
@@ -169,6 +171,7 @@ function transfersOf(buffers: (MeshBuffers | null | undefined)[]): Transferable[
     t.push(b.positions.buffer, b.colors.buffer, b.lights.buffer, b.indices.buffer);
     if (b.uvs) t.push(b.uvs.buffer);
     if (b.atlasRects) t.push(b.atlasRects.buffer);
+    if (b.animations) t.push(b.animations.buffer);
   }
   return t;
 }
@@ -176,7 +179,7 @@ function transfersOf(buffers: (MeshBuffers | null | undefined)[]): Transferable[
 function meshBytes(b: MeshBuffers | null | undefined): number {
   if (!b) return 0;
   return b.positions.byteLength + (b.uvs?.byteLength ?? 0) + (b.atlasRects?.byteLength ?? 0)
-    + b.colors.byteLength + b.lights.byteLength + b.indices.byteLength;
+    + b.colors.byteLength + b.lights.byteLength + (b.animations?.byteLength ?? 0) + b.indices.byteLength;
 }
 
 function sectionBytes(sections: SectionMeshMsg[]): number {
@@ -187,8 +190,80 @@ function sectionBytes(sections: SectionMeshMsg[]): number {
   return total;
 }
 
-function parseChunkPayload(chunk: ArrayBuffer): ChunkColumn {
-  return parseChunkColumn(parseNbt(new Uint8Array(chunk)));
+function parseChunkPayload(chunk: ArrayBuffer, entities?: ArrayBuffer): ChunkColumn {
+  const col = parseChunkColumn(parseNbt(new Uint8Array(chunk)));
+  if (entities) {
+    // Entity-region data is optional enrichment; a malformed sidecar must not
+    // prevent the terrain chunk itself from rendering.
+    try { appendChunkEntities(col, parseNbt(new Uint8Array(entities))); } catch { /* ignore */ }
+  }
+  return col;
+}
+
+function matchesVariant(key: string, values: Record<string, unknown>): boolean {
+  if (!key) return true;
+  return key.split(',').every((pair) => {
+    const [name, expected] = pair.split('=');
+    return expected.split('|').includes(String(values[name] ?? ''));
+  });
+}
+
+function resolveRenderer(definition: RendererModelDef, values: Record<string, unknown>): RendererModelDef {
+  for (const [key, patch] of Object.entries(definition.variants ?? {})) {
+    if (matchesVariant(key, values)) return { ...definition, ...patch, variants: undefined };
+  }
+  return definition;
+}
+
+function layerOf(value: unknown): 'opaque' | 'cutout' | 'translucent' {
+  return value === 'translucent' || value === 'cutout' ? value : 'opaque';
+}
+
+function rotationOf(definition: RendererModelDef, values: Record<string, unknown>, yaw?: number): number {
+  if (definition.useEntityYaw && Number.isFinite(yaw)) return Math.round((yaw ?? 0) / 90) * 90;
+  if (typeof definition.rotationY === 'number') return definition.rotationY;
+  if (definition.rotationY && typeof definition.rotationY === 'object') {
+    return definition.rotationY.values[String(values[definition.rotationY.property] ?? '')] ?? 0;
+  }
+  return 0;
+}
+
+function textureOf(definition: RendererModelDef, blockName?: string): string | undefined {
+  const texture = (blockName ? definition.textureByBlock?.[blockName] : undefined) ?? definition.texture;
+  return typeof texture === 'string' && texture ? texture : undefined;
+}
+
+/** Resolve all render objects from resource registrations. There are no
+ * built-in special block or entity ids in this code path. */
+function modelInstances(col: ChunkColumn): RenderModelInstance[] {
+  const definitions = rendererDefinitions;
+  if (!definitions) return [];
+  const out: RenderModelInstance[] = [];
+  for (const object of col.blockEntities) {
+    const definition = definitions.blockEntities?.[object.id];
+    if (!definition?.model) continue;
+    const state = col.getBlock(Math.floor(object.x), Math.floor(object.y), Math.floor(object.z));
+    const values: Record<string, unknown> = { ...object.data, ...state.properties, block: state.name };
+    const resolved = resolveRenderer(definition, values);
+    if (!resolved.model) continue;
+    out.push({
+      model: resolved.model, x: object.x, y: object.y, z: object.z,
+      layer: layerOf(resolved.layer), offset: resolved.offset, scale: resolved.scale,
+      rotationY: rotationOf(resolved, values), texture: textureOf(resolved, state.name),
+    });
+  }
+  for (const object of col.entities) {
+    const definition = definitions.entities?.[object.id];
+    if (!definition?.model) continue;
+    const resolved = resolveRenderer(definition, object.data);
+    if (!resolved.model) continue;
+    out.push({
+      model: resolved.model, x: object.x, y: object.y, z: object.z,
+      layer: layerOf(resolved.layer), offset: resolved.offset, scale: resolved.scale,
+      rotationY: rotationOf(resolved, object.data, object.yaw), texture: textureOf(resolved),
+    });
+  }
+  return out;
 }
 
 const post = (msg: WorkerResponse, transfer: Transferable[] = []) =>
@@ -200,16 +275,24 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
     case 'init': {
       baker = new ModelBaker(msg.bundle);
       blockInfo = msg.blockInfo;
+      rendererDefinitions = msg.bundle.renderers;
       avgColors = msg.avgColors;
       biomeColors = resolveBiomeColors(msg.biomes, msg.grassColormap, msg.foliageColormap);
-      res = { baker, info: infoOf, tint: tintOf, atlas: msg.atlasIndex, textureHasAlpha: msg.textureHasAlpha };
+      res = {
+        baker,
+        info: infoOf,
+        tint: tintOf,
+        atlas: msg.atlasIndex,
+        textureHasAlpha: msg.textureHasAlpha,
+        textureAnimationIds: msg.textureAnimationIds,
+      };
       topColorCache.clear();
       break;
     }
     case 'chunk': {
       const started = performance.now();
       try {
-        const col = parseChunkPayload(msg.chunk);
+        const col = parseChunkPayload(msg.chunk, msg.entities);
         columns.set(msg.key, {
           col,
           hasSkyLight: msg.dimension.hasSkyLight,
@@ -255,10 +338,12 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
         break;
       }
       const { col } = entry;
+      const instances = modelInstances(col);
       const sections: SectionMeshMsg[] = [];
       for (let sy = col.minSectionY; sy <= col.maxSectionY; sy++) {
         const s = col.sections.get(sy);
-        const result = s && !s.isEmpty ? meshSection(res, hood, col.x, sy, col.z) : null;
+        const hasInstances = instances.some((instance) => Math.floor(instance.y / 16) === sy);
+        const result = s && (!s.isEmpty || hasInstances) ? meshSection(res, hood, col.x, sy, col.z, true, instances) : null;
         const layers = result?.layers ?? {};
         const visibility = result?.visibility ?? SECTION_VISIBILITY_ALL;
         if (Object.keys(layers).length || visibility > 0) sections.push({ sy, layers, visibility });

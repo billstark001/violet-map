@@ -238,6 +238,8 @@ interface FullSectionRender {
   cz: number;
   visibility: number;
   meshes: THREE.Mesh[];
+  specialMeshes: THREE.Mesh[];
+  visible: boolean;
 }
 
 interface ChunkEntry extends ChunkSchedulerEntry {
@@ -340,6 +342,7 @@ export class ChunkManager {
   private chunkCoverage: ChunkSourceCoverage | null = null;
   private topDownView = false;
   private topClipRange: TopClipRange = { minY: CHUNK_WORLD_MIN_Y, maxY: CHUNK_WORLD_MAX_Y };
+  private latestCamera: ChunkSchedulerCamera | null = null;
   readonly root = new THREE.Group();
   onStats?: (s: ChunkSchedulerStats) => void;
 
@@ -411,11 +414,19 @@ export class ChunkManager {
   private broadcast(msg: WorkerRequest) {
     for (const worker of this.workers) worker.postMessage(msg);
   }
-  private sendChunkToWorkers(msg: Omit<Extract<WorkerRequest, { type: 'chunk' }>, 'chunk'>, chunk: ArrayBuffer) {
+  private sendChunkToWorkers(
+    msg: Omit<Extract<WorkerRequest, { type: 'chunk' }>, 'chunk' | 'entities'>,
+    chunk: ArrayBuffer,
+    entities?: ArrayBuffer,
+  ) {
     const last = this.workers.length - 1;
     for (let i = 0; i < this.workers.length; i++) {
       const copy = i === last ? chunk : chunk.slice(0);
-      this.workers[i].postMessage({ ...msg, chunk: copy } satisfies WorkerRequest, [copy]);
+      const entityCopy = entities ? (i === last ? entities : entities.slice(0)) : undefined;
+      this.workers[i].postMessage(
+        { ...msg, chunk: copy, ...(entityCopy ? { entities: entityCopy } : {}) } satisfies WorkerRequest,
+        entityCopy ? [copy, entityCopy] : [copy],
+      );
     }
   }
 
@@ -622,6 +633,7 @@ export class ChunkManager {
     topDownView = false,
     topClipRange?: TopClipRange,
   ) {
+    this.latestCamera = camera;
     const nextTopClipRange = normalizeTopClipRange(topClipRange);
     const clipChanged = nextTopClipRange.minY !== this.topClipRange.minY || nextTopClipRange.maxY !== this.topClipRange.maxY;
     const viewChanged = this.topDownView !== topDownView;
@@ -673,6 +685,7 @@ export class ChunkManager {
     this.flushFetchQueue();
     this.flushMeshQueue();
     this.updateFullSectionVisibility(camera);
+    this.updateSpecialRenderVisibility(camera);
     if (isDebugLoggingEnabled()) {
       debugLog('chunk-manager', 'update', {
         world: this.opts.world,
@@ -1546,7 +1559,9 @@ export class ChunkManager {
     e.workerReadyMask = 0;
     this.chunkBytesFetched += payload.data.byteLength;
     const chunk = this.chunkBuffer(payload.data);
-    this.sendChunkToWorkers({ type: 'chunk', key, cx: e.cx, cz: e.cz, dimension: this.opts.dimensionDef }, chunk);
+    const entities = payload.entities ? this.chunkBuffer(payload.entities) : undefined;
+    if (payload.entities) this.chunkBytesFetched += payload.entities.byteLength;
+    this.sendChunkToWorkers({ type: 'chunk', key, cx: e.cx, cz: e.cz, dimension: this.opts.dimensionDef }, chunk, entities);
   }
 
   private async fetchBatch(keys: string[]) {
@@ -1689,6 +1704,7 @@ export class ChunkManager {
 
   private setAllFullSectionsVisible(visible: boolean) {
     for (const section of this.fullSectionIndex.values()) {
+      section.visible = visible;
       for (const mesh of section.meshes) mesh.visible = visible;
     }
   }
@@ -1707,6 +1723,7 @@ export class ChunkManager {
   private applyFullSectionTopClip() {
     for (const section of this.fullSectionIndex.values()) {
       const visible = this.fullSectionWithinTopClip(section.sy);
+      section.visible = visible;
       for (const mesh of section.meshes) mesh.visible = visible;
     }
   }
@@ -1777,7 +1794,27 @@ export class ChunkManager {
 
     for (const section of this.fullSectionIndex.values()) {
       const show = visible.has(section.key);
+      section.visible = show;
       for (const mesh of section.meshes) mesh.visible = show;
+    }
+  }
+
+  private specialRenderRadiusChunks(): number {
+    // Scheduler presets map this radius from potato (2) through extreme (6).
+    // It deliberately follows the full-detail disk rather than view distance.
+    return Math.max(0, Math.floor(this.opts.scheduling?.criticalNearRadiusChunks ?? 4));
+  }
+
+  private updateSpecialRenderVisibility(camera: ChunkSchedulerCamera) {
+    const radius = this.specialRenderRadiusChunks();
+    const centerCx = Math.floor(camera.position.x / 16);
+    const centerCz = Math.floor(camera.position.z / 16);
+    const radius2 = radius * radius;
+    for (const section of this.fullSectionIndex.values()) {
+      const dx = section.cx - centerCx;
+      const dz = section.cz - centerCz;
+      const allowed = section.visible && dx * dx + dz * dz <= radius2;
+      for (const mesh of section.specialMeshes) mesh.visible = allowed;
     }
   }
 
@@ -1791,6 +1828,7 @@ export class ChunkManager {
     let meshBytes = 0;
     for (const s of sections) {
       const sectionMeshes: THREE.Mesh[] = [];
+      const specialMeshes: THREE.Mesh[] = [];
       const sectionVisible = this.fullSectionWithinTopClip(s.sy);
       for (const [layer, buffers] of Object.entries(s.layers) as [RenderLayer, MeshBuffers][]) {
         if (!this.hasRenderableGeometry(buffers)) continue;
@@ -1804,6 +1842,7 @@ export class ChunkManager {
         mesh.updateMatrix();
         group.add(mesh);
         sectionMeshes.push(mesh);
+        if (layer === 'specialOpaque' || layer === 'specialCutout' || layer === 'specialTranslucent') specialMeshes.push(mesh);
       }
       const section: FullSectionRender = {
         key: this.sectionKey(e.cx, s.sy, e.cz),
@@ -1812,6 +1851,8 @@ export class ChunkManager {
         cz: e.cz,
         visibility: s.visibility ?? SECTION_VISIBILITY_ALL,
         meshes: sectionMeshes,
+        specialMeshes,
+        visible: sectionVisible,
       };
       e.fullSections.push(section);
       this.fullSectionIndex.set(section.key, section);
@@ -1822,6 +1863,7 @@ export class ChunkManager {
       this.root.add(group);
       e.group = group;
     }
+    if (this.latestCamera) this.updateSpecialRenderVisibility(this.latestCamera);
     e.displayed = 'full';
     e.displayedVersion = version;
     e.displayedLodStep = 0;
@@ -1878,6 +1920,7 @@ export class ChunkManager {
     g.setAttribute('position', new THREE.BufferAttribute(b.positions, 3, true));
     if (b.uvs) g.setAttribute('uv', new THREE.BufferAttribute(b.uvs, 2, !tiled));
     if (b.atlasRects) g.setAttribute('atlasRect', new THREE.BufferAttribute(b.atlasRects, 4, true));
+    if (b.animations) g.setAttribute('animationId', new THREE.BufferAttribute(b.animations, 1, false));
     g.setAttribute('tintColor', new THREE.BufferAttribute(b.colors, 3, true));
     g.setAttribute('lightData', new THREE.BufferAttribute(b.lights, 2, true));
     g.setIndex(new THREE.BufferAttribute(b.indices, 1));
@@ -1900,7 +1943,7 @@ export class ChunkManager {
     return {
       geometry: g,
       bytes: b.positions.byteLength + (b.uvs?.byteLength ?? 0) + (b.atlasRects?.byteLength ?? 0)
-        + b.colors.byteLength + b.lights.byteLength + b.indices.byteLength,
+        + b.colors.byteLength + b.lights.byteLength + (b.animations?.byteLength ?? 0) + b.indices.byteLength,
     };
   }
 

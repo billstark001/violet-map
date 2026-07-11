@@ -1,0 +1,13 @@
+{
+  "textures": { "all": "minecraft:block/oak_planks" },
+  "elements": [
+    { "from": [1, 4, 7], "to": [15, 15, 9], "faces": {
+      "down": { "texture": "#all" }, "up": { "texture": "#all" }, "north": { "texture": "#all" },
+      "south": { "texture": "#all" }, "west": { "texture": "#all" }, "east": { "texture": "#all" }
+    } },
+    { "from": [7, 0, 7], "to": [9, 4, 9], "faces": {
+      "down": { "texture": "#all" }, "up": { "texture": "#all" }, "north": { "texture": "#all" },
+      "south": { "texture": "#all" }, "west": { "texture": "#all" }, "east": { "texture": "#all" }
+    } }
+  ]
+}

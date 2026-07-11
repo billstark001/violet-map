@@ -188,7 +188,9 @@ export const config = {
   rootUsername: process.env.ROOT_USERNAME?.trim() || undefined,
   rootPassword: process.env.ROOT_PASSWORD || undefined,
   /** 资源目录列表（后者覆盖前者），每个目录下为 <namespace>/blockstates|models|textures */
-  assetsDirs: stringListConfig('ASSETS_DIRS', ['data/assets'], 'assetsDirs', 'assets.dirs'),
+  // Tracked renderer defaults are loaded before an extracted/user resource
+  // pack, allowing packs to replace any registration or model normally.
+  assetsDirs: stringListConfig('ASSETS_DIRS', ['data-defaults/assets', 'data/assets'], 'assetsDirs', 'assets.dirs'),
   dataDir,
   mcVersion,
   mcDataVersion: stringConfig('MC_DATA_VERSION', mcVersion, 'mcDataVersion', 'minecraft.dataVersion'),

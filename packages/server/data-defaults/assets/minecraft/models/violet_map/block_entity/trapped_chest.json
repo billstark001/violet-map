@@ -1,0 +1,4 @@
+{
+  "parent": "minecraft:violet_map/block_entity/chest",
+  "textures": { "all": "minecraft:entity/chest/trapped" }
+}

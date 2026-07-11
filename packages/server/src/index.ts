@@ -51,8 +51,8 @@ function msgpackBody(value: unknown): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
-function publicChunkMeta<T extends { sourcePath?: string }>(value: T): Omit<T, 'sourcePath'> {
-  const { sourcePath: _sourcePath, ...rest } = value;
+function publicChunkMeta<T extends { sourcePath?: string; entitySourcePath?: string }>(value: T): Omit<T, 'sourcePath' | 'entitySourcePath'> {
+  const { sourcePath: _sourcePath, entitySourcePath: _entitySourcePath, ...rest } = value;
   return rest;
 }
 

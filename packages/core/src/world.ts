@@ -4,6 +4,17 @@ import { BlockStateRef, normalizeId } from './types.js';
 export const AIR: BlockStateRef = Object.freeze({ name: 'minecraft:air', properties: {} });
 export const AIR_NAMES = new Set(['minecraft:air', 'minecraft:cave_air', 'minecraft:void_air']);
 
+/** The small NBT subset needed by resource-driven renderers. Keeping the
+ * original compound lets resource registrations grow without a parser change. */
+export interface WorldRenderObject {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  data: Record<string, unknown>;
+  yaw?: number;
+}
+
 /** 1.16+ 紧凑位数组（值不跨 long）。 */
 export class BitArray {
   private readonly valuesPerLong: number;
@@ -82,6 +93,8 @@ export class ChunkColumn {
   hasStoredLight = false;
   hasStoredBlockLight = false;
   hasStoredSkyLight = false;
+  readonly blockEntities: WorldRenderObject[] = [];
+  readonly entities: WorldRenderObject[] = [];
   constructor(readonly x: number, readonly z: number) {}
 
   get minY() { return this.minSectionY * 16; }
@@ -129,6 +142,45 @@ export class ChunkColumn {
       this.sections.set(sy, s);
     }
     return s;
+  }
+}
+
+function numberAt(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function listValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function parseRenderObject(value: unknown, blockEntity: boolean): WorldRenderObject | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const data = value as Record<string, unknown>;
+  const rawId = data.id ?? data.Id;
+  if (typeof rawId !== 'string' || !rawId) return null;
+  const pos = listValue(data.Pos ?? data.pos);
+  const x = numberAt(data.x ?? data.X) ?? numberAt(pos[0]);
+  const y = numberAt(data.y ?? data.Y) ?? numberAt(pos[1]);
+  const z = numberAt(data.z ?? data.Z) ?? numberAt(pos[2]);
+  if (x === undefined || y === undefined || z === undefined) return null;
+  const rotation = listValue(data.Rotation ?? data.rotation);
+  const yaw = numberAt(rotation[0]);
+  return {
+    id: normalizeId(rawId),
+    // Block entities are stored on integer block coordinates. Entities retain
+    // their sub-block position exactly as saved.
+    x: blockEntity ? Math.floor(x) : x,
+    y: blockEntity ? Math.floor(y) : y,
+    z: blockEntity ? Math.floor(z) : z,
+    data,
+    ...(yaw === undefined ? {} : { yaw }),
+  };
+}
+
+function appendRenderObjects(target: WorldRenderObject[], value: unknown, blockEntity: boolean) {
+  for (const entry of listValue(value)) {
+    const object = parseRenderObject(entry, blockEntity);
+    if (object) target.push(object);
   }
 }
 
@@ -204,5 +256,15 @@ export function parseChunkColumn(root: any): ChunkColumn {
       calibrateHeightMap(col);
     }
   }
+  // Names changed over time; supporting both costs little and lets modern
+  // renderer resources work for legacy chunks too.
+  appendRenderObjects(col.blockEntities, r.block_entities ?? r.BlockEntities ?? r.TileEntities, true);
+  appendRenderObjects(col.entities, r.entities ?? r.Entities, false);
   return col;
+}
+
+/** Add entities from a modern standalone entities-region chunk. */
+export function appendChunkEntities(col: ChunkColumn, root: any): void {
+  const r = root.Level ?? root;
+  appendRenderObjects(col.entities, r.entities ?? r.Entities, false);
 }

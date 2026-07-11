@@ -1,0 +1,76 @@
+{
+  "blockEntities": {
+    "minecraft:chest": {
+      "model": "minecraft:violet_map/block_entity/chest",
+      "layer": "opaque",
+      "texture": "minecraft:entity/chest/normal",
+      "variants": {
+        "type=left": { "model": "minecraft:violet_map/block_entity/chest_right", "texture": "minecraft:entity/chest/normal_left" },
+        "type=right": { "model": "minecraft:violet_map/block_entity/chest_left", "texture": "minecraft:entity/chest/normal_right" }
+      },
+      "rotationY": { "property": "facing", "values": { "north": 180, "south": 0, "west": 90, "east": 270 } }
+    },
+    "minecraft:trapped_chest": {
+      "model": "minecraft:violet_map/block_entity/trapped_chest",
+      "layer": "opaque",
+      "texture": "minecraft:entity/chest/trapped",
+      "variants": {
+        "type=left": { "model": "minecraft:violet_map/block_entity/chest_right", "texture": "minecraft:entity/chest/trapped_left" },
+        "type=right": { "model": "minecraft:violet_map/block_entity/chest_left", "texture": "minecraft:entity/chest/trapped_right" }
+      },
+      "rotationY": { "property": "facing", "values": { "north": 180, "south": 0, "west": 90, "east": 270 } }
+    },
+    "minecraft:ender_chest": {
+      "model": "minecraft:violet_map/block_entity/ender_chest",
+      "layer": "opaque",
+      "texture": "minecraft:entity/chest/ender",
+      "rotationY": { "property": "facing", "values": { "north": 180, "south": 0, "west": 90, "east": 270 } }
+    },
+    "minecraft:sign": {
+      "model": "minecraft:violet_map/block_entity/sign_standing",
+      "layer": "cutout",
+      "textureByBlock": {
+        "minecraft:oak_sign": "minecraft:entity/signs/oak", "minecraft:spruce_sign": "minecraft:entity/signs/spruce",
+        "minecraft:birch_sign": "minecraft:entity/signs/birch", "minecraft:jungle_sign": "minecraft:entity/signs/jungle",
+        "minecraft:acacia_sign": "minecraft:entity/signs/acacia", "minecraft:dark_oak_sign": "minecraft:entity/signs/dark_oak",
+        "minecraft:mangrove_sign": "minecraft:entity/signs/mangrove", "minecraft:cherry_sign": "minecraft:entity/signs/cherry",
+        "minecraft:bamboo_sign": "minecraft:entity/signs/bamboo", "minecraft:crimson_sign": "minecraft:entity/signs/crimson",
+        "minecraft:warped_sign": "minecraft:entity/signs/warped", "minecraft:pale_oak_sign": "minecraft:entity/signs/pale_oak"
+        ,"minecraft:oak_wall_sign": "minecraft:entity/signs/oak", "minecraft:spruce_wall_sign": "minecraft:entity/signs/spruce",
+        "minecraft:birch_wall_sign": "minecraft:entity/signs/birch", "minecraft:jungle_wall_sign": "minecraft:entity/signs/jungle",
+        "minecraft:acacia_wall_sign": "minecraft:entity/signs/acacia", "minecraft:dark_oak_wall_sign": "minecraft:entity/signs/dark_oak",
+        "minecraft:mangrove_wall_sign": "minecraft:entity/signs/mangrove", "minecraft:cherry_wall_sign": "minecraft:entity/signs/cherry",
+        "minecraft:bamboo_wall_sign": "minecraft:entity/signs/bamboo", "minecraft:crimson_wall_sign": "minecraft:entity/signs/crimson",
+        "minecraft:warped_wall_sign": "minecraft:entity/signs/warped", "minecraft:pale_oak_wall_sign": "minecraft:entity/signs/pale_oak"
+      },
+      "rotationY": { "property": "rotation", "values": { "0": 0, "1": 22.5, "2": 45, "3": 67.5, "4": 90, "5": 112.5, "6": 135, "7": 157.5, "8": 180, "9": 202.5, "10": 225, "11": 247.5, "12": 270, "13": 292.5, "14": 315, "15": 337.5 } },
+      "variants": {
+        "rotation=": { "model": "minecraft:violet_map/block_entity/sign_wall", "rotationY": { "property": "facing", "values": { "north": 180, "south": 0, "west": 90, "east": 270 } } }
+      }
+    },
+    "minecraft:hanging_sign": {
+      "model": "minecraft:violet_map/block_entity/hanging_sign_ceiling",
+      "layer": "cutout",
+      "textureByBlock": {
+        "minecraft:oak_hanging_sign": "minecraft:entity/signs/hanging/oak", "minecraft:spruce_hanging_sign": "minecraft:entity/signs/hanging/spruce",
+        "minecraft:birch_hanging_sign": "minecraft:entity/signs/hanging/birch", "minecraft:jungle_hanging_sign": "minecraft:entity/signs/hanging/jungle",
+        "minecraft:acacia_hanging_sign": "minecraft:entity/signs/hanging/acacia", "minecraft:dark_oak_hanging_sign": "minecraft:entity/signs/hanging/dark_oak",
+        "minecraft:mangrove_hanging_sign": "minecraft:entity/signs/hanging/mangrove", "minecraft:cherry_hanging_sign": "minecraft:entity/signs/hanging/cherry",
+        "minecraft:bamboo_hanging_sign": "minecraft:entity/signs/hanging/bamboo", "minecraft:crimson_hanging_sign": "minecraft:entity/signs/hanging/crimson",
+        "minecraft:warped_hanging_sign": "minecraft:entity/signs/hanging/warped", "minecraft:pale_oak_hanging_sign": "minecraft:entity/signs/hanging/pale_oak",
+        "minecraft:oak_wall_hanging_sign": "minecraft:entity/signs/hanging/oak", "minecraft:spruce_wall_hanging_sign": "minecraft:entity/signs/hanging/spruce",
+        "minecraft:birch_wall_hanging_sign": "minecraft:entity/signs/hanging/birch", "minecraft:jungle_wall_hanging_sign": "minecraft:entity/signs/hanging/jungle",
+        "minecraft:acacia_wall_hanging_sign": "minecraft:entity/signs/hanging/acacia", "minecraft:dark_oak_wall_hanging_sign": "minecraft:entity/signs/hanging/dark_oak",
+        "minecraft:mangrove_wall_hanging_sign": "minecraft:entity/signs/hanging/mangrove", "minecraft:cherry_wall_hanging_sign": "minecraft:entity/signs/hanging/cherry",
+        "minecraft:bamboo_wall_hanging_sign": "minecraft:entity/signs/hanging/bamboo", "minecraft:crimson_wall_hanging_sign": "minecraft:entity/signs/hanging/crimson",
+        "minecraft:warped_wall_hanging_sign": "minecraft:entity/signs/hanging/warped", "minecraft:pale_oak_wall_hanging_sign": "minecraft:entity/signs/hanging/pale_oak"
+      },
+      "rotationY": { "property": "rotation", "values": { "0": 0, "1": 22.5, "2": 45, "3": 67.5, "4": 90, "5": 112.5, "6": 135, "7": 157.5, "8": 180, "9": 202.5, "10": 225, "11": 247.5, "12": 270, "13": 292.5, "14": 315, "15": 337.5 } },
+      "variants": {
+        "attached=true": { "model": "minecraft:violet_map/block_entity/hanging_sign_middle" },
+        "attached=": { "model": "minecraft:violet_map/block_entity/hanging_sign_wall", "rotationY": { "property": "facing", "values": { "north": 180, "south": 0, "west": 90, "east": 270 } } }
+      }
+    }
+  },
+  "entities": {}
+}

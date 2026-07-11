@@ -192,9 +192,40 @@ pnpm --filter @violet-map/assets dev --help
 
 `bake-topmap` supports `--approach top|bottom` and `--light-mode stored-first|rebake`.
 
+### Resource-driven special renderers
+
+Animated block and fluid textures use their resource-pack `.png.mcmeta` animation
+definitions. Special blocks and entities are declared, rather than named in the
+viewer, in `assets/<namespace>/violet_map/renderers.json`. Each entry points at
+an ordinary Java model JSON under `models/`, so packs can add geometry without a
+code change. The bundled registrations illustrate chest and sign block entities.
+
+```json
+{
+  "blockEntities": {
+    "minecraft:example": {
+      "model": "minecraft:violet_map/block_entity/example",
+      "layer": "cutout",
+      "rotationY": { "property": "facing", "values": { "north": 180, "south": 0 } }
+    }
+  },
+  "entities": {
+    "minecraft:example_mob": {
+      "model": "minecraft:violet_map/entity/example_mob",
+      "scale": [1, 1, 1],
+      "useEntityYaw": true
+    }
+  }
+}
+```
+
+Only registered entities are rendered. There are deliberately no built-in
+legacy-entity meshes; provide a modern Java-model JSON in the resource pack for
+each entity that should appear. Resource models are shown only for full-detail
+chunks in the preset-dependent near radius (potato through extreme).
+
 ## Limits
 
 - Rendering targets modern (1.18+) `sections` / `block_states` chunk layouts.
-- Entities and block entities are not rendered.
 - Biome tinting is sampled per block; radius blending is not implemented.
-- Fluid surfaces approximate vanilla flow and are not animated.
+- Fluid surfaces approximate vanilla flow.

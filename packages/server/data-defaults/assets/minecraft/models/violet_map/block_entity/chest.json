@@ -1,0 +1,30 @@
+{
+  "texture_size": [64, 64],
+  "textures": { "all": "minecraft:entity/chest/normal" },
+  "elements": [
+    { "from": [1, 0, 1], "to": [15, 10, 15], "faces": {
+      "down": { "uv": [14, 19, 28, 33], "texture": "#all" },
+      "up": { "uv": [28, 19, 42, 33], "texture": "#all" },
+      "north": { "uv": [14, 33, 28, 43], "texture": "#all" },
+      "south": { "uv": [42, 33, 56, 43], "texture": "#all" },
+      "west": { "uv": [0, 33, 14, 43], "texture": "#all" },
+      "east": { "uv": [28, 33, 42, 43], "texture": "#all" }
+    } },
+    { "from": [1, 9, 1], "to": [15, 14, 15], "faces": {
+      "down": { "uv": [14, 0, 28, 14], "texture": "#all" },
+      "up": { "uv": [28, 0, 42, 14], "texture": "#all" },
+      "north": { "uv": [14, 14, 28, 19], "texture": "#all" },
+      "south": { "uv": [42, 14, 56, 19], "texture": "#all" },
+      "west": { "uv": [0, 14, 14, 19], "texture": "#all" },
+      "east": { "uv": [28, 14, 42, 19], "texture": "#all" }
+    } },
+    { "from": [7, 7, 15], "to": [9, 11, 16], "faces": {
+      "down": { "uv": [1, 0, 3, 1], "texture": "#all" },
+      "up": { "uv": [3, 0, 5, 1], "texture": "#all" },
+      "north": { "uv": [1, 1, 3, 5], "texture": "#all" },
+      "south": { "uv": [6, 1, 8, 5], "texture": "#all" },
+      "west": { "uv": [0, 1, 1, 5], "texture": "#all" },
+      "east": { "uv": [3, 1, 4, 5], "texture": "#all" }
+    } }
+  ]
+}

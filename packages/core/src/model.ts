@@ -5,8 +5,10 @@ import {
 export interface BakedQuad {
   /** 4 顶点 × xyz，单位为方块（0..1，可越界）。 */
   positions: Float32Array;
-  /** 4 顶点 × uv，0..16 纹理内坐标。 */
+  /** 4 顶点 × uv，按 `uvScale` 指定的纹理像素网格计。 */
   uvs: Float32Array;
+  /** Source texture dimensions used to normalize `uvs` into the atlas. */
+  uvScale: [number, number];
   texture: string;
   cullFace: Direction | null;
   face: Direction;
@@ -59,6 +61,13 @@ function boundsOf(verts: Vec3[]): { f: Vec3; t: Vec3 } {
     }
   }
   return { f, t };
+}
+
+function cornerIndex(vertex: Vec3, corners: Vec3[]): number {
+  const EPS = 1e-4;
+  return corners.findIndex((corner) => Math.abs(vertex[0] - corner[0]) < EPS
+    && Math.abs(vertex[1] - corner[1]) < EPS
+    && Math.abs(vertex[2] - corner[2]) < EPS);
 }
 
 function rotateElementVertex(v: Vec3, rot: NonNullable<ModelElementJson['rotation']>): Vec3 {
@@ -151,6 +160,12 @@ export class ModelBaker {
     return variants[0].quads;
   }
 
+  /** Bake a resource-registered block-entity/entity model directly. These use
+   * the exact same Java model JSON dialect as ordinary block models. */
+  getModelQuads(model: string, rotationY = 0, rotationX = 0, uvlock = false): BakedQuad[] {
+    return this.bake(normalizeId(model), ((rotationX / 90) & 3), ((rotationY / 90) & 3), uvlock);
+  }
+
   private build(state: BlockStateRef): WeightedQuads[] {
     const bs: any = this.bundle.blockstates[state.name];
     if (!bs) return [{ weight: 1, quads: this.bakeVariant({ model: MISSING_TEXTURE }) }];
@@ -186,10 +201,16 @@ export class ModelBaker {
     return baked;
   }
 
-  private flatten(name: string): { textures: Record<string, string>; elements: ModelElementJson[]; ao: boolean } {
+  private flatten(name: string): {
+    textures: Record<string, string>;
+    elements: ModelElementJson[];
+    ao: boolean;
+    textureSize: [number, number];
+  } {
     const textures: Record<string, string> = {};
     let elements: ModelElementJson[] | undefined;
     let ao: boolean | undefined;
+    let textureSize: [number, number] | undefined;
     let cur: string | undefined = normalizeId(name);
     for (let depth = 0; cur && depth < 32; depth++) {
       const m: BlockModelJson | undefined = this.bundle.models[cur] ?? this.bundle.models[normalizeId(cur)];
@@ -202,10 +223,15 @@ export class ModelBaker {
       }
       if (!elements && m.elements) elements = m.elements;
       if (ao === undefined && m.ambientocclusion !== undefined) ao = m.ambientocclusion;
+      if (!textureSize && Array.isArray(m.texture_size)
+        && Number.isFinite(m.texture_size[0]) && Number.isFinite(m.texture_size[1])
+        && m.texture_size[0] > 0 && m.texture_size[1] > 0) {
+        textureSize = [m.texture_size[0], m.texture_size[1]];
+      }
       cur = m.parent ? normalizeId(m.parent) : undefined;
       if (cur?.startsWith('minecraft:builtin/')) break;
     }
-    return { textures, elements: elements ?? [], ao: ao ?? true };
+    return { textures, elements: elements ?? [], ao: ao ?? true, textureSize: textureSize ?? [16, 16] };
   }
 
   private resolveTexture(ref: string, textures: Record<string, string>): string {
@@ -217,8 +243,8 @@ export class ModelBaker {
 
   private bake(modelName: string, rotX: number, rotY: number, uvlock: boolean): BakedQuad[] {
     const isMissing = modelName === MISSING_TEXTURE;
-    const { textures, elements, ao } = isMissing
-      ? { textures: {}, elements: MISSING_CUBE_MODEL.elements!, ao: true }
+    const { textures, elements, ao, textureSize } = isMissing
+      ? { textures: {}, elements: MISSING_CUBE_MODEL.elements!, ao: true, textureSize: [16, 16] as [number, number] }
       : this.flatten(modelName);
     const quads: BakedQuad[] = [];
     for (const el of elements) {
@@ -238,8 +264,20 @@ export class ModelBaker {
         if (uvlock && (rotX || rotY)) {
           const b = boundsOf(verts);
           uv = DEFAULT_UV[bakedFace](b.f, b.t);
-          uvCorners = [[uv[0], uv[1]], [uv[2], uv[1]], [uv[2], uv[3]], [uv[0], uv[3]]];
-          if (steps) uvCorners = uvCorners.map((_, i) => uvCorners[(i + steps) % 4]);
+          let canonicalUvs: [number, number][] = [
+            [uv[0], uv[1]], [uv[2], uv[1]], [uv[2], uv[3]], [uv[0], uv[3]],
+          ];
+          if (steps) canonicalUvs = canonicalUvs.map((_, i) => canonicalUvs[(i + steps) % 4]);
+          // The rotated vertex order is generally not the canonical order of
+          // the new face. Assigning canonical UVs by array position rotates a
+          // half-width stair rectangle onto its long edge and stretches it to
+          // 200%. Match each rotated vertex to the corresponding canonical
+          // corner instead, which is the discrete form of vanilla UV locking.
+          const canonicalVerts = FACE_CORNERS[bakedFace](b.f, b.t);
+          uvCorners = verts.map((vertex, i) => {
+            const corner = cornerIndex(vertex, canonicalVerts);
+            return canonicalUvs[corner >= 0 ? corner : i];
+          });
         }
         const positions = new Float32Array(12);
         for (let i = 0; i < 4; i++) {
@@ -250,7 +288,7 @@ export class ModelBaker {
         const uvs = new Float32Array(8);
         for (let i = 0; i < 4; i++) { uvs[i * 2] = uvCorners[i][0]; uvs[i * 2 + 1] = uvCorners[i][1]; }
         quads.push({
-          positions, uvs,
+          positions, uvs, uvScale: textureSize,
           texture: this.resolveTexture(face.texture, textures),
           cullFace: face.cullface ? rotateDir(face.cullface, rotX, rotY) : null,
           face: bakedFace,

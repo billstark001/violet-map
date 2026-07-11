@@ -89,7 +89,7 @@ function cacheKey(parts: MeshCacheKeyParts): string {
 
 function bufferBytes(b: MeshBuffers): number {
   return b.positions.byteLength + (b.uvs?.byteLength ?? 0) + (b.atlasRects?.byteLength ?? 0)
-    + b.colors.byteLength + b.lights.byteLength + b.indices.byteLength;
+    + b.colors.byteLength + b.lights.byteLength + (b.animations?.byteLength ?? 0) + b.indices.byteLength;
 }
 
 function sectionBytes(sections: SectionMeshMsg[]): number {

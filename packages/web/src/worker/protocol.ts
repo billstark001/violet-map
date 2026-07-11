@@ -10,12 +10,13 @@ export interface WorkerInit {
   atlasIndex: AtlasIndex;
   avgColors: Record<string, [number, number, number]>;
   textureHasAlpha: TextureAlphaMap;
+  textureAnimationIds: Record<string, number>;
   grassColormap: Uint8Array | null;
   foliageColormap: Uint8Array | null;
 }
 export type WorkerRequest =
   | WorkerInit
-  | { type: 'chunk'; key: string; cx: number; cz: number; dimension: DimensionDef; chunk: ArrayBuffer }
+  | { type: 'chunk'; key: string; cx: number; cz: number; dimension: DimensionDef; chunk: ArrayBuffer; entities?: ArrayBuffer }
   | { type: 'mesh'; key: string; version: number }
   | { type: 'lod'; key: string; step: number; version: number }
   | { type: 'drop'; key: string };
