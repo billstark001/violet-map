@@ -86,6 +86,8 @@ export class ChunkSection {
 
 export class ChunkColumn {
   readonly sections = new Map<number, ChunkSection>();
+  private readonly scannedHeights = new Int32Array(16 * 16);
+  private readonly scannedHeightValid = new Uint8Array(16 * 16);
   minSectionY = 0;
   maxSectionY = -1;
   heightMap: BitArray | null = null;
@@ -124,9 +126,18 @@ export class ChunkColumn {
   }
   /** 最高非空气方块上方一格的 y（无方块返回 minY）。 */
   scanHeightAt(x: number, z: number): number {
+    const index = ((z & 15) << 4) | (x & 15);
+    if (this.scannedHeightValid[index]) return this.scannedHeights[index];
     for (let y = this.maxY - 1; y >= this.minY; y--) {
-      if (!AIR_NAMES.has(this.getBlock(x, y, z).name)) return y + 1;
+      if (!AIR_NAMES.has(this.getBlock(x, y, z).name)) {
+        const height = y + 1;
+        this.scannedHeights[index] = height;
+        this.scannedHeightValid[index] = 1;
+        return height;
+      }
     }
+    this.scannedHeights[index] = this.minY;
+    this.scannedHeightValid[index] = 1;
     return this.minY;
   }
   /** 最高非空气方块上方一格的 y（无方块返回 minY）。 */

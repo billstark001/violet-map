@@ -228,7 +228,8 @@ class LodFaceAccumulator {
     z0: number,
     z1: number,
     color: Rgb,
-    light: readonly [number, number],
+    sky: number,
+    block: number,
   ) {
     if (Math.abs(x1 - x0) <= EPS && (dir === 'up' || dir === 'down' || dir === 'north' || dir === 'south')) return;
     if (Math.abs(z1 - z0) <= EPS && (dir === 'up' || dir === 'down' || dir === 'west' || dir === 'east')) return;
@@ -249,8 +250,8 @@ class LodFaceAccumulator {
         hit.r += color[0];
         hit.g += color[1];
         hit.b += color[2];
-        hit.sky += light[0];
-        hit.block += light[1];
+        hit.sky += sky;
+        hit.block += block;
         hit.count++;
         return;
       }
@@ -267,8 +268,8 @@ class LodFaceAccumulator {
       r: color[0],
       g: color[1],
       b: color[2],
-      sky: light[0],
-      block: light[1],
+      sky,
+      block,
       count: 1,
     });
     this.bucketCount++;
@@ -311,7 +312,8 @@ function coordKey(v: number): number {
 }
 
 function localName(name: string): string {
-  return name.includes(':') ? name.split(':')[1] : name;
+  const separator = name.indexOf(':');
+  return separator >= 0 ? name.slice(separator + 1) : name;
 }
 
 function isThinDecoration(state: BlockStateRef, info: BlockInfo): boolean {
@@ -362,6 +364,16 @@ function shapeOf(state: BlockStateRef, info: BlockInfo): LodShape | null {
   return maxY - minY > EPS ? { minY, maxY, sideMaxY: maxY, occludes: info.occludes, fluidTexture: info.fluid?.texture } : null;
 }
 
+const LOD_SHAPE_CACHE = new WeakMap<BlockStateRef, { info: BlockInfo; shape: LodShape | null }>();
+
+function cachedLodShape(state: BlockStateRef, info: BlockInfo): LodShape | null {
+  const cached = LOD_SHAPE_CACHE.get(state);
+  if (cached?.info === info) return cached.shape;
+  const shape = shapeOf(state, info);
+  LOD_SHAPE_CACHE.set(state, { info, shape });
+  return shape;
+}
+
 function makeLocalView(col: ChunkColumn): LodWorldView {
   const ox = col.x * 16;
   const oz = col.z * 16;
@@ -393,11 +405,20 @@ function quantCeil(v: number, step: number): number {
   return Math.max(0, Math.min(16, Math.ceil((v - EPS) / step) * step));
 }
 
+const SKY_EXPOSURE_CACHE = new WeakMap<Uint8Array, boolean>();
+
 function sectionHasSkyExposure(section: { skyLight: Uint8Array | null }): boolean {
-  if (!section.skyLight) return true;
-  for (let i = 0; i < section.skyLight.length; i++) {
-    if (section.skyLight[i] > 0) return true;
+  const light = section.skyLight;
+  if (!light) return true;
+  const cached = SKY_EXPOSURE_CACHE.get(light);
+  if (cached !== undefined) return cached;
+  for (let i = 0; i < light.length; i++) {
+    if (light[i] > 0) {
+      SKY_EXPOSURE_CACHE.set(light, true);
+      return true;
+    }
   }
+  SKY_EXPOSURE_CACHE.set(light, false);
   return false;
 }
 
@@ -531,6 +552,99 @@ function makeNoSkyExteriorMask(
   };
 }
 
+function sideMaxYForShapes(shape: LodShape, above: LodShape | null): number {
+  if (!shape.fluidTexture) return shape.sideMaxY;
+  if (above?.fluidTexture === shape.fluidTexture || above?.occludes) return 1;
+  return shape.maxY;
+}
+
+/** Packs the two four-bit light levels to avoid allocating a tuple for every face. */
+function packedFaceLight(
+  view: LodWorldView,
+  hasSkyLight: boolean,
+  dir: Direction,
+  wx: number,
+  wy: number,
+  wz: number,
+): number {
+  const d = DIR_VEC[dir];
+  const x = wx + d[0];
+  const y = wy + d[1];
+  const z = wz + d[2];
+  const sky = hasSkyLight && view.getSkyLight ? Math.min(15, Math.max(0, view.getSkyLight(x, y, z))) : 0;
+  const block = view.getBlockLight ? Math.min(15, Math.max(0, view.getBlockLight(x, y, z))) : 0;
+  return Math.round(sky) | (Math.round(block) << 4);
+}
+
+function addLodFace(
+  acc: LodFaceAccumulator,
+  dir: Direction,
+  x0: number,
+  x1: number,
+  y0: number,
+  y1: number,
+  z0: number,
+  z1: number,
+  color: Rgb,
+  packedLight: number,
+) {
+  acc.add(dir, x0, x1, y0, y1, z0, z1, color, (packedLight & 15) / 15, ((packedLight >> 4) & 15) / 15);
+}
+
+function addLodSide(
+  acc: LodFaceAccumulator,
+  dir: 'north' | 'south' | 'west' | 'east',
+  shape: LodShape,
+  cover: LodShape | null,
+  coverAbove: LodShape | null,
+  sideMaxY: number,
+  wy: number,
+  x0: number,
+  x1: number,
+  z0: number,
+  z1: number,
+  color: Rgb,
+  packedLight: number,
+) {
+  if (!cover) {
+    addLodSideSegment(acc, dir, shape.minY, sideMaxY, wy, x0, x1, z0, z1, color, packedLight);
+    return;
+  }
+  const coverSideMaxY = sideMaxYForShapes(cover, coverAbove);
+  const coveredFrom = Math.max(shape.minY, cover.minY);
+  const coveredTo = Math.min(sideMaxY, coverSideMaxY);
+  if (coveredTo <= coveredFrom + EPS) {
+    addLodSideSegment(acc, dir, shape.minY, sideMaxY, wy, x0, x1, z0, z1, color, packedLight);
+    return;
+  }
+  addLodSideSegment(acc, dir, shape.minY, coveredFrom, wy, x0, x1, z0, z1, color, packedLight);
+  addLodSideSegment(acc, dir, coveredTo, sideMaxY, wy, x0, x1, z0, z1, color, packedLight);
+}
+
+function addLodSideSegment(
+  acc: LodFaceAccumulator,
+  dir: 'north' | 'south' | 'west' | 'east',
+  from: number,
+  to: number,
+  wy: number,
+  x0: number,
+  x1: number,
+  z0: number,
+  z1: number,
+  color: Rgb,
+  packedLight: number,
+) {
+  if (to <= from + EPS) return;
+  const y0 = wy + from;
+  const y1 = wy + to;
+  switch (dir) {
+    case 'north': addLodFace(acc, dir, x0, x1, y0, y1, z0, z0, color, packedLight); break;
+    case 'south': addLodFace(acc, dir, x0, x1, y0, y1, z1, z1, color, packedLight); break;
+    case 'west': addLodFace(acc, dir, x0, x0, y0, y1, z0, z1, color, packedLight); break;
+    case 'east': addLodFace(acc, dir, x1, x1, y0, y1, z0, z1, color, packedLight); break;
+  }
+}
+
 /**
  * 低 LOD：天空光维度的 step 2+ 走高度图表面快路径，避免远处洞穴/地下 section 拖慢调度。
  * no-sky 或 step 1 保留详细路径，用于需要保留桥底、树冠侧面、水面/半砖高度的场景。
@@ -551,7 +665,6 @@ export function meshLodChunk(
   const ox = col.x * 16;
   const oz = col.z * 16;
   const infoCache = new Map<string, BlockInfo>();
-  const shapeCache = new WeakMap<BlockStateRef, LodShape | null>();
 
   const cachedInfo = (name: string): BlockInfo => {
     let hit = infoCache.get(name);
@@ -562,16 +675,7 @@ export function meshLodChunk(
     return hit;
   };
   const cachedShape = (state: BlockStateRef): LodShape | null => {
-    if (shapeCache.has(state)) return shapeCache.get(state) ?? null;
-    const shape = shapeOf(state, cachedInfo(state.name));
-    shapeCache.set(state, shape);
-    return shape;
-  };
-
-  const sideMaxYForShapes = (shape: LodShape, above: LodShape | null): number => {
-    if (!shape.fluidTexture) return shape.sideMaxY;
-    if (above?.fluidTexture === shape.fluidTexture || above?.occludes) return 1;
-    return shape.maxY;
+    return cachedLodShape(state, cachedInfo(state.name));
   };
   const skyExterior = hasSkyLight && view.getSkyLight
     ? (wx: number, wy: number, wz: number) => view.getSkyLight!(wx, wy, wz) > 0
@@ -581,15 +685,6 @@ export function meshLodChunk(
     if (skyExterior) return skyExterior(wx, wy, wz);
     noSkyExterior ??= makeNoSkyExteriorMask(view, col, cachedShape);
     return noSkyExterior(wx, wy, wz);
-  };
-  const faceLight = (dir: Direction, wx: number, wy: number, wz: number): [number, number] => {
-    const d = DIR_VEC[dir];
-    const lx = wx + d[0];
-    const ly = wy + d[1];
-    const lz = wz + d[2];
-    const sky = hasSkyLight && view.getSkyLight ? view.getSkyLight(lx, ly, lz) / 15 : 0;
-    const block = view.getBlockLight ? view.getBlockLight(lx, ly, lz) / 15 : 0;
-    return [Math.min(1, Math.max(0, sky)), Math.min(1, Math.max(0, block))];
   };
 
   const sectionCacheScratch = createSectionLodCacheScratch();
@@ -640,72 +735,29 @@ export function meshLodChunk(
               const state = section.block(x, ly, z);
               const wx = ox + x;
               const wz = oz + z;
-              let color: Rgb | null = null;
-              const getColor = () => {
-                if (!color) color = colorOf(state, view.getBiome(wx, wy, wz));
-                return color;
-              };
+              const color = colorOf(state, view.getBiome(wx, wy, wz));
               const y0 = wy + shape.minY;
               const y1 = wy + shape.maxY;
               const sideMaxY = sideMaxYForShapes(shape, shapes[upIndex]);
-              const addFace = (dir: Direction, ay: number, by: number, color: Rgb, light: readonly [number, number]) => {
-                switch (dir) {
-                  case 'up':
-                  case 'down':
-                    acc.add(dir, x0, x1, ay, by, z0, z1, color, light);
-                    break;
-                  case 'north':
-                    acc.add(dir, x0, x1, ay, by, z0, z0, color, light);
-                    break;
-                  case 'south':
-                    acc.add(dir, x0, x1, ay, by, z1, z1, color, light);
-                    break;
-                  case 'west':
-                    acc.add(dir, x0, x0, ay, by, z0, z1, color, light);
-                    break;
-                  case 'east':
-                    acc.add(dir, x1, x1, ay, by, z0, z1, color, light);
-                    break;
-                }
-              };
 
               if (exteriorUp) {
                 const above = shapes[upIndex];
-                if (!above || above.minY > EPS) addFace('up', y1, y1, getColor(), faceLight('up', wx, wy, wz));
+                if (!above || above.minY > EPS) {
+                  addLodFace(acc, 'up', x0, x1, y1, y1, z0, z1, color, packedFaceLight(view, hasSkyLight, 'up', wx, wy, wz));
+                }
               }
 
               if (exteriorDown) {
                 const below = shapes[downIndex];
-                if (!below || below.maxY < 1 - EPS) addFace('down', y0, y0, getColor(), faceLight('down', wx, wy, wz));
+                if (!below || below.maxY < 1 - EPS) {
+                  addLodFace(acc, 'down', x0, x1, y0, y0, z0, z1, color, packedFaceLight(view, hasSkyLight, 'down', wx, wy, wz));
+                }
               }
 
-              const side = (dir: Direction, exposed: boolean, cover: LodShape | null, coverAbove: LodShape | null) => {
-                if (!exposed) return;
-                const light = faceLight(dir, wx, wy, wz);
-                const emit = (a: number, b: number) => {
-                  const ay = wy + a;
-                  const by = wy + b;
-                  addFace(dir, ay, by, getColor(), light);
-                };
-                if (!cover) {
-                  emit(shape.minY, sideMaxY);
-                  return;
-                }
-                const coverSideMaxY = sideMaxYForShapes(cover, coverAbove);
-                const c0 = Math.max(shape.minY, cover.minY);
-                const c1 = Math.min(sideMaxY, coverSideMaxY);
-                if (c1 <= c0 + EPS) {
-                  emit(shape.minY, sideMaxY);
-                  return;
-                }
-                if (c0 > shape.minY + EPS) emit(shape.minY, c0);
-                if (c1 < sideMaxY - EPS) emit(c1, sideMaxY);
-              };
-
-              side('north', exteriorNorth, shapes[northIndex], shapes[northIndex + LOD_CACHE_PLANE]);
-              side('south', exteriorSouth, shapes[southIndex], shapes[southIndex + LOD_CACHE_PLANE]);
-              side('west', exteriorWest, shapes[westIndex], shapes[westIndex + LOD_CACHE_PLANE]);
-              side('east', exteriorEast, shapes[eastIndex], shapes[eastIndex + LOD_CACHE_PLANE]);
+              if (exteriorNorth) addLodSide(acc, 'north', shape, shapes[northIndex], shapes[northIndex + LOD_CACHE_PLANE], sideMaxY, wy, x0, x1, z0, z1, color, packedFaceLight(view, hasSkyLight, 'north', wx, wy, wz));
+              if (exteriorSouth) addLodSide(acc, 'south', shape, shapes[southIndex], shapes[southIndex + LOD_CACHE_PLANE], sideMaxY, wy, x0, x1, z0, z1, color, packedFaceLight(view, hasSkyLight, 'south', wx, wy, wz));
+              if (exteriorWest) addLodSide(acc, 'west', shape, shapes[westIndex], shapes[westIndex + LOD_CACHE_PLANE], sideMaxY, wy, x0, x1, z0, z1, color, packedFaceLight(view, hasSkyLight, 'west', wx, wy, wz));
+              if (exteriorEast) addLodSide(acc, 'east', shape, shapes[eastIndex], shapes[eastIndex + LOD_CACHE_PLANE], sideMaxY, wy, x0, x1, z0, z1, color, packedFaceLight(view, hasSkyLight, 'east', wx, wy, wz));
             }
           }
         }

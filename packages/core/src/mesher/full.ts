@@ -133,6 +133,19 @@ const SIMPLE_CUBE_CACHE = new WeakMap<BakedQuad[], {
   value: SimpleCubeDef | null;
 }>();
 
+const OPAQUE_FULL_CUBE_CACHE = new WeakMap<BakedQuad[], {
+  alpha: TextureAlphaMap | undefined;
+  value: boolean;
+}>();
+
+function cachedOpaqueFullCube(quads: BakedQuad[], textureHasAlpha?: TextureAlphaMap): boolean {
+  const hit = OPAQUE_FULL_CUBE_CACHE.get(quads);
+  if (hit && hit.alpha === textureHasAlpha) return hit.value;
+  const value = opaqueFullCubeFromQuads(quads, textureHasAlpha);
+  OPAQUE_FULL_CUBE_CACHE.set(quads, { alpha: textureHasAlpha, value });
+  return value;
+}
+
 function cachedSimpleCube(
   quads: BakedQuad[], textureHasAlpha?: TextureAlphaMap, textureAnimationIds?: Record<string, number>,
 ): SimpleCubeDef | null {
@@ -149,6 +162,7 @@ class SectionViewCache implements WorldView {
   private readonly sky = new Uint8Array(18 * 18 * 18);
   private readonly block = new Uint8Array(18 * 18 * 18);
   private readonly biomes = new Array<string | undefined>(18 * 18 * 18);
+  private passableCount = 0;
   private readonly ox: number;
   private readonly oy: number;
   private readonly oz: number;
@@ -171,7 +185,7 @@ class SectionViewCache implements WorldView {
       // bounding-box flag alone marks a number of partial blocks as full (for
       // example sculk shriekers), which previously made visible sides vanish.
       const value = res.info(state.name).occludes
-        && opaqueFullCubeFromQuads(res.baker.getQuads(state, 0), res.textureHasAlpha)
+        && cachedOpaqueFullCube(res.baker.getQuads(state, 0), res.textureHasAlpha)
         ? 1 : 0;
       occlusionByState.set(state, value);
       return value;
@@ -215,6 +229,9 @@ class SectionViewCache implements WorldView {
           }
           this.states[i] = state;
           this.occlusion[i] = occlusionOf(state);
+          if (x > 0 && x < 17 && y > 0 && y < 17 && z > 0 && z < 17 && !this.occlusion[i]) {
+            this.passableCount++;
+          }
         }
       }
     }
@@ -281,13 +298,7 @@ class SectionViewCache implements WorldView {
   }
 
   isSealedOccluderSection(): boolean {
-    for (let y = 1; y <= 16; y++) {
-      for (let z = 1; z <= 16; z++) {
-        for (let x = 1; x <= 16; x++) {
-          if (!this.occlusion[this.idx(x, y, z)]) return false;
-        }
-      }
-    }
+    if (this.passableCount > 0) return false;
     for (let y = 1; y <= 16; y++) {
       for (let z = 1; z <= 16; z++) {
         if (!this.occlusion[this.idx(0, y, z)] || !this.occlusion[this.idx(17, y, z)]) return false;
@@ -309,14 +320,7 @@ class SectionViewCache implements WorldView {
     const visited = new Uint8Array(total);
     const queue = new Int32Array(total);
     const idxOf = (x: number, y: number, z: number) => (y << 8) | (z << 4) | x;
-    let passableCount = 0;
-    for (let y = 0; y < 16; y++) {
-      for (let z = 0; z < 16; z++) {
-        for (let x = 0; x < 16; x++) {
-          if (!this.occlusion[this.idx(x + 1, y + 1, z + 1)]) passableCount++;
-        }
-      }
-    }
+    const passableCount = this.passableCount;
     if (passableCount === 0) return 0;
     if (passableCount === total) return SECTION_VISIBILITY_ALL;
 
@@ -542,6 +546,10 @@ function emitQuad(
   tint: Rgb, smooth: boolean,
 ) {
   const rect = res.atlas[q.texture] ?? res.atlas[MISSING_TEXTURE];
+  const uvWidth = Math.max(UV_EPS * 2, q.uvScale[0]);
+  const uvHeight = Math.max(UV_EPS * 2, q.uvScale[1]);
+  const atlasWidth = rect.u1 - rect.u0;
+  const atlasHeight = rect.v1 - rect.v0;
   const shade = q.shade ? SHADE[q.face] : 1;
   // `cullface` controls neighbour face removal only. It is deliberately
   // omitted on quite a few exterior partial-model faces (notably stairs) so
@@ -582,7 +590,10 @@ function emitQuad(
       ao = AO_FACTOR[(s >> 16) & 3];
     }
     const m = shade * ao;
-    const [u, v] = atlasUv(rect, q.uvs[i * 2], q.uvs[i * 2 + 1], q.uvScale);
+    const rawU = Math.min(uvWidth - UV_EPS, Math.max(UV_EPS, q.uvs[i * 2]));
+    const rawV = Math.min(uvHeight - UV_EPS, Math.max(UV_EPS, q.uvs[i * 2 + 1]));
+    const u = rect.u0 + (rawU / uvWidth) * atlasWidth;
+    const v = rect.v0 + (rawV / uvHeight) * atlasHeight;
     builder.vertex(
       lx + q.positions[i * 3], ly + q.positions[i * 3 + 1], lz + q.positions[i * 3 + 2],
       u, v,
@@ -765,17 +776,6 @@ function greedyCellForQuad(
   return out;
 }
 
-function greedyCoords(dir: Direction, x: number, y: number, z: number): { slice: number; u: number; v: number } {
-  switch (dir) {
-    case 'up': return { slice: y + 1, u: x, v: z };
-    case 'down': return { slice: y, u: x, v: z };
-    case 'north': return { slice: z, u: x, v: y };
-    case 'south': return { slice: z + 1, u: x, v: y };
-    case 'west': return { slice: x, u: z, v: y };
-    case 'east': return { slice: x + 1, u: z, v: y };
-  }
-}
-
 function addGreedyCell(
   grids: (GreedyGrid | null)[],
   dir: Direction, slice: number, u: number, v: number, cell: GreedyCell,
@@ -832,28 +832,27 @@ function emitGreedyQuad(
 function flushGreedyGrids(grids: (GreedyGrid | null)[], builder: MeshBuilder) {
   for (const grid of grids) {
     if (!grid) continue;
-    const used = new Uint8Array(16 * 16);
     for (let v = 0; v < 16; v++) {
       for (let u = 0; u < 16; u++) {
         const idx = v * 16 + u;
         const start = grid.cells[idx];
-        if (!start || used[idx]) continue;
+        if (!start) continue;
         let width = 1;
         while (u + width < 16) {
           const nextIdx = v * 16 + u + width;
-          if (used[nextIdx] || !greedyCellsEqual(start, grid.cells[nextIdx])) break;
+          if (!greedyCellsEqual(start, grid.cells[nextIdx])) break;
           width++;
         }
         let height = 1;
         grow: while (v + height < 16) {
           for (let du = 0; du < width; du++) {
             const nextIdx = (v + height) * 16 + u + du;
-            if (used[nextIdx] || !greedyCellsEqual(start, grid.cells[nextIdx])) break grow;
+            if (!greedyCellsEqual(start, grid.cells[nextIdx])) break grow;
           }
           height++;
         }
         for (let dv = 0; dv < height; dv++) {
-          for (let du = 0; du < width; du++) used[(v + dv) * 16 + u + du] = 1;
+          for (let du = 0; du < width; du++) grid.cells[(v + dv) * 16 + u + du] = null;
         }
         emitGreedyQuad(builder, grid.dir, grid.slice, u, u + width, v, v + height, start);
       }
@@ -1134,7 +1133,7 @@ export function meshSection(
       const blockLayer = bi.layer === 'opaqueTiled' ? 'opaque' : bi.layer;
       const waterlogged = state.properties.waterlogged === 'true' || !!bi.waterlogged;
       const fullOccluder = bi.occludes
-        && opaqueFullCubeFromQuads(localRes.baker.getQuads(state, 0), localRes.textureHasAlpha);
+        && cachedOpaqueFullCube(localRes.baker.getQuads(state, 0), localRes.textureHasAlpha);
       hit = {
         bi,
         blockLayer,
@@ -1208,8 +1207,14 @@ export function meshSection(
               : cachedView.occludesLocal(x + d[0], y + d[1], z + d[2])) continue;
             const cell = greedyCellForQuad(localRes, cachedView, q, textureKeyOf(q.texture), wx, wy, wz, smoothLighting);
             if (cell) {
-              const coord = greedyCoords(dir, x, y, z);
-              addGreedyCell(greedyGrids, dir, coord.slice, coord.u, coord.v, cell);
+              switch (dir) {
+                case 'up': addGreedyCell(greedyGrids, dir, y + 1, x, z, cell); break;
+                case 'down': addGreedyCell(greedyGrids, dir, y, x, z, cell); break;
+                case 'north': addGreedyCell(greedyGrids, dir, z, x, y, cell); break;
+                case 'south': addGreedyCell(greedyGrids, dir, z + 1, x, y, cell); break;
+                case 'west': addGreedyCell(greedyGrids, dir, x, z, y, cell); break;
+                case 'east': addGreedyCell(greedyGrids, dir, x + 1, z, y, cell); break;
+              }
             } else {
               emitQuad(localRes, cachedView, builderFor(builders, 'opaque'), q, x, y, z, wx, wy, wz, WHITE, smoothLighting);
             }
