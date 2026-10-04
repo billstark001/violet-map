@@ -61,8 +61,10 @@ function textureAnimationData(index: AtlasIndex): TextureAnimationData {
       const second = first + 1;
       const p0 = (Math.floor(first / frameWidth) * frameWidth + (first % frameWidth)) * 4;
       const p1 = (Math.floor(second / frameWidth) * frameWidth + (second % frameWidth)) * 4;
-      encode16(frames, p0, frame.u0); encode16(frames, p0 + 2, frame.v0);
-      encode16(frames, p1, frame.u1); encode16(frames, p1 + 2, frame.v1);
+      encode16(frames, p0, frame.u0);
+      encode16(frames, p0 + 2, frame.v0);
+      encode16(frames, p1, frame.u1);
+      encode16(frames, p1 + 2, frame.v1);
       start++;
     }
   });
@@ -73,7 +75,7 @@ export function collectTextureIds(bundle: AssetBundle, blockInfo: BlockInfoMap):
   const ids = new Set<string>();
   const models = new Set<string>();
   const seenModels = new Set<string>();
-  const normalize = (id: string) => id.includes(':') ? id : `minecraft:${id}`;
+  const normalize = (id: string) => (id.includes(':') ? id : `minecraft:${id}`);
   const add = (v: unknown) => {
     if (v && typeof v === 'object') v = (v as { sprite?: unknown }).sprite;
     if (typeof v !== 'string') return;
@@ -250,8 +252,11 @@ export async function buildAtlas(ids: string[]): Promise<BuiltAtlas> {
     if (e.img) {
       ctx.drawImage(e.img, 0, 0, e.sourceWidth, e.sourceHeight, tx, ty, e.width, e.height);
     } else {
-      ctx.fillStyle = '#f800f8'; ctx.fillRect(tx, ty, e.width, e.height);
-      ctx.fillStyle = '#000000'; ctx.fillRect(tx, ty, 8, 8); ctx.fillRect(tx + 8, ty + 8, 8, 8);
+      ctx.fillStyle = '#f800f8';
+      ctx.fillRect(tx, ty, e.width, e.height);
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(tx, ty, 8, 8);
+      ctx.fillRect(tx + 8, ty + 8, 8, 8);
     }
     ctx.drawImage(canvas, tx, ty, e.width, 1, tx, y, e.width, PAD);
     ctx.drawImage(canvas, tx, ty + e.height - 1, e.width, 1, tx, ty + e.height, e.width, PAD);
@@ -263,12 +268,18 @@ export async function buildAtlas(ids: string[]): Promise<BuiltAtlas> {
     ctx.drawImage(canvas, tx + e.width - 1, ty + e.height - 1, 1, 1, tx + e.width, ty + e.height, PAD, PAD);
     index[e.id] = { u0: tx / size, v0: ty / size, u1: (tx + e.width) / size, v1: (ty + e.height) / size };
     const data = ctx.getImageData(tx, ty, e.width, e.height).data;
-    let r = 0, g = 0, b = 0, n = 0;
+    let r = 0,
+      g = 0,
+      b = 0,
+      n = 0;
     let alpha = false;
     for (let p = 0; p < data.length; p += 4) {
       if (data[p + 3] < 250) alpha = true;
       if (data[p + 3] < 32) continue;
-      r += data[p]; g += data[p + 1]; b += data[p + 2]; n++;
+      r += data[p];
+      g += data[p + 1];
+      b += data[p + 2];
+      n++;
     }
     avgColors[e.id] = n ? [r / n / 255, g / n / 255, b / n / 255] : [1, 0, 1];
     hasAlpha[e.id] = alpha;

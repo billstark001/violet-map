@@ -26,7 +26,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
 export function normalizeFlyYaw(yaw: number): number {
   if (!Number.isFinite(yaw)) return 0;
   const twoPi = Math.PI * 2;
-  return ((yaw + Math.PI) % twoPi + twoPi) % twoPi - Math.PI;
+  return ((((yaw + Math.PI) % twoPi) + twoPi) % twoPi) - Math.PI;
 }
 
 export function clampFlyPitch(pitch: number): number {
@@ -68,7 +68,11 @@ export class FlyControls {
     if (!this.inertiaEnabled) this.velocity.set(0, 0, 0);
   };
 
-  constructor(private dom: HTMLElement, private camera: THREE.Camera, initial?: Pick<FlyView, 'yaw' | 'pitch'>) {
+  constructor(
+    private dom: HTMLElement,
+    private camera: THREE.Camera,
+    initial?: Pick<FlyView, 'yaw' | 'pitch'>,
+  ) {
     camera.rotation.order = 'YXZ';
     if (initial) this.setAngles(initial.yaw, initial.pitch);
     else this.syncFromCamera();
@@ -209,7 +213,11 @@ export class TopDownControls {
     this.dragging = false;
   };
 
-  constructor(private dom: HTMLElement, private camera: TopDownCamera, initial?: Partial<TopView>) {
+  constructor(
+    private dom: HTMLElement,
+    private camera: TopDownCamera,
+    initial?: Partial<TopView>,
+  ) {
     this.camera.rotation.order = 'YXZ';
     this.lockTopDown();
     if (initial) {
@@ -219,7 +227,10 @@ export class TopDownControls {
         Number.isFinite(initial.z) ? initial.z! : this.camera.position.z,
       );
       if (this.camera instanceof THREE.OrthographicCamera) {
-        this.camera.zoom = Math.max(0.05, Math.min(32, Number.isFinite(initial.zoom) ? initial.zoom! : this.camera.zoom));
+        this.camera.zoom = Math.max(
+          0.05,
+          Math.min(32, Number.isFinite(initial.zoom) ? initial.zoom! : this.camera.zoom),
+        );
       }
       this.camera.updateProjectionMatrix();
     }
@@ -242,8 +253,12 @@ export class TopDownControls {
     if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) this.move.z += 1;
     if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) this.move.x += 1;
     if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) this.move.x -= 1;
-    const scale = this.camera instanceof THREE.OrthographicCamera ? 1 / Math.sqrt(this.camera.zoom) : Math.max(0.25, this.camera.position.y / 512);
-    if (this.move.lengthSq() > 0) this.camera.position.addScaledVector(this.move.normalize(), this.baseSpeed * multiplier * dt * scale);
+    const scale =
+      this.camera instanceof THREE.OrthographicCamera
+        ? 1 / Math.sqrt(this.camera.zoom)
+        : Math.max(0.25, this.camera.position.y / 512);
+    if (this.move.lengthSq() > 0)
+      this.camera.position.addScaledVector(this.move.normalize(), this.baseSpeed * multiplier * dt * scale);
   }
 
   setPosition(x: number, y: number, z: number) {
@@ -257,8 +272,8 @@ export class TopDownControls {
 
   resize(aspect: number, frustumHeight: number) {
     if (this.camera instanceof THREE.OrthographicCamera) {
-      this.camera.left = -frustumHeight * aspect / 2;
-      this.camera.right = frustumHeight * aspect / 2;
+      this.camera.left = (-frustumHeight * aspect) / 2;
+      this.camera.right = (frustumHeight * aspect) / 2;
       this.camera.top = frustumHeight / 2;
       this.camera.bottom = -frustumHeight / 2;
     } else {
@@ -283,7 +298,8 @@ export class TopDownControls {
       x: this.camera.position.x,
       y: this.camera.position.y,
       z: this.camera.position.z,
-      zoom: this.camera instanceof THREE.OrthographicCamera ? this.camera.zoom : 512 / Math.max(1, this.camera.position.y),
+      zoom:
+        this.camera instanceof THREE.OrthographicCamera ? this.camera.zoom : 512 / Math.max(1, this.camera.position.y),
     };
   }
 
@@ -305,8 +321,10 @@ export class TopDownControls {
   private worldPerPixel(): number {
     const height = Math.max(1, this.dom.clientHeight);
     if (this.camera instanceof THREE.OrthographicCamera) {
-      return ((this.camera.top - this.camera.bottom) / this.camera.zoom) / height;
+      return (this.camera.top - this.camera.bottom) / this.camera.zoom / height;
     }
-    return (2 * Math.max(1, this.camera.position.y) * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) * 0.5)) / height;
+    return (
+      (2 * Math.max(1, this.camera.position.y) * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) * 0.5)) / height
+    );
   }
 }

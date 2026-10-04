@@ -34,7 +34,8 @@ function targetStorage(args: string[]): StorageOptions {
       const bucket = reader.get('--s3-bucket') ?? process.env.S3_BUCKET;
       if (!bucket) throw new Error('missing --s3-bucket');
       return {
-        kind: 's3', bucket,
+        kind: 's3',
+        bucket,
         endpoint: reader.get('--s3-endpoint') ?? process.env.S3_ENDPOINT,
         region: reader.get('--s3-region') ?? process.env.S3_REGION ?? 'auto',
         prefix: reader.get('--s3-prefix') ?? process.env.S3_PREFIX,
@@ -61,7 +62,8 @@ export async function runWorldCommand(args: string[]): Promise<void> {
   const reader = argsReader(args);
   const from = resolvePath(required(reader.get('--from'), '--from'));
   const world = required(reader.get('--world'), '--world');
-  if (!/^[A-Za-z0-9_.-]+$/.test(world)) throw new Error('--world may only contain letters, numbers, dot, dash, and underscore');
+  if (!/^[A-Za-z0-9_.-]+$/.test(world))
+    throw new Error('--world may only contain letters, numbers, dot, dash, and underscore');
   const dryRun = reader.flag('--dry-run');
   const source = new LocalWorldStorage(from);
   const target = new PrefixedWorldStorage(createWorldStorage(targetStorage(args)), world);
@@ -70,12 +72,17 @@ export async function runWorldCommand(args: string[]): Promise<void> {
   console.log(`World identity: ${check.status} (${check.message})`);
   if (check.status === 'mismatch' || check.status === 'unverified') {
     console.warn(`WARNING: source ${sourceIdentity.id}; target ${check.target?.id ?? 'has no identity marker'}.`);
-    if (!reader.flag('--force')) throw new Error('refusing to sync a world whose identity cannot be proven. Re-run with --force only after verifying the target.');
+    if (!reader.flag('--force'))
+      throw new Error(
+        'refusing to sync a world whose identity cannot be proven. Re-run with --force only after verifying the target.',
+      );
   }
   const result = await syncWorld(source, target, {
     dryRun,
     deleteExtra: reader.flag('--delete'),
     onProgress: ({ type, path }) => console.log(`${type.padEnd(6)} ${path}`),
   });
-  console.log(`${dryRun ? 'Dry run: ' : ''}${result.copied.length} copied, ${result.skipped.length} unchanged, ${result.deleted.length} deleted.`);
+  console.log(
+    `${dryRun ? 'Dry run: ' : ''}${result.copied.length} copied, ${result.skipped.length} unchanged, ${result.deleted.length} deleted.`,
+  );
 }

@@ -78,7 +78,7 @@ export const AIR_BLOCK_INFO: BlockInfo = { occludes: false, emit: 0, filter: 0, 
 export const WHITE: Rgb = [1, 1, 1];
 export const DEFAULT_RECT = { u0: 0, v0: 0, u1: 1, v1: 1 };
 export const fakeAtlas = new Proxy(Object.create(null), {
-  get: (_target, prop) => typeof prop === 'symbol' ? undefined : DEFAULT_RECT,
+  get: (_target, prop) => (typeof prop === 'symbol' ? undefined : DEFAULT_RECT),
 }) as AtlasIndex;
 
 const REGION_RE = /^r\.(-?\d+)\.(-?\d+)\.mca$/;
@@ -161,16 +161,12 @@ function clamp01(value: number): number {
 function redstoneTint(state?: BlockStateRef): Rgb {
   const power = Math.min(15, Math.max(0, Number(state?.properties.power ?? '0') || 0));
   const f = power / 15;
-  return [
-    power === 0 ? 0.3 : f * 0.6 + 0.4,
-    clamp01(f * f * 0.7 - 0.5),
-    clamp01(f * f * 0.6 - 0.7),
-  ];
+  return [power === 0 ? 0.3 : f * 0.6 + 0.4, clamp01(f * f * 0.7 - 0.5), clamp01(f * f * 0.6 - 0.7)];
 }
 
 function stemTint(state?: BlockStateRef): Rgb {
   const age = Math.min(7, Math.max(0, Number(state?.properties.age ?? '0') || 0));
-  return [age * 32 / 255, (255 - age * 8) / 255, age * 4 / 255];
+  return [(age * 32) / 255, (255 - age * 8) / 255, (age * 4) / 255];
 }
 
 export function tintOf(
@@ -231,7 +227,11 @@ function textureIdForPath(namespace: string, rel: string): string {
 }
 
 function splitAssetDirs(value: string | undefined): string[] {
-  return (value ?? '').split(',').map((p) => p.trim()).filter(Boolean).map((p) => resolvePath(p));
+  return (value ?? '')
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => resolvePath(p));
 }
 
 export function resolveAssetDirs(value?: string): string[] {
@@ -289,15 +289,17 @@ async function readPngTree(dir: string, onFile: (rel: string, file: string) => P
   } catch {
     return;
   }
-  await Promise.all(entries.map(async (entry) => {
-    const childRel = rel ? `${rel}/${entry.name}` : entry.name;
-    const file = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      await readPngTree(file, onFile, childRel);
-    } else if (entry.isFile() && entry.name.endsWith('.png')) {
-      await onFile(childRel, file);
-    }
-  }));
+  await Promise.all(
+    entries.map(async (entry) => {
+      const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await readPngTree(file, onFile, childRel);
+      } else if (entry.isFile() && entry.name.endsWith('.png')) {
+        await onFile(childRel, file);
+      }
+    }),
+  );
 }
 
 function dataFileCandidates(name: string, explicit?: string): string[] {
@@ -367,16 +369,25 @@ function firstAverageTexture(textureColors: Map<string, Rgb>, ids: string[]): Rg
 function fallbackTexturesForBlock(name: string): string[] {
   const local = localName(name);
   const textures: string[] = [];
-  if (name === 'minecraft:grass_block') textures.push('minecraft:block/grass_block_top', 'minecraft:block/grass_block_side_overlay', 'minecraft:block/grass_block_side');
+  if (name === 'minecraft:grass_block')
+    textures.push(
+      'minecraft:block/grass_block_top',
+      'minecraft:block/grass_block_side_overlay',
+      'minecraft:block/grass_block_side',
+    );
   if (name === 'minecraft:podzol') textures.push('minecraft:block/podzol_top', 'minecraft:block/dirt');
   if (name === 'minecraft:mycelium') textures.push('minecraft:block/mycelium_top', 'minecraft:block/dirt');
   if (name === 'minecraft:dirt_path') textures.push('minecraft:block/dirt_path_top', 'minecraft:block/dirt');
-  if (name === 'minecraft:farmland') textures.push('minecraft:block/farmland_moist', 'minecraft:block/farmland', 'minecraft:block/dirt');
-  if (name === 'minecraft:short_grass' || name === 'minecraft:grass') textures.push('minecraft:block/short_grass', 'minecraft:block/grass');
-  if (name === 'minecraft:tall_grass') textures.push('minecraft:block/tall_grass_top', 'minecraft:block/tall_grass_bottom', 'minecraft:block/short_grass');
+  if (name === 'minecraft:farmland')
+    textures.push('minecraft:block/farmland_moist', 'minecraft:block/farmland', 'minecraft:block/dirt');
+  if (name === 'minecraft:short_grass' || name === 'minecraft:grass')
+    textures.push('minecraft:block/short_grass', 'minecraft:block/grass');
+  if (name === 'minecraft:tall_grass')
+    textures.push('minecraft:block/tall_grass_top', 'minecraft:block/tall_grass_bottom', 'minecraft:block/short_grass');
   if (name === 'minecraft:fern') textures.push('minecraft:block/fern');
   if (local.endsWith('_leaves')) textures.push(`minecraft:block/${local}`);
-  if (local.endsWith('_log') || local.endsWith('_stem') || local.endsWith('_hyphae')) textures.push(`minecraft:block/${local}_top`, `minecraft:block/${local}`);
+  if (local.endsWith('_log') || local.endsWith('_stem') || local.endsWith('_hyphae'))
+    textures.push(`minecraft:block/${local}_top`, `minecraft:block/${local}`);
   textures.push(`minecraft:block/${local}_top`, `minecraft:block/${local}`);
   return Array.from(new Set(textures));
 }
@@ -392,9 +403,10 @@ function fallbackSurfaceColor(
   const found = firstAverageTexture(textureColors, fallbackTexturesForBlock(state.name));
   if (found) {
     const info = infoOf(state.name);
-    const tint = info.tint !== 'none'
-      ? tintOf(info.tint, info.fixedTint, biome, biomeColors, state)
-      : tintOf(inferredTint(state, info), info.fixedTint, biome, biomeColors, state);
+    const tint =
+      info.tint !== 'none'
+        ? tintOf(info.tint, info.fixedTint, biome, biomeColors, state)
+        : tintOf(inferredTint(state, info), info.fixedTint, biome, biomeColors, state);
     return [found[0] * tint[0], found[1] * tint[1], found[2] * tint[2]];
   }
   const name = localName(state.name);
@@ -523,19 +535,21 @@ async function readJsonTree(dir: string, onFile: (rel: string, value: unknown) =
   } catch {
     return;
   }
-  await Promise.all(entries.map(async (entry) => {
-    const childRel = rel ? `${rel}/${entry.name}` : entry.name;
-    const file = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      await readJsonTree(file, onFile, childRel);
-    } else if (entry.isFile() && entry.name.endsWith('.json')) {
-      try {
-        onFile(childRel, JSON.parse(await fs.readFile(file, 'utf8')));
-      } catch {
-        // Skip malformed resource files so one bad model does not block profiling.
+  await Promise.all(
+    entries.map(async (entry) => {
+      const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await readJsonTree(file, onFile, childRel);
+      } else if (entry.isFile() && entry.name.endsWith('.json')) {
+        try {
+          onFile(childRel, JSON.parse(await fs.readFile(file, 'utf8')));
+        } catch {
+          // Skip malformed resource files so one bad model does not block profiling.
+        }
       }
-    }
-  }));
+    }),
+  );
 }
 
 export async function loadRegionColumns(file: string): Promise<Map<string, ColumnEntry>> {
@@ -627,17 +641,19 @@ export function printSummaryTable(summaries: Summary[]) {
   console.log('label       samples    total      avg      p50      p95      max      verts      indices');
   console.log('----------  -------  -------  -------  -------  -------  -------  ---------  ----------');
   for (const s of summaries) {
-    console.log([
-      s.label.padEnd(10),
-      String(s.samples).padStart(7),
-      formatMs(s.totalMs),
-      formatMs(s.avgMs),
-      formatMs(s.p50Ms),
-      formatMs(s.p95Ms),
-      formatMs(s.maxMs),
-      String(Math.round(s.vertices / Math.max(1, s.samples))).padStart(9),
-      String(Math.round(s.indices / Math.max(1, s.samples))).padStart(10),
-    ].join('  '));
+    console.log(
+      [
+        s.label.padEnd(10),
+        String(s.samples).padStart(7),
+        formatMs(s.totalMs),
+        formatMs(s.avgMs),
+        formatMs(s.p50Ms),
+        formatMs(s.p95Ms),
+        formatMs(s.maxMs),
+        String(Math.round(s.vertices / Math.max(1, s.samples))).padStart(9),
+        String(Math.round(s.indices / Math.max(1, s.samples))).padStart(10),
+      ].join('  '),
+    );
   }
 }
 
@@ -701,9 +717,12 @@ export async function findRegionFiles(worldDir: string, dim: string): Promise<Re
 }
 
 function dimensionRegionDirs(world: string, dim: string): string[] {
-  if (dim === 'minecraft:overworld') return [path.join(world, 'region'), path.join(world, 'dimensions/minecraft/overworld/region')];
-  if (dim === 'minecraft:the_nether') return [path.join(world, 'DIM-1/region'), path.join(world, 'dimensions/minecraft/the_nether/region')];
-  if (dim === 'minecraft:the_end') return [path.join(world, 'DIM1/region'), path.join(world, 'dimensions/minecraft/the_end/region')];
+  if (dim === 'minecraft:overworld')
+    return [path.join(world, 'region'), path.join(world, 'dimensions/minecraft/overworld/region')];
+  if (dim === 'minecraft:the_nether')
+    return [path.join(world, 'DIM-1/region'), path.join(world, 'dimensions/minecraft/the_nether/region')];
+  if (dim === 'minecraft:the_end')
+    return [path.join(world, 'DIM1/region'), path.join(world, 'dimensions/minecraft/the_end/region')];
   const [namespace, rawPath = ''] = dim.includes(':') ? dim.split(':') : ['minecraft', dim];
   return [path.join(world, 'dimensions', namespace, rawPath, 'region')];
 }

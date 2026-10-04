@@ -31,14 +31,9 @@ const vendorGroups: CodeSplittingGroup[] = [
 
 function isKnownThirdPartyWarning(message: string): boolean {
   return (
-    message.includes('has been externalized for browser compatibility')
-    && (
-      message.includes('prismarine-nbt')
-      || message.includes('protodef-validator')
-    )
-  ) || (
-    message.includes('Use of direct `eval`')
-    && message.includes('protodef')
+    (message.includes('has been externalized for browser compatibility') &&
+      (message.includes('prismarine-nbt') || message.includes('protodef-validator'))) ||
+    (message.includes('Use of direct `eval`') && message.includes('protodef'))
   );
 }
 

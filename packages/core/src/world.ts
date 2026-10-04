@@ -19,7 +19,10 @@ export interface WorldRenderObject {
 export class BitArray {
   private readonly valuesPerLong: number;
   private readonly mask: bigint;
-  constructor(readonly bits: number, readonly data: BigUint64Array) {
+  constructor(
+    readonly bits: number,
+    readonly data: BigUint64Array,
+  ) {
     this.valuesPerLong = Math.floor(64 / bits);
     this.mask = (1n << BigInt(bits)) - 1n;
   }
@@ -32,7 +35,7 @@ export class BitArray {
 
 function unpackNibbles(bytes: Uint8Array): Uint8Array {
   const out = new Uint8Array(4096);
-  for (let i = 0; i < 4096; i++) out[i] = (i & 1) ? (bytes[i >> 1] >> 4) : (bytes[i >> 1] & 0xf);
+  for (let i = 0; i < 4096; i++) out[i] = i & 1 ? bytes[i >> 1] >> 4 : bytes[i >> 1] & 0xf;
   return out;
 }
 
@@ -97,12 +100,21 @@ export class ChunkColumn {
   hasStoredSkyLight = false;
   readonly blockEntities: WorldRenderObject[] = [];
   readonly entities: WorldRenderObject[] = [];
-  constructor(readonly x: number, readonly z: number) {}
+  constructor(
+    readonly x: number,
+    readonly z: number,
+  ) {}
 
-  get minY() { return this.minSectionY * 16; }
-  get maxY() { return (this.maxSectionY + 1) * 16; }
+  get minY() {
+    return this.minSectionY * 16;
+  }
+  get maxY() {
+    return (this.maxSectionY + 1) * 16;
+  }
 
-  section(y: number) { return this.sections.get(y >> 4); }
+  section(y: number) {
+    return this.sections.get(y >> 4);
+  }
 
   getBlock(x: number, y: number, z: number): BlockStateRef {
     const s = this.section(y);
@@ -211,7 +223,17 @@ function hasAnyLight(a: Uint8Array | null): boolean {
 function calibrateHeightMap(col: ChunkColumn) {
   if (!col.heightMap) return;
   const offsets = Array.from(new Set([0, 1, col.minY, col.minY + 1]));
-  const samples: [number, number][] = [[0, 0], [4, 4], [8, 8], [12, 12], [15, 15], [0, 15], [15, 0], [8, 3], [3, 8]];
+  const samples: [number, number][] = [
+    [0, 0],
+    [4, 4],
+    [8, 8],
+    [12, 12],
+    [15, 15],
+    [0, 15],
+    [15, 0],
+    [8, 3],
+    [3, 8],
+  ];
   let bestOffset = 0;
   let bestScore = Infinity;
   for (const offset of offsets) {
@@ -256,8 +278,14 @@ export function parseChunkColumn(root: any): ChunkColumn {
     if (hasAnyLight(skyLight)) col.hasStoredSkyLight = true;
 
     col.sections.set(sy, new ChunkSection(sy, palette, states, biomePalette, biomeStates, blockLight, skyLight));
-    if (first) { col.minSectionY = sy; col.maxSectionY = sy; first = false; }
-    else { col.minSectionY = Math.min(col.minSectionY, sy); col.maxSectionY = Math.max(col.maxSectionY, sy); }
+    if (first) {
+      col.minSectionY = sy;
+      col.maxSectionY = sy;
+      first = false;
+    } else {
+      col.minSectionY = Math.min(col.minSectionY, sy);
+      col.maxSectionY = Math.max(col.maxSectionY, sy);
+    }
   }
   const hm = r.HeightMaps?.WORLD_SURFACE;
   if (hm) {

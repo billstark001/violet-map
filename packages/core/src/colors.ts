@@ -1,7 +1,13 @@
 import { BiomeDef, BiomeMap } from './types.js';
 
 export type Rgb = readonly [number, number, number];
-export interface ResolvedBiomeColors { grass: Rgb; foliage: Rgb; water: Rgb; sky: Rgb; fog: Rgb }
+export interface ResolvedBiomeColors {
+  grass: Rgb;
+  foliage: Rgb;
+  water: Rgb;
+  sky: Rgb;
+  fog: Rgb;
+}
 
 export function hexToRgb(hex: number): Rgb {
   return [((hex >> 16) & 0xff) / 255, ((hex >> 8) & 0xff) / 255, (hex & 0xff) / 255];

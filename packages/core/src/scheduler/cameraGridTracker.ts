@@ -231,8 +231,8 @@ class SparseChunkGrid {
   }
 
   cellLocation(i: number, j: number): { ci: number; cj: number; li: number; lj: number; index: number } {
-    assertSafeInteger(i, "cell i");
-    assertSafeInteger(j, "cell j");
+    assertSafeInteger(i, 'cell i');
+    assertSafeInteger(j, 'cell j');
 
     const s = this.cfg.chunkSize;
     const ci = Math.floor(i / s);
@@ -252,10 +252,10 @@ class SparseChunkGrid {
     const importance = this.cfg.initialImportance(i, j);
     const bump = this.cfg.initialBump(i, j);
 
-    assertFiniteNumber(height, "initialHeight");
-    assertFiniteNumber(precision, "initialPrecision");
-    assertFiniteNumber(importance, "initialImportance");
-    assertFiniteNumber(bump, "initialBump");
+    assertFiniteNumber(height, 'initialHeight');
+    assertFiniteNumber(precision, 'initialPrecision');
+    assertFiniteNumber(importance, 'initialImportance');
+    assertFiniteNumber(bump, 'initialBump');
     if (height < 0) throw new RangeError(`initialHeight must be >= 0, got ${height}`);
 
     chunk.height[index] = height;
@@ -370,16 +370,12 @@ class ActiveSet {
 class BoundedRankHeap {
   private readonly heap: RankedCell[] = [];
 
-  constructor(private readonly n: number, private readonly mode: "largest" | "smallest") {}
+  constructor(
+    private readonly n: number,
+    private readonly mode: 'largest' | 'smallest',
+  ) {}
 
-  offer(
-    i: number,
-    j: number,
-    score: number,
-    importance: number,
-    satisfaction: number,
-    gap: number,
-  ): void {
+  offer(i: number, j: number, score: number, importance: number, satisfaction: number, gap: number): void {
     if (this.n <= 0) return;
     if (!Number.isFinite(score)) return;
 
@@ -405,7 +401,7 @@ class BoundedRankHeap {
 
   toSortedArray(): RankedCell[] {
     const out = this.heap.map((x) => ({ ...x }));
-    if (this.mode === "largest") {
+    if (this.mode === 'largest') {
       out.sort((a, b) => sortRankDesc(a, b));
     } else {
       out.sort((a, b) => sortRankAsc(a, b));
@@ -416,12 +412,12 @@ class BoundedRankHeap {
   private isBetterThanRoot(score: number): boolean {
     const root = this.heap[0];
     if (root === undefined) return true;
-    return this.mode === "largest" ? score > root.score : score < root.score;
+    return this.mode === 'largest' ? score > root.score : score < root.score;
   }
 
   /** True if a should be nearer the heap root than b. Root is the worst kept item. */
   private rootOrderedBefore(a: RankedCell, b: RankedCell): boolean {
-    if (this.mode === "largest") {
+    if (this.mode === 'largest') {
       // For keeping largest values, root is the smallest score.
       return a.score < b.score;
     }
@@ -497,9 +493,9 @@ export class CameraGridTracker {
    * Returned rankings describe the disk around the new pose at exactly time t.
    */
   updateCamera(t: number, pose: Pose, n = 0): RankingResult {
-    assertFiniteNumber(t, "t");
+    assertFiniteNumber(t, 't');
     validatePose(pose);
-    assertNonNegativeInteger(n, "n");
+    assertNonNegativeInteger(n, 'n');
 
     if (this.lastPose !== null && t < this.lastT - this.cfg.epsilon) {
       throw new RangeError(`camera time must be non-decreasing: got ${t}, previous ${this.lastT}`);
@@ -529,11 +525,11 @@ export class CameraGridTracker {
    * camera samples and the current pose should keep contributing importance.
    */
   advanceTime(t: number, n = 0): RankingResult {
-    assertFiniteNumber(t, "t");
-    assertNonNegativeInteger(n, "n");
+    assertFiniteNumber(t, 't');
+    assertNonNegativeInteger(n, 'n');
 
     if (this.lastPose === null) {
-      throw new Error("advanceTime() requires at least one updateCamera() call first");
+      throw new Error('advanceTime() requires at least one updateCamera() call first');
     }
     if (t < this.lastT - this.cfg.epsilon) {
       throw new RangeError(`time must be non-decreasing: got ${t}, previous ${this.lastT}`);
@@ -549,16 +545,16 @@ export class CameraGridTracker {
 
   /** Query rankings over the current active disk without adding more viewing time. */
   query(n: number, t = this.lastT): RankingResult {
-    assertFiniteNumber(t, "t");
-    assertNonNegativeInteger(n, "n");
+    assertFiniteNumber(t, 't');
+    assertNonNegativeInteger(n, 'n');
     return this.queryActiveSet(this.active, t, n);
   }
 
   setHeight(i: number, j: number, height: number, t = this.lastT): void {
-    assertSafeInteger(i, "cell i");
-    assertSafeInteger(j, "cell j");
-    assertFiniteNumber(height, "height");
-    assertFiniteNumber(t, "t");
+    assertSafeInteger(i, 'cell i');
+    assertSafeInteger(j, 'cell j');
+    assertFiniteNumber(height, 'height');
+    assertFiniteNumber(t, 't');
     if (height < 0) throw new RangeError(`height must be >= 0, got ${height}`);
 
     const { chunk, index } = this.grid.getOrCreateCell(i, j, t);
@@ -566,9 +562,9 @@ export class CameraGridTracker {
   }
 
   getHeight(i: number, j: number, t = this.lastT): number {
-    assertSafeInteger(i, "cell i");
-    assertSafeInteger(j, "cell j");
-    assertFiniteNumber(t, "t");
+    assertSafeInteger(i, 'cell i');
+    assertSafeInteger(j, 'cell j');
+    assertFiniteNumber(t, 't');
 
     const { chunk, index } = this.grid.getOrCreateCell(i, j, t);
     return chunk.height[index];
@@ -580,10 +576,10 @@ export class CameraGridTracker {
    * decays back to the baseline over tauSatisfaction.
    */
   setPrecision(i: number, j: number, precision: number, t = this.lastT): void {
-    assertSafeInteger(i, "cell i");
-    assertSafeInteger(j, "cell j");
-    assertFiniteNumber(precision, "precision");
-    assertFiniteNumber(t, "t");
+    assertSafeInteger(i, 'cell i');
+    assertSafeInteger(j, 'cell j');
+    assertFiniteNumber(precision, 'precision');
+    assertFiniteNumber(t, 't');
 
     const { chunk, index } = this.grid.getOrCreateCell(i, j, t);
 
@@ -601,18 +597,18 @@ export class CameraGridTracker {
   }
 
   getPrecision(i: number, j: number, t = this.lastT): number {
-    assertSafeInteger(i, "cell i");
-    assertSafeInteger(j, "cell j");
-    assertFiniteNumber(t, "t");
+    assertSafeInteger(i, 'cell i');
+    assertSafeInteger(j, 'cell j');
+    assertFiniteNumber(t, 't');
 
     const { chunk, index } = this.grid.getOrCreateCell(i, j, t);
     return chunk.precision[index];
   }
 
   getCellSnapshot(i: number, j: number, t = this.lastT): CellSnapshot {
-    assertSafeInteger(i, "cell i");
-    assertSafeInteger(j, "cell j");
-    assertFiniteNumber(t, "t");
+    assertSafeInteger(i, 'cell i');
+    assertSafeInteger(j, 'cell j');
+    assertFiniteNumber(t, 't');
 
     const { chunk, index } = this.grid.getOrCreateCell(i, j, t);
     const importance = this.realizeImportanceInPlace(chunk, index, t);
@@ -652,8 +648,8 @@ export class CameraGridTracker {
     const i0 = Math.ceil((px - m) / k - 0.5 - epsilon);
     const i1 = Math.floor((px + m) / k - 0.5 + epsilon);
 
-    assertSafeInteger(i0, "disk i0");
-    assertSafeInteger(i1, "disk i1");
+    assertSafeInteger(i0, 'disk i0');
+    assertSafeInteger(i1, 'disk i1');
 
     for (let i = i0; i <= i1; i++) {
       const xc = (i + 0.5) * k;
@@ -666,8 +662,8 @@ export class CameraGridTracker {
       const j0 = Math.ceil((pz - zLim) / k - 0.5 - epsilon);
       const j1 = Math.floor((pz + zLim) / k - 0.5 + epsilon);
 
-      assertSafeInteger(j0, "disk j0");
-      assertSafeInteger(j1, "disk j1");
+      assertSafeInteger(j0, 'disk j0');
+      assertSafeInteger(j1, 'disk j1');
 
       for (let j = j0; j <= j1; j++) {
         if (out.length >= maxActiveCells) {
@@ -717,11 +713,12 @@ export class CameraGridTracker {
 
       const oldImportance = this.realizeImportanceInPlace(chunk, index, fromT);
       const halfLife = this.importanceHalfLifeForDistance(horizontal);
-      const a = Math.exp(-Math.LN2 * dt / halfLife);
+      const a = Math.exp((-Math.LN2 * dt) / halfLife);
       const oneMinusA = 1 - a;
-      const w = horizontal <= m + epsilon
-        ? this.gazeWeightFromGeometry(qx, qz, horizontal2, horizontal, chunk, index, py, dx, dy, dz)
-        : 0;
+      const w =
+        horizontal <= m + epsilon
+          ? this.gazeWeightFromGeometry(qx, qz, horizontal2, horizontal, chunk, index, py, dx, dy, dz)
+          : 0;
 
       chunk.importance[index] = oldImportance * a + w * oneMinusA;
       chunk.importanceHalfLife[index] = halfLife;
@@ -730,12 +727,12 @@ export class CameraGridTracker {
   }
 
   private queryActiveSet(active: ActiveSet, t: number, n: number): RankingResult {
-    const topImportance = new BoundedRankHeap(n, "largest");
-    const bottomImportance = new BoundedRankHeap(n, "smallest");
-    const topSatisfaction = new BoundedRankHeap(n, "largest");
-    const bottomSatisfaction = new BoundedRankHeap(n, "smallest");
-    const topGap = new BoundedRankHeap(n, "largest");
-    const bottomGap = new BoundedRankHeap(n, "smallest");
+    const topImportance = new BoundedRankHeap(n, 'largest');
+    const bottomImportance = new BoundedRankHeap(n, 'smallest');
+    const topSatisfaction = new BoundedRankHeap(n, 'largest');
+    const bottomSatisfaction = new BoundedRankHeap(n, 'smallest');
+    const topGap = new BoundedRankHeap(n, 'largest');
+    const bottomGap = new BoundedRankHeap(n, 'smallest');
 
     for (let pos = 0; pos < active.length; pos++) {
       const chunk = active.chunks[pos];
@@ -779,7 +776,7 @@ export class CameraGridTracker {
     const dt = t - chunk.tImportance[index];
     if (dt > 0) {
       const halfLife = chunk.importanceHalfLife[index] || this.cfg.defaultImportanceHalfLife;
-      chunk.importance[index] *= Math.exp(-Math.LN2 * dt / halfLife);
+      chunk.importance[index] *= Math.exp((-Math.LN2 * dt) / halfLife);
       chunk.tImportance[index] = t;
     }
     return chunk.importance[index];
@@ -797,26 +794,23 @@ export class CameraGridTracker {
   private satisfaction(chunk: Chunk, index: number, t: number): number {
     const base = this.clampSatisfaction(this.cfg.precisionToSatisfaction(chunk.precision[index]));
     const dt = t - chunk.tBump[index];
-    const transient = dt > 0
-      ? chunk.bump[index] * Math.exp(-dt / this.cfg.tauSatisfaction)
-      : chunk.bump[index];
+    const transient = dt > 0 ? chunk.bump[index] * Math.exp(-dt / this.cfg.tauSatisfaction) : chunk.bump[index];
     const penalty = this.cfg.neighborSatisfactionPenaltyByCount[chunk.higherPrecisionNeighbors[index]];
 
     return this.clampSatisfaction(base + transient - penalty);
   }
 
   private clampSatisfaction(x: number): number {
-    assertFiniteNumber(x, "satisfaction");
+    assertFiniteNumber(x, 'satisfaction');
     return Math.max(this.cfg.minSatisfaction, Math.min(this.cfg.maxSatisfaction, x));
   }
 
   private importanceHalfLifeForDistance(horizontal: number): number {
     const u = Math.max(0, Math.min(1, horizontal / this.cfg.m));
-    const shaped = this.cfg.importanceDecayDistancePower === 1
-      ? u
-      : Math.pow(u, this.cfg.importanceDecayDistancePower);
-    return this.cfg.nearImportanceHalfLife
-      + (this.cfg.farImportanceHalfLife - this.cfg.nearImportanceHalfLife) * shaped;
+    const shaped = this.cfg.importanceDecayDistancePower === 1 ? u : Math.pow(u, this.cfg.importanceDecayDistancePower);
+    return (
+      this.cfg.nearImportanceHalfLife + (this.cfg.farImportanceHalfLife - this.cfg.nearImportanceHalfLife) * shaped
+    );
   }
 
   private gazeWeightFromGeometry(
@@ -862,15 +856,17 @@ export class CameraGridTracker {
     bestCos = Math.max(-1, Math.min(1, bestCos));
     const theta = Math.acos(bestCos);
 
-    const angleWeight = this.cfg.angleWeight !== undefined
-      ? this.cfg.angleWeight(theta, bestCos)
-      : defaultAngleWeight(theta, bestCos, this.cfg);
+    const angleWeight =
+      this.cfg.angleWeight !== undefined
+        ? this.cfg.angleWeight(theta, bestCos)
+        : defaultAngleWeight(theta, bestCos, this.cfg);
 
     if (!(angleWeight > 0)) return 0;
 
-    const distanceWeight = this.cfg.distanceWeight !== undefined
-      ? this.cfg.distanceWeight(horizontal, this.cfg.m)
-      : defaultDistanceWeight(horizontal, this.cfg);
+    const distanceWeight =
+      this.cfg.distanceWeight !== undefined
+        ? this.cfg.distanceWeight(horizontal, this.cfg.m)
+        : defaultDistanceWeight(horizontal, this.cfg);
 
     if (!(distanceWeight > 0)) return 0;
 
@@ -880,13 +876,13 @@ export class CameraGridTracker {
 }
 
 function resolveConfig(config: TrackerConfig): ResolvedConfig {
-  assertFiniteNumber(config.k, "k");
-  assertFiniteNumber(config.m, "m");
+  assertFiniteNumber(config.k, 'k');
+  assertFiniteNumber(config.m, 'm');
   if (config.k <= 0) throw new RangeError(`k must be > 0, got ${config.k}`);
   if (config.m <= 0) throw new RangeError(`m must be > 0, got ${config.m}`);
 
   const chunkSize = config.chunkSize ?? 32;
-  assertPositiveInteger(chunkSize, "chunkSize");
+  assertPositiveInteger(chunkSize, 'chunkSize');
   if (chunkSize > 4096) throw new RangeError(`chunkSize is suspiciously large: ${chunkSize}`);
 
   const tauImportance = config.tauImportance ?? 1.0;
@@ -898,9 +894,8 @@ function resolveConfig(config: TrackerConfig): ResolvedConfig {
   const angleSigmaRad = config.angleSigmaRad ?? 0.25;
   const fovRadiusRad = config.fovRadiusRad === undefined ? null : config.fovRadiusRad;
   const distanceWeightPower = config.distanceWeightPower ?? 1.0;
-  const distanceInverseSquareRadius = config.distanceInverseSquareRadius === undefined
-    ? null
-    : config.distanceInverseSquareRadius;
+  const distanceInverseSquareRadius =
+    config.distanceInverseSquareRadius === undefined ? null : config.distanceInverseSquareRadius;
   const overshootEta = config.overshootEta ?? 0.15;
   const minSatisfaction = config.minSatisfaction ?? 0;
   const maxSatisfaction = config.maxSatisfaction ?? 1;
@@ -911,49 +906,49 @@ function resolveConfig(config: TrackerConfig): ResolvedConfig {
   );
   const epsilon = config.epsilon ?? 1e-9;
 
-  assertFiniteNumber(tauImportance, "tauImportance");
-  assertFiniteNumber(defaultImportanceHalfLife, "defaultImportanceHalfLife");
-  assertFiniteNumber(nearImportanceHalfLife, "nearImportanceHalfLife");
-  assertFiniteNumber(farImportanceHalfLife, "farImportanceHalfLife");
-  assertFiniteNumber(importanceDecayDistancePower, "importanceDecayDistancePower");
-  assertFiniteNumber(tauSatisfaction, "tauSatisfaction");
-  assertFiniteNumber(angleSigmaRad, "angleSigmaRad");
-  assertFiniteNumber(distanceWeightPower, "distanceWeightPower");
-  assertFiniteNumber(overshootEta, "overshootEta");
-  assertFiniteNumber(minSatisfaction, "minSatisfaction");
-  assertFiniteNumber(maxSatisfaction, "maxSatisfaction");
-  assertFiniteNumber(maxActiveCells, "maxActiveCells");
-  assertFiniteNumber(neighborPrecisionEpsilon, "neighborPrecisionEpsilon");
-  assertFiniteNumber(epsilon, "epsilon");
+  assertFiniteNumber(tauImportance, 'tauImportance');
+  assertFiniteNumber(defaultImportanceHalfLife, 'defaultImportanceHalfLife');
+  assertFiniteNumber(nearImportanceHalfLife, 'nearImportanceHalfLife');
+  assertFiniteNumber(farImportanceHalfLife, 'farImportanceHalfLife');
+  assertFiniteNumber(importanceDecayDistancePower, 'importanceDecayDistancePower');
+  assertFiniteNumber(tauSatisfaction, 'tauSatisfaction');
+  assertFiniteNumber(angleSigmaRad, 'angleSigmaRad');
+  assertFiniteNumber(distanceWeightPower, 'distanceWeightPower');
+  assertFiniteNumber(overshootEta, 'overshootEta');
+  assertFiniteNumber(minSatisfaction, 'minSatisfaction');
+  assertFiniteNumber(maxSatisfaction, 'maxSatisfaction');
+  assertFiniteNumber(maxActiveCells, 'maxActiveCells');
+  assertFiniteNumber(neighborPrecisionEpsilon, 'neighborPrecisionEpsilon');
+  assertFiniteNumber(epsilon, 'epsilon');
 
-  if (tauImportance <= 0) throw new RangeError("tauImportance must be > 0");
-  if (defaultImportanceHalfLife <= 0) throw new RangeError("defaultImportanceHalfLife must be > 0");
-  if (nearImportanceHalfLife <= 0) throw new RangeError("nearImportanceHalfLife must be > 0");
-  if (farImportanceHalfLife <= 0) throw new RangeError("farImportanceHalfLife must be > 0");
+  if (tauImportance <= 0) throw new RangeError('tauImportance must be > 0');
+  if (defaultImportanceHalfLife <= 0) throw new RangeError('defaultImportanceHalfLife must be > 0');
+  if (nearImportanceHalfLife <= 0) throw new RangeError('nearImportanceHalfLife must be > 0');
+  if (farImportanceHalfLife <= 0) throw new RangeError('farImportanceHalfLife must be > 0');
   if (nearImportanceHalfLife < farImportanceHalfLife) {
-    throw new RangeError("nearImportanceHalfLife must be >= farImportanceHalfLife");
+    throw new RangeError('nearImportanceHalfLife must be >= farImportanceHalfLife');
   }
   if (importanceDecayDistancePower <= 0) {
-    throw new RangeError("importanceDecayDistancePower must be > 0");
+    throw new RangeError('importanceDecayDistancePower must be > 0');
   }
-  if (tauSatisfaction <= 0) throw new RangeError("tauSatisfaction must be > 0");
-  if (angleSigmaRad <= 0) throw new RangeError("angleSigmaRad must be > 0");
-  if (distanceWeightPower <= 0) throw new RangeError("distanceWeightPower must be > 0");
+  if (tauSatisfaction <= 0) throw new RangeError('tauSatisfaction must be > 0');
+  if (angleSigmaRad <= 0) throw new RangeError('angleSigmaRad must be > 0');
+  if (distanceWeightPower <= 0) throw new RangeError('distanceWeightPower must be > 0');
   if (distanceInverseSquareRadius !== null) {
-    assertFiniteNumber(distanceInverseSquareRadius, "distanceInverseSquareRadius");
+    assertFiniteNumber(distanceInverseSquareRadius, 'distanceInverseSquareRadius');
     if (distanceInverseSquareRadius <= 0) {
-      throw new RangeError("distanceInverseSquareRadius must be > 0 or null");
+      throw new RangeError('distanceInverseSquareRadius must be > 0 or null');
     }
   }
   if (maxSatisfaction < minSatisfaction) {
-    throw new RangeError("maxSatisfaction must be >= minSatisfaction");
+    throw new RangeError('maxSatisfaction must be >= minSatisfaction');
   }
-  if (maxActiveCells < 0) throw new RangeError("maxActiveCells must be >= 0");
-  if (neighborPrecisionEpsilon < 0) throw new RangeError("neighborPrecisionEpsilon must be >= 0");
-  if (epsilon <= 0) throw new RangeError("epsilon must be > 0");
+  if (maxActiveCells < 0) throw new RangeError('maxActiveCells must be >= 0');
+  if (neighborPrecisionEpsilon < 0) throw new RangeError('neighborPrecisionEpsilon must be >= 0');
+  if (epsilon <= 0) throw new RangeError('epsilon must be > 0');
   if (fovRadiusRad !== null) {
-    assertFiniteNumber(fovRadiusRad, "fovRadiusRad");
-    if (fovRadiusRad <= 0) throw new RangeError("fovRadiusRad must be > 0 or null");
+    assertFiniteNumber(fovRadiusRad, 'fovRadiusRad');
+    if (fovRadiusRad <= 0) throw new RangeError('fovRadiusRad must be > 0 or null');
   }
 
   return {
@@ -1009,7 +1004,7 @@ function normalizeNeighborSatisfactionPenalty(value: readonly number[] | undefin
       throw new RangeError(`neighborSatisfactionPenaltyByCount[${i}] must be >= 0`);
     }
     if (penalty < previous) {
-      throw new RangeError("neighborSatisfactionPenaltyByCount must be non-decreasing");
+      throw new RangeError('neighborSatisfactionPenaltyByCount must be non-decreasing');
     }
     out[i] = penalty;
     previous = penalty;
@@ -1035,15 +1030,15 @@ function defaultDistanceWeight(horizontal: number, cfg: ResolvedConfig): number 
 }
 
 function scalarOrFn(value: number | ((i: number, j: number) => number)): (i: number, j: number) => number {
-  return typeof value === "function" ? value : () => value;
+  return typeof value === 'function' ? value : () => value;
 }
 
 function validatePose(pose: Pose): void {
-  assertFiniteNumber(pose.p.x, "pose.p.x");
-  assertFiniteNumber(pose.p.y, "pose.p.y");
-  assertFiniteNumber(pose.p.z, "pose.p.z");
-  assertFiniteNumber(pose.yaw, "pose.yaw");
-  assertFiniteNumber(pose.pitch, "pose.pitch");
+  assertFiniteNumber(pose.p.x, 'pose.p.x');
+  assertFiniteNumber(pose.p.y, 'pose.p.y');
+  assertFiniteNumber(pose.p.z, 'pose.p.z');
+  assertFiniteNumber(pose.yaw, 'pose.yaw');
+  assertFiniteNumber(pose.pitch, 'pose.pitch');
 }
 
 function clonePose(pose: Pose): Pose {

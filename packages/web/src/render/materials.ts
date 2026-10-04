@@ -261,18 +261,23 @@ interface TerrainMaterialOptions {
 }
 
 function makeTerrainMaterial(
-  atlas: THREE.Texture, shared: SharedUniforms, animation: TextureAnimationUniforms, opts: TerrainMaterialOptions,
+  atlas: THREE.Texture,
+  shared: SharedUniforms,
+  animation: TextureAnimationUniforms,
+  opts: TerrainMaterialOptions,
 ): THREE.ShaderMaterial {
   const transparent = opts.transparent ?? false;
   const material = new THREE.ShaderMaterial({
     vertexShader: opts.colorOnly ? COLOR_VERT : opts.tiled ? TILED_VERT : VERT,
     fragmentShader: opts.colorOnly ? COLOR_FRAG : opts.tiled ? TILED_FRAG : FRAG,
     uniforms: {
-      ...(opts.colorOnly ? {} : {
-        map: { value: opts.map ?? atlas },
-        alphaTest: { value: opts.alphaTest ?? 0 },
-        opacity: { value: opts.opacity ?? 1 },
-      }),
+      ...(opts.colorOnly
+        ? {}
+        : {
+            map: { value: opts.map ?? atlas },
+            alphaTest: { value: opts.alphaTest ?? 0 },
+            opacity: { value: opts.opacity ?? 1 },
+          }),
       positionScale: { value: opts.positionScale ?? new THREE.Vector3(18, 18, 18) },
       positionOffset: { value: opts.positionOffset ?? new THREE.Vector3(-1, -1, -1) },
       animationInfo: { value: animation.info },
@@ -294,7 +299,11 @@ function makeTerrainMaterial(
   return material;
 }
 
-export function createMaterials(atlas: THREE.Texture, shared: SharedUniforms, animation: TextureAnimationUniforms): TerrainMaterials {
+export function createMaterials(
+  atlas: THREE.Texture,
+  shared: SharedUniforms,
+  animation: TextureAnimationUniforms,
+): TerrainMaterials {
   const materials = {
     opaque: makeTerrainMaterial(atlas, shared, animation, { alphaTest: 0.001 }),
     opaqueTiled: makeTerrainMaterial(atlas, shared, animation, { alphaTest: 0.001, tiled: true }),
@@ -314,9 +323,13 @@ export function createMaterials(atlas: THREE.Texture, shared: SharedUniforms, an
 
 let emptyTextureAnimationUniforms: TextureAnimationUniforms | null = null;
 function emptyAnimations(): TextureAnimationUniforms {
-  return emptyTextureAnimationUniforms ??= createTextureAnimationUniforms({
-    ids: {}, info: new Uint8Array(4), infoSize: [1, 1], frames: new Uint8Array(4), frameSize: [1, 1],
-  });
+  return (emptyTextureAnimationUniforms ??= createTextureAnimationUniforms({
+    ids: {},
+    info: new Uint8Array(4),
+    infoSize: [1, 1],
+    frames: new Uint8Array(4),
+    frameSize: [1, 1],
+  }));
 }
 
 export function createTopMapMaterial(map: THREE.Texture, shared: SharedUniforms): THREE.ShaderMaterial {

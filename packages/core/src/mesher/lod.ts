@@ -150,7 +150,9 @@ function packLodPositions(values: Float32Array): Uint16Array {
   const out = new Uint16Array(values.length);
   for (let i = 0; i < values.length; i += 3) {
     out[i] = Math.round(Math.min(1, Math.max(0, values[i] / LOD_POSITION_XZ_SCALE)) * 65535);
-    out[i + 1] = Math.round(Math.min(1, Math.max(0, (values[i + 1] - LOD_POSITION_Y_OFFSET) / LOD_POSITION_Y_SCALE)) * 65535);
+    out[i + 1] = Math.round(
+      Math.min(1, Math.max(0, (values[i + 1] - LOD_POSITION_Y_OFFSET) / LOD_POSITION_Y_SCALE)) * 65535,
+    );
     out[i + 2] = Math.round(Math.min(1, Math.max(0, values[i + 2] / LOD_POSITION_XZ_SCALE)) * 65535);
   }
   return out;
@@ -187,7 +189,7 @@ function gridCoordKey(v: number): number {
 }
 
 function packGrid4(a: number, b: number, c: number, d: number): number {
-  return (((a * GRID_COORD_RADIX + b) * GRID_COORD_RADIX + c) * GRID_COORD_RADIX + d);
+  return ((a * GRID_COORD_RADIX + b) * GRID_COORD_RADIX + c) * GRID_COORD_RADIX + d;
 }
 
 function facePlaneKey(dir: Direction, x0: number, x1: number, z0: number, z1: number): number {
@@ -217,7 +219,9 @@ class LodFaceAccumulator {
   private buckets = FACE_DIRECTIONS.map(() => new Map<number, Map<number, FaceBucket>>());
   private bucketCount = 0;
 
-  get empty() { return this.bucketCount === 0; }
+  get empty() {
+    return this.bucketCount === 0;
+  }
 
   add(
     dir: Direction,
@@ -283,22 +287,82 @@ class LodFaceAccumulator {
           const light: [number, number] = [f.sky / f.count, f.block / f.count];
           switch (f.dir) {
             case 'up':
-              builder.quad([[f.x0, f.y0, f.z0], [f.x1, f.y0, f.z0], [f.x1, f.y0, f.z1], [f.x0, f.y0, f.z1]], color, light, SHADE.up);
+              builder.quad(
+                [
+                  [f.x0, f.y0, f.z0],
+                  [f.x1, f.y0, f.z0],
+                  [f.x1, f.y0, f.z1],
+                  [f.x0, f.y0, f.z1],
+                ],
+                color,
+                light,
+                SHADE.up,
+              );
               break;
             case 'down':
-              builder.quad([[f.x0, f.y0, f.z1], [f.x1, f.y0, f.z1], [f.x1, f.y0, f.z0], [f.x0, f.y0, f.z0]], color, light, SHADE.down);
+              builder.quad(
+                [
+                  [f.x0, f.y0, f.z1],
+                  [f.x1, f.y0, f.z1],
+                  [f.x1, f.y0, f.z0],
+                  [f.x0, f.y0, f.z0],
+                ],
+                color,
+                light,
+                SHADE.down,
+              );
               break;
             case 'north':
-              builder.quad([[f.x1, f.y1, f.z0], [f.x0, f.y1, f.z0], [f.x0, f.y0, f.z0], [f.x1, f.y0, f.z0]], color, light, SHADE.north);
+              builder.quad(
+                [
+                  [f.x1, f.y1, f.z0],
+                  [f.x0, f.y1, f.z0],
+                  [f.x0, f.y0, f.z0],
+                  [f.x1, f.y0, f.z0],
+                ],
+                color,
+                light,
+                SHADE.north,
+              );
               break;
             case 'south':
-              builder.quad([[f.x0, f.y1, f.z0], [f.x1, f.y1, f.z0], [f.x1, f.y0, f.z0], [f.x0, f.y0, f.z0]], color, light, SHADE.south);
+              builder.quad(
+                [
+                  [f.x0, f.y1, f.z0],
+                  [f.x1, f.y1, f.z0],
+                  [f.x1, f.y0, f.z0],
+                  [f.x0, f.y0, f.z0],
+                ],
+                color,
+                light,
+                SHADE.south,
+              );
               break;
             case 'west':
-              builder.quad([[f.x0, f.y1, f.z0], [f.x0, f.y1, f.z1], [f.x0, f.y0, f.z1], [f.x0, f.y0, f.z0]], color, light, SHADE.west);
+              builder.quad(
+                [
+                  [f.x0, f.y1, f.z0],
+                  [f.x0, f.y1, f.z1],
+                  [f.x0, f.y0, f.z1],
+                  [f.x0, f.y0, f.z0],
+                ],
+                color,
+                light,
+                SHADE.west,
+              );
               break;
             case 'east':
-              builder.quad([[f.x0, f.y1, f.z1], [f.x0, f.y1, f.z0], [f.x0, f.y0, f.z0], [f.x0, f.y0, f.z1]], color, light, SHADE.east);
+              builder.quad(
+                [
+                  [f.x0, f.y1, f.z1],
+                  [f.x0, f.y1, f.z0],
+                  [f.x0, f.y0, f.z0],
+                  [f.x0, f.y0, f.z1],
+                ],
+                color,
+                light,
+                SHADE.east,
+              );
               break;
           }
         }
@@ -320,7 +384,14 @@ function isThinDecoration(state: BlockStateRef, info: BlockInfo): boolean {
   if (info.occludes || info.fluid) return false;
   const local = localName(state.name);
   if (local.endsWith('_leaves')) return false;
-  if (local.endsWith('_slab') || local.endsWith('_stairs') || local.endsWith('_wall') || local.endsWith('_fence') || local.endsWith('_fence_gate')) return false;
+  if (
+    local.endsWith('_slab') ||
+    local.endsWith('_stairs') ||
+    local.endsWith('_wall') ||
+    local.endsWith('_fence') ||
+    local.endsWith('_fence_gate')
+  )
+    return false;
   if (local.endsWith('_pane') || local.endsWith('_glass') || local.endsWith('_ice')) return false;
   if (THIN_DECORATION.has(local)) return true;
   return THIN_SUFFIXES.some((suffix) => local.endsWith(suffix));
@@ -351,7 +422,11 @@ function shapeOf(state: BlockStateRef, info: BlockInfo): LodShape | null {
       maxY = 1 / 16;
     } else if (local === 'farmland' || local === 'dirt_path') {
       maxY = 15 / 16;
-    } else if (local.endsWith('_pressure_plate') || local === 'heavy_weighted_pressure_plate' || local === 'light_weighted_pressure_plate') {
+    } else if (
+      local.endsWith('_pressure_plate') ||
+      local === 'heavy_weighted_pressure_plate' ||
+      local === 'light_weighted_pressure_plate'
+    ) {
       maxY = 1 / 16;
     } else if (local.endsWith('_trapdoor') && state.properties.open !== 'true') {
       if (state.properties.half === 'top') minY = 13 / 16;
@@ -361,7 +436,9 @@ function shapeOf(state: BlockStateRef, info: BlockInfo): LodShape | null {
 
   minY = Math.min(1, Math.max(0, minY));
   maxY = Math.min(1, Math.max(0, maxY));
-  return maxY - minY > EPS ? { minY, maxY, sideMaxY: maxY, occludes: info.occludes, fluidTexture: info.fluid?.texture } : null;
+  return maxY - minY > EPS
+    ? { minY, maxY, sideMaxY: maxY, occludes: info.occludes, fluidTexture: info.fluid?.texture }
+    : null;
 }
 
 const LOD_SHAPE_CACHE = new WeakMap<BlockStateRef, { info: BlockInfo; shape: LodShape | null }>();
@@ -633,10 +710,18 @@ function addLodSideSegment(
   const y0 = wy + from;
   const y1 = wy + to;
   switch (dir) {
-    case 'north': addLodFace(acc, dir, x0, x1, y0, y1, z0, z0, color, packedLight); break;
-    case 'south': addLodFace(acc, dir, x0, x1, y0, y1, z1, z1, color, packedLight); break;
-    case 'west': addLodFace(acc, dir, x0, x0, y0, y1, z0, z1, color, packedLight); break;
-    case 'east': addLodFace(acc, dir, x1, x1, y0, y1, z0, z1, color, packedLight); break;
+    case 'north':
+      addLodFace(acc, dir, x0, x1, y0, y1, z0, z0, color, packedLight);
+      break;
+    case 'south':
+      addLodFace(acc, dir, x0, x1, y0, y1, z1, z1, color, packedLight);
+      break;
+    case 'west':
+      addLodFace(acc, dir, x0, x0, y0, y1, z0, z1, color, packedLight);
+      break;
+    case 'east':
+      addLodFace(acc, dir, x1, x1, y0, y1, z0, z1, color, packedLight);
+      break;
   }
 }
 
@@ -672,9 +757,8 @@ export function meshLodChunk(
   const cachedShape = (state: BlockStateRef): LodShape | null => {
     return cachedLodShape(state, cachedInfo(state.name));
   };
-  const skyExterior = hasSkyLight && view.getSkyLight
-    ? (wx: number, wy: number, wz: number) => view.getSkyLight!(wx, wy, wz) > 0
-    : null;
+  const skyExterior =
+    hasSkyLight && view.getSkyLight ? (wx: number, wy: number, wz: number) => view.getSkyLight!(wx, wy, wz) > 0 : null;
   let noSkyExterior: ((wx: number, wy: number, wz: number) => boolean) | null = null;
   const exterior = (wx: number, wy: number, wz: number): boolean => {
     if (skyExterior) return skyExterior(wx, wy, wz);
@@ -687,7 +771,17 @@ export function meshLodChunk(
   for (const [sy, section] of col.sections) {
     if (section.isEmpty) continue;
     if (hasSkyLight && !sectionHasSkyExposure(section)) continue;
-    const cache = buildSectionLodCache(sectionCacheScratch, view, section, ox, sy, oz, cachedShape, exterior, skyExterior ? section.skyLight : null);
+    const cache = buildSectionLodCache(
+      sectionCacheScratch,
+      view,
+      section,
+      ox,
+      sy,
+      oz,
+      cachedShape,
+      exterior,
+      skyExterior ? section.skyLight : null,
+    );
     const { shapes, exterior: exteriorMask } = cache;
     for (let ly = 0; ly < 16; ly++) {
       const wy = sy * 16 + ly;
@@ -725,7 +819,8 @@ export function meshLodChunk(
               const exteriorSouth = exteriorMask[southIndex] > 0;
               const exteriorWest = exteriorMask[westIndex] > 0;
               const exteriorEast = exteriorMask[eastIndex] > 0;
-              if (!exteriorUp && !exteriorDown && !exteriorNorth && !exteriorSouth && !exteriorWest && !exteriorEast) continue;
+              if (!exteriorUp && !exteriorDown && !exteriorNorth && !exteriorSouth && !exteriorWest && !exteriorEast)
+                continue;
 
               const state = section.block(x, ly, z);
               const wx = ox + x;
@@ -738,21 +833,103 @@ export function meshLodChunk(
               if (exteriorUp) {
                 const above = shapes[upIndex];
                 if (!above || above.minY > EPS) {
-                  addLodFace(acc, 'up', x0, x1, y1, y1, z0, z1, color, packedFaceLight(view, hasSkyLight, 'up', wx, wy, wz));
+                  addLodFace(
+                    acc,
+                    'up',
+                    x0,
+                    x1,
+                    y1,
+                    y1,
+                    z0,
+                    z1,
+                    color,
+                    packedFaceLight(view, hasSkyLight, 'up', wx, wy, wz),
+                  );
                 }
               }
 
               if (exteriorDown) {
                 const below = shapes[downIndex];
                 if (!below || below.maxY < 1 - EPS) {
-                  addLodFace(acc, 'down', x0, x1, y0, y0, z0, z1, color, packedFaceLight(view, hasSkyLight, 'down', wx, wy, wz));
+                  addLodFace(
+                    acc,
+                    'down',
+                    x0,
+                    x1,
+                    y0,
+                    y0,
+                    z0,
+                    z1,
+                    color,
+                    packedFaceLight(view, hasSkyLight, 'down', wx, wy, wz),
+                  );
                 }
               }
 
-              if (exteriorNorth) addLodSide(acc, 'north', shape, shapes[northIndex], shapes[northIndex + LOD_CACHE_PLANE], sideMaxY, wy, x0, x1, z0, z1, color, packedFaceLight(view, hasSkyLight, 'north', wx, wy, wz));
-              if (exteriorSouth) addLodSide(acc, 'south', shape, shapes[southIndex], shapes[southIndex + LOD_CACHE_PLANE], sideMaxY, wy, x0, x1, z0, z1, color, packedFaceLight(view, hasSkyLight, 'south', wx, wy, wz));
-              if (exteriorWest) addLodSide(acc, 'west', shape, shapes[westIndex], shapes[westIndex + LOD_CACHE_PLANE], sideMaxY, wy, x0, x1, z0, z1, color, packedFaceLight(view, hasSkyLight, 'west', wx, wy, wz));
-              if (exteriorEast) addLodSide(acc, 'east', shape, shapes[eastIndex], shapes[eastIndex + LOD_CACHE_PLANE], sideMaxY, wy, x0, x1, z0, z1, color, packedFaceLight(view, hasSkyLight, 'east', wx, wy, wz));
+              if (exteriorNorth)
+                addLodSide(
+                  acc,
+                  'north',
+                  shape,
+                  shapes[northIndex],
+                  shapes[northIndex + LOD_CACHE_PLANE],
+                  sideMaxY,
+                  wy,
+                  x0,
+                  x1,
+                  z0,
+                  z1,
+                  color,
+                  packedFaceLight(view, hasSkyLight, 'north', wx, wy, wz),
+                );
+              if (exteriorSouth)
+                addLodSide(
+                  acc,
+                  'south',
+                  shape,
+                  shapes[southIndex],
+                  shapes[southIndex + LOD_CACHE_PLANE],
+                  sideMaxY,
+                  wy,
+                  x0,
+                  x1,
+                  z0,
+                  z1,
+                  color,
+                  packedFaceLight(view, hasSkyLight, 'south', wx, wy, wz),
+                );
+              if (exteriorWest)
+                addLodSide(
+                  acc,
+                  'west',
+                  shape,
+                  shapes[westIndex],
+                  shapes[westIndex + LOD_CACHE_PLANE],
+                  sideMaxY,
+                  wy,
+                  x0,
+                  x1,
+                  z0,
+                  z1,
+                  color,
+                  packedFaceLight(view, hasSkyLight, 'west', wx, wy, wz),
+                );
+              if (exteriorEast)
+                addLodSide(
+                  acc,
+                  'east',
+                  shape,
+                  shapes[eastIndex],
+                  shapes[eastIndex + LOD_CACHE_PLANE],
+                  sideMaxY,
+                  wy,
+                  x0,
+                  x1,
+                  z0,
+                  z1,
+                  color,
+                  packedFaceLight(view, hasSkyLight, 'east', wx, wy, wz),
+                );
             }
           }
         }

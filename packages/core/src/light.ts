@@ -1,6 +1,9 @@
 import { ChunkColumn } from './world.js';
 
-export interface LightBlockInfo { filter: number; emit: number }
+export interface LightBlockInfo {
+  filter: number;
+  emit: number;
+}
 export interface ComputeLightOptions {
   writeSky?: boolean;
   writeBlock?: boolean;
@@ -26,7 +29,7 @@ export function computeColumnLight(
   const block = new Uint8Array(size);
   const emitters: number[] = [];
 
-  const idxOf = (x: number, y: number, z: number) => ((y * 16 + z) * 16 + x);
+  const idxOf = (x: number, y: number, z: number) => (y * 16 + z) * 16 + x;
 
   // 预填每格的透光衰减和光源
   for (let sy = col.minSectionY; sy <= col.maxSectionY; sy++) {
@@ -42,7 +45,10 @@ export function computeColumnLight(
           if (!info) continue;
           const i = idxOf(lx, y, lz);
           filter[i] = info.filter;
-          if (writeBlock && info.emit > 0) { block[i] = info.emit; emitters.push(i); }
+          if (writeBlock && info.emit > 0) {
+            block[i] = info.emit;
+            emitters.push(i);
+          }
         }
       }
     }
@@ -57,20 +63,30 @@ export function computeColumnLight(
       const i = queue[head++];
       const level = arr[i];
       if (level <= 1 && !isSky) continue;
-      const x = i & 15, z = (i >> 4) & 15, y = i >> 8;
+      const x = i & 15,
+        z = (i >> 4) & 15,
+        y = i >> 8;
       // 六方向
       for (let d = 0; d < 6; d++) {
-        let nx = x, ny = y, nz = z;
-        if (d === 0) ny--; else if (d === 1) ny++;
-        else if (d === 2) nz--; else if (d === 3) nz++;
-        else if (d === 4) nx--; else nx++;
+        let nx = x,
+          ny = y,
+          nz = z;
+        if (d === 0) ny--;
+        else if (d === 1) ny++;
+        else if (d === 2) nz--;
+        else if (d === 3) nz++;
+        else if (d === 4) nx--;
+        else nx++;
         if (nx < 0 || nx > 15 || nz < 0 || nz > 15 || ny < 0 || ny >= H) continue;
         const ni = idxOf(nx, ny, nz);
         const f = filter[ni];
         let nl: number;
         if (isSky && d === 0 && level === 15 && f === 0) nl = 15;
         else nl = level - Math.max(1, f);
-        if (nl > arr[ni]) { arr[ni] = nl; push(ni); }
+        if (nl > arr[ni]) {
+          arr[ni] = nl;
+          push(ni);
+        }
       }
     }
     queue.length = 0;

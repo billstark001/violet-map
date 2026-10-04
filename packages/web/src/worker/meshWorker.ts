@@ -1,8 +1,23 @@
 /// <reference lib="webworker" />
 import {
-  BlockInfo, ChunkColumn, ChunkNeighborhood, MeshBuffers, MesherResources, ModelBaker,
-  appendChunkEntities, computeColumnLight, hexToRgb, meshLodChunk, meshSection, parseChunkColumn,
-  resolveBiomeColors, type BlockStateRef, type RendererDefinitions, type RendererModelDef, type Rgb, type TintType,
+  BlockInfo,
+  ChunkColumn,
+  ChunkNeighborhood,
+  MeshBuffers,
+  MesherResources,
+  ModelBaker,
+  appendChunkEntities,
+  computeColumnLight,
+  hexToRgb,
+  meshLodChunk,
+  meshSection,
+  parseChunkColumn,
+  resolveBiomeColors,
+  type BlockStateRef,
+  type RendererDefinitions,
+  type RendererModelDef,
+  type Rgb,
+  type TintType,
 } from '@violet-map/core';
 import type { RenderModelInstance } from '@violet-map/core';
 import { parseNbt } from '@violet-map/core/nbt';
@@ -49,7 +64,7 @@ function redstoneTint(state?: BlockStateRef): Rgb {
 
 function stemTint(state?: BlockStateRef): Rgb {
   const age = Math.min(7, Math.max(0, Number(state?.properties.age ?? '0') || 0));
-  return [age * 32 / 255, (255 - age * 8) / 255, age * 4 / 255];
+  return [(age * 32) / 255, (255 - age * 8) / 255, (age * 4) / 255];
 }
 
 function tintOf(type: TintType, fixed: number | undefined, biome: string, state?: BlockStateRef): Rgb {
@@ -76,16 +91,25 @@ function firstAverageTexture(ids: string[]): { id: string; avg: Rgb } | null {
 function fallbackTexturesForBlock(name: string): string[] {
   const local = name.includes(':') ? name.split(':')[1] : name;
   const textures: string[] = [];
-  if (name === 'minecraft:grass_block') textures.push('minecraft:block/grass_block_top', 'minecraft:block/grass_block_side_overlay', 'minecraft:block/grass_block_side');
+  if (name === 'minecraft:grass_block')
+    textures.push(
+      'minecraft:block/grass_block_top',
+      'minecraft:block/grass_block_side_overlay',
+      'minecraft:block/grass_block_side',
+    );
   if (name === 'minecraft:podzol') textures.push('minecraft:block/podzol_top', 'minecraft:block/dirt');
   if (name === 'minecraft:mycelium') textures.push('minecraft:block/mycelium_top', 'minecraft:block/dirt');
   if (name === 'minecraft:dirt_path') textures.push('minecraft:block/dirt_path_top', 'minecraft:block/dirt');
-  if (name === 'minecraft:farmland') textures.push('minecraft:block/farmland_moist', 'minecraft:block/farmland', 'minecraft:block/dirt');
-  if (name === 'minecraft:short_grass' || name === 'minecraft:grass') textures.push('minecraft:block/short_grass', 'minecraft:block/grass');
-  if (name === 'minecraft:tall_grass') textures.push('minecraft:block/tall_grass_top', 'minecraft:block/tall_grass_bottom', 'minecraft:block/short_grass');
+  if (name === 'minecraft:farmland')
+    textures.push('minecraft:block/farmland_moist', 'minecraft:block/farmland', 'minecraft:block/dirt');
+  if (name === 'minecraft:short_grass' || name === 'minecraft:grass')
+    textures.push('minecraft:block/short_grass', 'minecraft:block/grass');
+  if (name === 'minecraft:tall_grass')
+    textures.push('minecraft:block/tall_grass_top', 'minecraft:block/tall_grass_bottom', 'minecraft:block/short_grass');
   if (name === 'minecraft:fern') textures.push('minecraft:block/fern');
   if (local.endsWith('_leaves')) textures.push(`minecraft:block/${local}`);
-  if (local.endsWith('_log') || local.endsWith('_stem') || local.endsWith('_hyphae')) textures.push(`minecraft:block/${local}_top`, `minecraft:block/${local}`);
+  if (local.endsWith('_log') || local.endsWith('_stem') || local.endsWith('_hyphae'))
+    textures.push(`minecraft:block/${local}_top`, `minecraft:block/${local}`);
   textures.push(`minecraft:block/${local}_top`, `minecraft:block/${local}`);
   return Array.from(new Set(textures));
 }
@@ -94,19 +118,27 @@ function fallbackColorOf(state: BlockStateRef, biome: string): Rgb | null {
   const found = firstAverageTexture(fallbackTexturesForBlock(state.name));
   if (!found) return null;
   const bi = infoOf(state.name);
-  const tint = bi.tint !== 'none'
-    ? tintOf(bi.tint, bi.fixedTint, biome, state)
-    : (state.name === 'minecraft:grass_block' || state.name === 'minecraft:short_grass' || state.name === 'minecraft:grass' || state.name === 'minecraft:tall_grass' || state.name === 'minecraft:fern')
-      ? tintOf('grass', undefined, biome)
-      : state.name.endsWith('_leaves')
-        ? tintOf('foliage', undefined, biome)
-        : WHITE;
+  const tint =
+    bi.tint !== 'none'
+      ? tintOf(bi.tint, bi.fixedTint, biome, state)
+      : state.name === 'minecraft:grass_block' ||
+          state.name === 'minecraft:short_grass' ||
+          state.name === 'minecraft:grass' ||
+          state.name === 'minecraft:tall_grass' ||
+          state.name === 'minecraft:fern'
+        ? tintOf('grass', undefined, biome)
+        : state.name.endsWith('_leaves')
+          ? tintOf('foliage', undefined, biome)
+          : WHITE;
   return [found.avg[0] * tint[0], found.avg[1] * tint[1], found.avg[2] * tint[2]];
 }
 
 /** LOD 顶面颜色：取实际方块状态模型朝上面的贴图平均色 × 群系着色。 */
 function topColorOf(state: BlockStateRef, biome: string): Rgb {
-  const props = Object.keys(state.properties).sort().map((k) => `${k}=${state.properties[k]}`).join(',');
+  const props = Object.keys(state.properties)
+    .sort()
+    .map((k) => `${k}=${state.properties[k]}`)
+    .join(',');
   const key = `${state.name}[${props}]|${biome}`;
   const hit = topColorCache.get(key);
   if (hit) {
@@ -158,7 +190,10 @@ function neighborhoodOf(key: string): ChunkNeighborhood | null {
   for (let dz = -1; dz <= 1; dz++) {
     for (let dx = -1; dx <= 1; dx++) {
       const e = columns.get(`${world}|${dim}|${col.x + dx},${col.z + dz}`);
-      if (e) { ensureLight(e); hood.set(e.col); }
+      if (e) {
+        ensureLight(e);
+        hood.set(e.col);
+      }
     }
   }
   return hood;
@@ -178,8 +213,15 @@ function transfersOf(buffers: (MeshBuffers | null | undefined)[]): Transferable[
 
 function meshBytes(b: MeshBuffers | null | undefined): number {
   if (!b) return 0;
-  return b.positions.byteLength + (b.uvs?.byteLength ?? 0) + (b.atlasRects?.byteLength ?? 0)
-    + b.colors.byteLength + b.lights.byteLength + (b.animations?.byteLength ?? 0) + b.indices.byteLength;
+  return (
+    b.positions.byteLength +
+    (b.uvs?.byteLength ?? 0) +
+    (b.atlasRects?.byteLength ?? 0) +
+    b.colors.byteLength +
+    b.lights.byteLength +
+    (b.animations?.byteLength ?? 0) +
+    b.indices.byteLength
+  );
 }
 
 function sectionBytes(sections: SectionMeshMsg[]): number {
@@ -195,7 +237,11 @@ function parseChunkPayload(chunk: ArrayBuffer, entities?: ArrayBuffer): ChunkCol
   if (entities) {
     // Entity-region data is optional enrichment; a malformed sidecar must not
     // prevent the terrain chunk itself from rendering.
-    try { appendChunkEntities(col, parseNbt(new Uint8Array(entities))); } catch { /* ignore */ }
+    try {
+      appendChunkEntities(col, parseNbt(new Uint8Array(entities)));
+    } catch {
+      /* ignore */
+    }
   }
   return col;
 }
@@ -247,9 +293,15 @@ function modelInstances(col: ChunkColumn): RenderModelInstance[] {
     const resolved = resolveRenderer(definition, values);
     if (!resolved.model) continue;
     out.push({
-      model: resolved.model, x: object.x, y: object.y, z: object.z,
-      layer: layerOf(resolved.layer), offset: resolved.offset, scale: resolved.scale,
-      rotationY: rotationOf(resolved, values), texture: textureOf(resolved, state.name),
+      model: resolved.model,
+      x: object.x,
+      y: object.y,
+      z: object.z,
+      layer: layerOf(resolved.layer),
+      offset: resolved.offset,
+      scale: resolved.scale,
+      rotationY: rotationOf(resolved, values),
+      texture: textureOf(resolved, state.name),
     });
   }
   for (const object of col.entities) {
@@ -258,9 +310,15 @@ function modelInstances(col: ChunkColumn): RenderModelInstance[] {
     const resolved = resolveRenderer(definition, object.data);
     if (!resolved.model) continue;
     out.push({
-      model: resolved.model, x: object.x, y: object.y, z: object.z,
-      layer: layerOf(resolved.layer), offset: resolved.offset, scale: resolved.scale,
-      rotationY: rotationOf(resolved, object.data, object.yaw), texture: textureOf(resolved),
+      model: resolved.model,
+      x: object.x,
+      y: object.y,
+      z: object.z,
+      layer: layerOf(resolved.layer),
+      offset: resolved.offset,
+      scale: resolved.scale,
+      rotationY: rotationOf(resolved, object.data, object.yaw),
+      texture: textureOf(resolved),
     });
   }
   return out;
@@ -343,7 +401,8 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       for (let sy = col.minSectionY; sy <= col.maxSectionY; sy++) {
         const s = col.sections.get(sy);
         const hasInstances = instances.some((instance) => Math.floor(instance.y / 16) === sy);
-        const result = s && (!s.isEmpty || hasInstances) ? meshSection(res, hood, col.x, sy, col.z, true, instances) : null;
+        const result =
+          s && (!s.isEmpty || hasInstances) ? meshSection(res, hood, col.x, sy, col.z, true, instances) : null;
         const layers = result?.layers ?? {};
         const visibility = result?.visibility ?? SECTION_VISIBILITY_ALL;
         if (Object.keys(layers).length || visibility > 0) sections.push({ sy, layers, visibility });
@@ -386,17 +445,18 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
         break;
       }
       const hood = neighborhoodOf(msg.key);
-      const mesh = hood
-        ? meshLodChunk(entry.col, msg.step, topColorOf, entry.hasSkyLight, hood, infoOf)
-        : null;
-      post({
-        type: 'lodResult',
-        key: msg.key,
-        version: msg.version,
-        step: msg.step,
-        mesh,
-        profile: { meshBytes: meshBytes(mesh), meshMs: performance.now() - started, storedColumns: columns.size },
-      }, transfersOf([mesh]));
+      const mesh = hood ? meshLodChunk(entry.col, msg.step, topColorOf, entry.hasSkyLight, hood, infoOf) : null;
+      post(
+        {
+          type: 'lodResult',
+          key: msg.key,
+          version: msg.version,
+          step: msg.step,
+          mesh,
+          profile: { meshBytes: meshBytes(mesh), meshMs: performance.now() - started, storedColumns: columns.size },
+        },
+        transfersOf([mesh]),
+      );
       break;
     }
     case 'drop':

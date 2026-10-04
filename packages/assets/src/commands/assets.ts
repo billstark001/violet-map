@@ -37,7 +37,7 @@ async function sha1File(file: string): Promise<string> {
 async function downloadFile(url: string, dest: string, expectedSha1?: string, dryRun = false): Promise<void> {
   await mkdir(dirname(dest), { recursive: true });
   if (existsSync(dest)) {
-    if (!expectedSha1 || await sha1File(dest) === expectedSha1) {
+    if (!expectedSha1 || (await sha1File(dest)) === expectedSha1) {
       console.log(`  Skip cache hit: ${dest}`);
       return;
     }
@@ -55,7 +55,8 @@ async function downloadFile(url: string, dest: string, expectedSha1?: string, dr
   await pipeline(Readable.fromWeb(res.body as never), createWriteStream(dest));
   if (expectedSha1) {
     const actual = await sha1File(dest);
-    if (actual !== expectedSha1) throw new Error(`sha1 verification failed: ${dest} expected=${expectedSha1} actual=${actual}`);
+    if (actual !== expectedSha1)
+      throw new Error(`sha1 verification failed: ${dest} expected=${expectedSha1} actual=${actual}`);
   }
 }
 
@@ -128,7 +129,9 @@ async function extractAssets(versionId: string, outputDir: string, dryRun = fals
 
 async function extractAllAssets(minVersion: string, outputDir: string, includeSnapshots: boolean, dryRun = false) {
   const manifest = await getManifest();
-  const versions = manifest.versions.filter((v) => (includeSnapshots || v.type === 'release') && compareVersions(v.id, minVersion) >= 0);
+  const versions = manifest.versions.filter(
+    (v) => (includeSnapshots || v.type === 'release') && compareVersions(v.id, minVersion) >= 0,
+  );
   console.log(`Extracting ${versions.length} versions >= ${minVersion}`);
   for (const v of versions) {
     console.log(`\n--- ${v.id} ---`);
@@ -144,7 +147,8 @@ function compareVersions(a: string, b: string): number {
   const pa = a.split('.').map(Number);
   const pb = b.split('.').map(Number);
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const na = pa[i] ?? 0, nb = pb[i] ?? 0;
+    const na = pa[i] ?? 0,
+      nb = pb[i] ?? 0;
     if (na !== nb) return na - nb;
   }
   return 0;
@@ -171,7 +175,9 @@ async function generateBiomes(versionId: string, outputFile: string) {
         ...(b.name === 'swamp' ? { foliage_color: 6975545, grass_color_modifier: 'swamp' } : {}),
         ...(b.name === 'mangrove_swamp' ? { foliage_color: 9285927, grass_color_modifier: 'swamp' } : {}),
         ...(b.name === 'dark_forest' ? { grass_color_modifier: 'dark_forest' } : {}),
-        ...(b.name === 'badlands' || b.name === 'wooded_badlands' ? { grass_color: 9470285, foliage_color: 10387789 } : {}),
+        ...(b.name === 'badlands' || b.name === 'wooded_badlands'
+          ? { grass_color: 9470285, foliage_color: 10387789 }
+          : {}),
         ...(b.name === 'cherry_grove' ? { grass_color: 11983713, foliage_color: 11983713 } : {}),
       },
     };
@@ -185,7 +191,12 @@ async function generateDimensions(versionId: string, outputFile: string) {
   const output = resolvePath(outputFile);
   const dimensions: Record<string, unknown> = {
     'minecraft:overworld': { hasSkyLight: true, ambientLight: 0.03, sky: 'normal', defaultBiome: 'minecraft:plains' },
-    'minecraft:the_nether': { hasSkyLight: false, ambientLight: 0.25, sky: 'nether', defaultBiome: 'minecraft:nether_wastes' },
+    'minecraft:the_nether': {
+      hasSkyLight: false,
+      ambientLight: 0.25,
+      sky: 'nether',
+      defaultBiome: 'minecraft:nether_wastes',
+    },
     'minecraft:the_end': { hasSkyLight: false, ambientLight: 0.18, sky: 'end', defaultBiome: 'minecraft:the_end' },
   };
   try {
@@ -233,7 +244,11 @@ export async function runAssetsCommand(args: string[]) {
       await listVersions(reader.flag('--include-snapshots'));
       break;
     case 'extract':
-      await extractAssets(reader.get('--version', '1.21.4')!, reader.get('--dir', './assets')!, reader.flag('--dry-run'));
+      await extractAssets(
+        reader.get('--version', '1.21.4')!,
+        reader.get('--dir', './assets')!,
+        reader.flag('--dry-run'),
+      );
       break;
     case 'extract-all':
       await extractAllAssets(

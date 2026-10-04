@@ -45,9 +45,13 @@ function usage(): string {
 function parseOptions(args: string[]): ProfileOptions {
   const reader = argsReader(args);
   const positional = args.find((arg) => !arg.startsWith('-'));
-  const center = reader.get('--center', '0,0')!.split(',').map((v) => Number(v.trim()));
+  const center = reader
+    .get('--center', '0,0')!
+    .split(',')
+    .map((v) => Number(v.trim()));
   if (!Number.isFinite(center[0]) || !Number.isFinite(center[1])) throw new Error('center must be cx,cz');
-  const assetDirs = reader.get('--assets-dir', '')!
+  const assetDirs = reader
+    .get('--assets-dir', '')!
     .split(',')
     .map((v) => v.trim())
     .filter(Boolean);
@@ -142,12 +146,19 @@ export async function runProfileMca(args: string[]) {
   if (opts.out) {
     const out = resolvePath(opts.out);
     await fs.mkdir(path.dirname(out), { recursive: true });
-    await fs.writeFile(out, `${JSON.stringify({
-      region: opts.region,
-      options: opts,
-      setup: { totalMs: setupMs, parseMs, lightMs, columns: entries.size, selected: columns.length },
-      summaries,
-    }, null, 2)}\n`);
+    await fs.writeFile(
+      out,
+      `${JSON.stringify(
+        {
+          region: opts.region,
+          options: opts,
+          setup: { totalMs: setupMs, parseMs, lightMs, columns: entries.size, selected: columns.length },
+          summaries,
+        },
+        null,
+        2,
+      )}\n`,
+    );
     console.log(`\nwrote ${out}`);
   }
 }

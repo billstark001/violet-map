@@ -38,7 +38,10 @@ export interface TopMapDimensionManifest extends DimensionCapabilities {
   topMap?: TopMapTileSetManifest;
 }
 
-export interface ChunkPayload extends ChunkHashPayload { data?: Uint8Array; entities?: Uint8Array }
+export interface ChunkPayload extends ChunkHashPayload {
+  data?: Uint8Array;
+  entities?: Uint8Array;
+}
 export interface ChunkHashPayload {
   cx: number;
   cz: number;
@@ -148,7 +151,7 @@ export async function uploadDiagnosticSnapshot(snapshot: unknown, token?: string
     body: JSON.stringify(snapshot),
   });
   if (!res.ok) {
-    const detail = await res.json().catch(() => null) as { error?: unknown } | null;
+    const detail = (await res.json().catch(() => null)) as { error?: unknown } | null;
     const message = typeof detail?.error === 'string' ? `: ${detail.error}` : '';
     throw new Error(`diagnostic upload failed: ${res.status}${message}`);
   }
@@ -162,10 +165,13 @@ export async function fetchTopMapTile(
   rz: number,
   signal?: AbortSignal,
 ): Promise<TopMapTilePayload> {
-  const res = await fetch(`/api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/top-map/tile/${rx}/${rz}`, {
-    headers: { accept: 'application/msgpack' },
-    signal,
-  });
+  const res = await fetch(
+    `/api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/top-map/tile/${rx}/${rz}`,
+    {
+      headers: { accept: 'application/msgpack' },
+      signal,
+    },
+  );
   if (!res.ok) throw new Error(`top-map tile fetch failed: ${res.status}`);
   return decode(new Uint8Array(await res.arrayBuffer())) as TopMapTilePayload;
 }

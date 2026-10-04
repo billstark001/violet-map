@@ -10,10 +10,7 @@ import {
   type PreparedTopMapTile,
   type TopMapTilePayload,
 } from '@violet-map/core';
-import {
-  fetchTopMapManifest,
-  fetchTopMapTile,
-} from '../api';
+import { fetchTopMapManifest, fetchTopMapTile } from '../api';
 import { debugLog } from '../logger';
 import { createTopMapMaterial, type SharedUniforms } from './materials';
 
@@ -27,14 +24,13 @@ const FREE_VIEW_LOD4_DISTANCE_BLOCKS = 128 * 16;
 const FAILED_TILE_RETRY_MS = 12000;
 const UPDATE_INTERVAL_MS = 100;
 const FULL_COVERAGE_KEY = '*';
-const TILE_HALF_DIAGONAL_BLOCKS = TOP_MAP_TILE_BLOCKS * Math.SQRT2 / 2;
+const TILE_HALF_DIAGONAL_BLOCKS = (TOP_MAP_TILE_BLOCKS * Math.SQRT2) / 2;
 const TOP_MAP_CHUNKS_PER_AXIS = TOP_MAP_TILE_BLOCKS / 16;
-const TOP_MAP_CHUNK_MASK_BYTES = TOP_MAP_CHUNKS_PER_AXIS * TOP_MAP_CHUNKS_PER_AXIS / 8;
+const TOP_MAP_CHUNK_MASK_BYTES = (TOP_MAP_CHUNKS_PER_AXIS * TOP_MAP_CHUNKS_PER_AXIS) / 8;
 
 function residentTileBudget(): number {
-  const memory = typeof navigator !== 'undefined'
-    ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory
-    : undefined;
+  const memory =
+    typeof navigator !== 'undefined' ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory : undefined;
   if (memory !== undefined && memory <= 4) return Math.min(MAX_RESIDENT_TILES, 48);
   if (memory !== undefined && memory <= 8) return Math.min(MAX_RESIDENT_TILES, 72);
   return MAX_RESIDENT_TILES;
@@ -115,8 +111,14 @@ function prepareTopMap(payload: TopMapTilePayload): TopMapData {
 }
 
 function geometryBytes(b: MeshBuffers): number {
-  return b.positions.byteLength + (b.uvs?.byteLength ?? 0) + (b.atlasRects?.byteLength ?? 0)
-    + b.colors.byteLength + b.lights.byteLength + b.indices.byteLength;
+  return (
+    b.positions.byteLength +
+    (b.uvs?.byteLength ?? 0) +
+    (b.atlasRects?.byteLength ?? 0) +
+    b.colors.byteLength +
+    b.lights.byteLength +
+    b.indices.byteLength
+  );
 }
 
 function buildGeometry(b: MeshBuffers): { geometry: THREE.BufferGeometry; bytes: number } {
@@ -208,18 +210,17 @@ export class TopMapManager {
   private readonly residentLimit = residentTileBudget();
   private manifestAbort: AbortController | null = null;
 
-  constructor(private readonly scene: THREE.Scene, private readonly shared: SharedUniforms) {
+  constructor(
+    private readonly scene: THREE.Scene,
+    private readonly shared: SharedUniforms,
+  ) {
     this.group.visible = false;
     scene.add(this.group);
   }
 
   configure(world: string, dimension: string, topMapEnabled: boolean) {
     if (this.disposed) return;
-    if (
-      this.world === world
-      && this.dimension === dimension
-      && this.topMapEnabled === topMapEnabled
-    ) return;
+    if (this.world === world && this.dimension === dimension && this.topMapEnabled === topMapEnabled) return;
     this.world = world;
     this.dimension = dimension;
     this.topMapEnabled = topMapEnabled;
@@ -240,8 +241,7 @@ export class TopMapManager {
   }
 
   update(camera: THREE.Camera, now: number, options: TopMapUpdateOptions) {
-    const topMapAllowed = this.topMapEnabled
-      && (!this.manifestLoaded || this.regionKeys.size > 0);
+    const topMapAllowed = this.topMapEnabled && (!this.manifestLoaded || this.regionKeys.size > 0);
     if (!topMapAllowed || !this.world) {
       this.group.visible = false;
       return;
@@ -270,9 +270,10 @@ export class TopMapManager {
     const minRz = Math.floor((camera.position.z - radiusZ) / TOP_MAP_TILE_BLOCKS);
     const maxRz = Math.floor((camera.position.z + radiusZ) / TOP_MAP_TILE_BLOCKS);
     const candidates: { rx: number; rz: number; key: string; distance: number }[] = [];
-    const maxDistance = typeof options.maxDistanceBlocks === 'number' && Number.isFinite(options.maxDistanceBlocks)
-      ? Math.max(0, options.maxDistanceBlocks)
-      : Infinity;
+    const maxDistance =
+      typeof options.maxDistanceBlocks === 'number' && Number.isFinite(options.maxDistanceBlocks)
+        ? Math.max(0, options.maxDistanceBlocks)
+        : Infinity;
 
     for (let rz = minRz; rz <= maxRz; rz++) {
       for (let rx = minRx; rx <= maxRx; rx++) {
@@ -311,9 +312,9 @@ export class TopMapManager {
         this.ensureTileMesh(tile, step, coverageKey, coverage?.mask);
         this.updateTileVisibility(tile);
       } else if (
-        !this.pendingTiles.has(candidate.key)
-        && !this.tileFailedRecently(candidate.key, now)
-        && this.pendingTiles.size < MAX_PENDING_TILES
+        !this.pendingTiles.has(candidate.key) &&
+        !this.tileFailedRecently(candidate.key, now) &&
+        this.pendingTiles.size < MAX_PENDING_TILES
       ) {
         void this.loadTile(candidate.rx, candidate.rz, candidate.key, now, step);
       }
@@ -399,7 +400,9 @@ export class TopMapManager {
     try {
       const manifest = await fetchTopMapManifest(world, dimension, abort.signal);
       if (this.disposed || seq !== this.manifestSeq || world !== this.world || dimension !== this.dimension) return;
-      this.regionKeys = new Set((manifest.hasTopMap ? manifest.topMap?.regions ?? [] : []).map((region) => `${region.x},${region.z}`));
+      this.regionKeys = new Set(
+        (manifest.hasTopMap ? (manifest.topMap?.regions ?? []) : []).map((region) => `${region.x},${region.z}`),
+      );
       this.manifestLoaded = true;
       debugLog('top-map', 'manifest-loaded', {
         world,
@@ -411,20 +414,25 @@ export class TopMapManager {
       if (isAbortError(error)) return;
       if (this.disposed || seq !== this.manifestSeq || world !== this.world || dimension !== this.dimension) return;
       this.manifestLoaded = true;
-      debugLog('top-map', 'manifest-error', { world, dimension, error: error instanceof Error ? error.message : String(error) });
+      debugLog('top-map', 'manifest-error', {
+        world,
+        dimension,
+        error: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       if (this.manifestAbort === abort) this.manifestAbort = null;
     }
   }
 
-  private async loadTile(
-    rx: number,
-    rz: number,
-    key: string,
-    now: number,
-    step: number,
-  ) {
-    if (this.disposed || this.pendingTiles.has(key) || this.tiles.has(key) || !this.topMapEnabled || !this.regionKeys.has(key)) return;
+  private async loadTile(rx: number, rz: number, key: string, now: number, step: number) {
+    if (
+      this.disposed ||
+      this.pendingTiles.has(key) ||
+      this.tiles.has(key) ||
+      !this.topMapEnabled ||
+      !this.regionKeys.has(key)
+    )
+      return;
     this.pendingTiles.add(key);
     const abort = new AbortController();
     this.tileAborts.set(key, abort);
@@ -465,12 +473,7 @@ export class TopMapManager {
     }
   }
 
-  private ensureTileMesh(
-    tile: TopMapTile,
-    step: number,
-    coverageKey: string,
-    onlineChunkMask: Uint8Array | undefined,
-  ) {
+  private ensureTileMesh(tile: TopMapTile, step: number, coverageKey: string, onlineChunkMask: Uint8Array | undefined) {
     if (tile.step === step && tile.coverageKey === coverageKey) return;
     const built = buildTileGeometry(tile.data, step, onlineChunkMask);
     tile.step = step;
@@ -571,7 +574,10 @@ export class TopMapManager {
     this.tiles.delete(key);
   }
 
-  private viewMetrics(camera: THREE.Camera, options: TopMapUpdateOptions): { width: number; height: number; zoom: number } {
+  private viewMetrics(
+    camera: THREE.Camera,
+    options: TopMapUpdateOptions,
+  ): { width: number; height: number; zoom: number } {
     if (options.mode === 'perspective') {
       const size = Math.max(TOP_MAP_TILE_BLOCKS, options.radiusBlocks ?? TOP_MAP_TILE_BLOCKS * 2);
       return { width: size * 2, height: size * 2, zoom: 1 };

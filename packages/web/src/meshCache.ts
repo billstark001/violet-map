@@ -57,11 +57,14 @@ function database() {
   if (!dbPromise) {
     dbPromise = openDB<MeshCacheDb>(DB_NAME, DB_VERSION, {
       upgrade(db, _oldVersion, _newVersion, tx) {
-        const store = db.objectStoreNames.contains(STORE) ? tx.objectStore(STORE) : db.createObjectStore(STORE, { keyPath: 'key' });
+        const store = db.objectStoreNames.contains(STORE)
+          ? tx.objectStore(STORE)
+          : db.createObjectStore(STORE, { keyPath: 'key' });
         if (!store.indexNames.contains('accessedAt')) store.createIndex('accessedAt', 'accessedAt');
         if (!store.indexNames.contains('createdAt')) store.createIndex('createdAt', 'createdAt');
         if (!store.indexNames.contains('bytes')) store.createIndex('bytes', 'bytes');
-        if (!store.indexNames.contains('accessedAtBytes')) store.createIndex('accessedAtBytes', ['accessedAt', 'bytes']);
+        if (!store.indexNames.contains('accessedAtBytes'))
+          store.createIndex('accessedAtBytes', ['accessedAt', 'bytes']);
       },
     });
   }
@@ -69,8 +72,12 @@ function database() {
 }
 
 /** Disabling this bypasses all mesh reads and writes without deleting existing cache data. */
-export function setMeshCacheEnabled(enabled: boolean): void { cacheEnabled = enabled; }
-export function isMeshCacheEnabled(): boolean { return cacheEnabled; }
+export function setMeshCacheEnabled(enabled: boolean): void {
+  cacheEnabled = enabled;
+}
+export function isMeshCacheEnabled(): boolean {
+  return cacheEnabled;
+}
 let lastPrune = 0;
 let pendingWriteBytes = 0;
 
@@ -84,12 +91,21 @@ function cacheKey(parts: MeshCacheKeyParts): string {
     parts.contentKey,
     parts.mode,
     parts.step ?? 0,
-  ].map(encodeURIComponent).join('|');
+  ]
+    .map(encodeURIComponent)
+    .join('|');
 }
 
 function bufferBytes(b: MeshBuffers): number {
-  return b.positions.byteLength + (b.uvs?.byteLength ?? 0) + (b.atlasRects?.byteLength ?? 0)
-    + b.colors.byteLength + b.lights.byteLength + (b.animations?.byteLength ?? 0) + b.indices.byteLength;
+  return (
+    b.positions.byteLength +
+    (b.uvs?.byteLength ?? 0) +
+    (b.atlasRects?.byteLength ?? 0) +
+    b.colors.byteLength +
+    b.lights.byteLength +
+    (b.animations?.byteLength ?? 0) +
+    b.indices.byteLength
+  );
 }
 
 function sectionBytes(sections: SectionMeshMsg[]): number {
@@ -155,7 +171,10 @@ export async function getCachedFull(parts: Omit<MeshCacheKeyParts, 'mode' | 'ste
   return (await touch(record)).full ?? null;
 }
 
-export async function putCachedFull(parts: Omit<MeshCacheKeyParts, 'mode' | 'step'>, sections: SectionMeshMsg[]): Promise<void> {
+export async function putCachedFull(
+  parts: Omit<MeshCacheKeyParts, 'mode' | 'step'>,
+  sections: SectionMeshMsg[],
+): Promise<void> {
   const now = Date.now();
   await putRecord({
     ...parts,
@@ -169,14 +188,19 @@ export async function putCachedFull(parts: Omit<MeshCacheKeyParts, 'mode' | 'ste
   });
 }
 
-export async function getCachedLod(parts: Omit<MeshCacheKeyParts, 'mode'> & { step: number }): Promise<MeshBuffers | null | undefined> {
+export async function getCachedLod(
+  parts: Omit<MeshCacheKeyParts, 'mode'> & { step: number },
+): Promise<MeshBuffers | null | undefined> {
   if (!cacheEnabled) return undefined;
   const record = await (await database()).get(STORE, cacheKey({ ...parts, mode: 'lod' }));
   if (!record || Date.now() - record.accessedAt > TTL_MS) return undefined;
   return (await touch(record)).lod;
 }
 
-export async function putCachedLod(parts: Omit<MeshCacheKeyParts, 'mode'> & { step: number }, lod: MeshBuffers | null): Promise<void> {
+export async function putCachedLod(
+  parts: Omit<MeshCacheKeyParts, 'mode'> & { step: number },
+  lod: MeshBuffers | null,
+): Promise<void> {
   const now = Date.now();
   await putRecord({
     ...parts,

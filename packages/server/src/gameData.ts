@@ -26,7 +26,9 @@ async function readDataFile<T>(name: string): Promise<T> {
         const value = JSON.parse(await fs.readFile(file, 'utf8')) as T;
         dataFileCache.set(name, value);
         return value;
-      } catch { /* try next */ }
+      } catch {
+        /* try next */
+      }
     }
     throw new Error(`missing data file: ${name}`);
   })();
@@ -84,8 +86,13 @@ export async function buildBlockInfo(): Promise<BlockInfoMap> {
       const bundle = await buildAssetBundle();
       const latest = latestSupportedMcDataVersion();
       const latestData = loadMinecraftData(latest);
-      if (Object.keys(bundle.blockstates).length > d.blocksArray.length && latestData.blocksArray.length > d.blocksArray.length) {
-        console.warn(`[violet-map] assets look newer than minecraft-data ${d.version.minecraftVersion}; using ${latest}`);
+      if (
+        Object.keys(bundle.blockstates).length > d.blocksArray.length &&
+        latestData.blocksArray.length > d.blocksArray.length
+      ) {
+        console.warn(
+          `[violet-map] assets look newer than minecraft-data ${d.version.minecraftVersion}; using ${latest}`,
+        );
         d = latestData;
       }
     } catch {
@@ -108,7 +115,10 @@ export async function buildBlockInfo(): Promise<BlockInfoMap> {
         const re = new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
         for (const key of Object.keys(map)) if (re.test(key)) Object.assign(map[key], patch);
       } else {
-        map[pattern] = { ...(map[pattern] ?? { occludes: false, emit: 0, filter: 0, layer: 'cutout', tint: 'none' }), ...patch };
+        map[pattern] = {
+          ...(map[pattern] ?? { occludes: false, emit: 0, filter: 0, layer: 'cutout', tint: 'none' }),
+          ...patch,
+        };
       }
     }
     blockInfoCache = map;

@@ -1,8 +1,17 @@
 import { ModelBaker, BakedQuad, MISSING_TEXTURE } from '../model.js';
 import { AIR, AIR_NAMES, ChunkColumn } from '../world.js';
 import {
-  AtlasIndex, AtlasRect, BlockInfo, BlockStateRef, Direction, DIR_VEC, MeshBuffers, RenderLayer,
-  SectionMeshes, TextureAlphaMap, TintType,
+  AtlasIndex,
+  AtlasRect,
+  BlockInfo,
+  BlockStateRef,
+  Direction,
+  DIR_VEC,
+  MeshBuffers,
+  RenderLayer,
+  SectionMeshes,
+  TextureAlphaMap,
+  TintType,
 } from '../types.js';
 import type { Rgb } from '../colors.js';
 import { Float32Writer, Uint16Writer, Uint32Writer } from '../utils.js';
@@ -17,23 +26,36 @@ export interface WorldView {
 /** 3x3 邻域，供跨区块面剔除 / AO / 平滑光照。 */
 export class ChunkNeighborhood implements WorldView {
   private grid: (ChunkColumn | null)[] = new Array(9).fill(null);
-  constructor(readonly baseX: number, readonly baseZ: number) { }
+  constructor(
+    readonly baseX: number,
+    readonly baseZ: number,
+  ) {}
   set(col: ChunkColumn) {
-    const gx = col.x - this.baseX, gz = col.z - this.baseZ;
+    const gx = col.x - this.baseX,
+      gz = col.z - this.baseZ;
     if (gx >= 0 && gx < 3 && gz >= 0 && gz < 3) this.grid[gx + gz * 3] = col;
   }
   private colAt(x: number, z: number): ChunkColumn | null {
-    const gx = (x >> 4) - this.baseX, gz = (z >> 4) - this.baseZ;
+    const gx = (x >> 4) - this.baseX,
+      gz = (z >> 4) - this.baseZ;
     if (gx < 0 || gx > 2 || gz < 0 || gz > 2) return null;
     return this.grid[gx + gz * 3];
   }
   columnAtWorld(x: number, z: number): ChunkColumn | null {
     return this.colAt(x, z);
   }
-  getBlock(x: number, y: number, z: number) { return this.colAt(x, z)?.getBlock(x & 15, y, z & 15) ?? AIR; }
-  getBiome(x: number, y: number, z: number) { return this.colAt(x, z)?.getBiome(x & 15, y, z & 15) ?? 'minecraft:plains'; }
-  getSkyLight(x: number, y: number, z: number) { return this.colAt(x, z)?.getSkyLight(x & 15, y, z & 15) ?? 15; }
-  getBlockLight(x: number, y: number, z: number) { return this.colAt(x, z)?.getBlockLight(x & 15, y, z & 15) ?? 0; }
+  getBlock(x: number, y: number, z: number) {
+    return this.colAt(x, z)?.getBlock(x & 15, y, z & 15) ?? AIR;
+  }
+  getBiome(x: number, y: number, z: number) {
+    return this.colAt(x, z)?.getBiome(x & 15, y, z & 15) ?? 'minecraft:plains';
+  }
+  getSkyLight(x: number, y: number, z: number) {
+    return this.colAt(x, z)?.getSkyLight(x & 15, y, z & 15) ?? 15;
+  }
+  getBlockLight(x: number, y: number, z: number) {
+    return this.colAt(x, z)?.getBlockLight(x & 15, y, z & 15) ?? 0;
+  }
 }
 
 export interface MesherResources {
@@ -80,7 +102,12 @@ const SECTION_VISIBILITY_ALL = (() => {
 const AO_FACTOR = [0.4, 0.6, 0.8, 1.0];
 // 每个面的两个切向轴（坐标分量下标）
 const TANGENTS: Record<Direction, [number, number]> = {
-  up: [0, 2], down: [0, 2], north: [0, 1], south: [0, 1], west: [1, 2], east: [1, 2],
+  up: [0, 2],
+  down: [0, 2],
+  north: [0, 1],
+  south: [0, 1],
+  west: [1, 2],
+  east: [1, 2],
 };
 const WHITE: Rgb = [1, 1, 1];
 const UV_EPS = 1e-4;
@@ -127,16 +154,22 @@ interface BlockStateMeshMeta {
   simpleEligible: boolean;
 }
 
-const SIMPLE_CUBE_CACHE = new WeakMap<BakedQuad[], {
-  alpha: TextureAlphaMap | undefined;
-  animations: Record<string, number> | undefined;
-  value: SimpleCubeDef | null;
-}>();
+const SIMPLE_CUBE_CACHE = new WeakMap<
+  BakedQuad[],
+  {
+    alpha: TextureAlphaMap | undefined;
+    animations: Record<string, number> | undefined;
+    value: SimpleCubeDef | null;
+  }
+>();
 
-const OPAQUE_FULL_CUBE_CACHE = new WeakMap<BakedQuad[], {
-  alpha: TextureAlphaMap | undefined;
-  value: boolean;
-}>();
+const OPAQUE_FULL_CUBE_CACHE = new WeakMap<
+  BakedQuad[],
+  {
+    alpha: TextureAlphaMap | undefined;
+    value: boolean;
+  }
+>();
 
 function cachedOpaqueFullCube(quads: BakedQuad[], textureHasAlpha?: TextureAlphaMap): boolean {
   const hit = OPAQUE_FULL_CUBE_CACHE.get(quads);
@@ -147,7 +180,9 @@ function cachedOpaqueFullCube(quads: BakedQuad[], textureHasAlpha?: TextureAlpha
 }
 
 function cachedSimpleCube(
-  quads: BakedQuad[], textureHasAlpha?: TextureAlphaMap, textureAnimationIds?: Record<string, number>,
+  quads: BakedQuad[],
+  textureHasAlpha?: TextureAlphaMap,
+  textureAnimationIds?: Record<string, number>,
 ): SimpleCubeDef | null {
   const hit = SIMPLE_CUBE_CACHE.get(quads);
   if (hit && hit.alpha === textureHasAlpha && hit.animations === textureAnimationIds) return hit.value;
@@ -184,9 +219,10 @@ class SectionViewCache implements WorldView {
       // blocks add their tinted side overlay, for example. Minecraft-data's
       // bounding-box flag alone marks a number of partial blocks as full (for
       // example sculk shriekers), which previously made visible sides vanish.
-      const value = res.info(state.name).occludes
-        && cachedOpaqueFullCube(res.baker.getQuads(state, 0), res.textureHasAlpha)
-        ? 1 : 0;
+      const value =
+        res.info(state.name).occludes && cachedOpaqueFullCube(res.baker.getQuads(state, 0), res.textureHasAlpha)
+          ? 1
+          : 0;
       occlusionByState.set(state, value);
       return value;
     };
@@ -209,7 +245,9 @@ class SectionViewCache implements WorldView {
             const lz = z - 1;
             const localIndex = (ly << 8) | (lz << 4) | lx;
             state = centerSection.block(lx, ly, lz);
-            this.sky[i] = centerSection.skyLight ? centerSection.skyLight[localIndex] : centerCol.getSkyLight(lx, wy, lz);
+            this.sky[i] = centerSection.skyLight
+              ? centerSection.skyLight[localIndex]
+              : centerCol.getSkyLight(lx, wy, lz);
             this.block[i] = centerSection.blockLight ? centerSection.blockLight[localIndex] : 0;
           } else if (neighborhood) {
             const col = neighborhood.columnAtWorld(wx, wz);
@@ -246,9 +284,14 @@ class SectionViewCache implements WorldView {
   }
 
   private contains(x: number, y: number, z: number): boolean {
-    return x >= this.ox - 1 && x <= this.ox + 16
-      && y >= this.oy - 1 && y <= this.oy + 16
-      && z >= this.oz - 1 && z <= this.oz + 16;
+    return (
+      x >= this.ox - 1 &&
+      x <= this.ox + 16 &&
+      y >= this.oy - 1 &&
+      y <= this.oy + 16 &&
+      z >= this.oz - 1 &&
+      z <= this.oz + 16
+    );
   }
 
   blockLocal(x: number, y: number, z: number): BlockStateRef {
@@ -260,16 +303,18 @@ class SectionViewCache implements WorldView {
   }
 
   fullyOccludedLocal(x: number, y: number, z: number): boolean {
-    return this.occludesLocal(x - 1, y, z)
-      && this.occludesLocal(x + 1, y, z)
-      && this.occludesLocal(x, y - 1, z)
-      && this.occludesLocal(x, y + 1, z)
-      && this.occludesLocal(x, y, z - 1)
-      && this.occludesLocal(x, y, z + 1);
+    return (
+      this.occludesLocal(x - 1, y, z) &&
+      this.occludesLocal(x + 1, y, z) &&
+      this.occludesLocal(x, y - 1, z) &&
+      this.occludesLocal(x, y + 1, z) &&
+      this.occludesLocal(x, y, z - 1) &&
+      this.occludesLocal(x, y, z + 1)
+    );
   }
 
   getBlock(x: number, y: number, z: number): BlockStateRef {
-    return this.contains(x, y, z) ? this.states[this.localIndex(x, y, z)] ?? AIR : this.base.getBlock(x, y, z);
+    return this.contains(x, y, z) ? (this.states[this.localIndex(x, y, z)] ?? AIR) : this.base.getBlock(x, y, z);
   }
 
   getBiome(x: number, y: number, z: number): string {
@@ -366,7 +411,7 @@ class SectionViewCache implements WorldView {
       for (let from = 0; from < 6; from++) {
         if (!(faces & (1 << from))) continue;
         for (let to = 0; to < 6; to++) {
-          if (from !== to && (faces & (1 << to))) mask += visibilityBit(from, to);
+          if (from !== to && faces & (1 << to)) mask += visibilityBit(from, to);
         }
       }
     }
@@ -402,7 +447,9 @@ function packUint16(values: Float32Array): Uint16Array {
 function packSectionPositions(values: Float32Array): Uint16Array {
   const out = new Uint16Array(values.length);
   for (let i = 0; i < values.length; i++) {
-    out[i] = Math.round(Math.min(1, Math.max(0, (values[i] - SECTION_POSITION_OFFSET) / SECTION_POSITION_SCALE)) * 65535);
+    out[i] = Math.round(
+      Math.min(1, Math.max(0, (values[i] - SECTION_POSITION_OFFSET) / SECTION_POSITION_SCALE)) * 65535,
+    );
   }
   return out;
 }
@@ -426,10 +473,20 @@ class MeshBuilder {
   constructor(withAtlasRects = false) {
     this.atlas = withAtlasRects ? new Float32Writer(4096 * 4) : null;
   }
-  get empty() { return this.verts === 0; }
+  get empty() {
+    return this.verts === 0;
+  }
   vertex(
-    x: number, y: number, z: number, u: number, v: number,
-    r: number, g: number, b: number, sky: number, block: number,
+    x: number,
+    y: number,
+    z: number,
+    u: number,
+    v: number,
+    r: number,
+    g: number,
+    b: number,
+    sky: number,
+    block: number,
     atlasRect?: AtlasRect,
     animationId = 0,
   ) {
@@ -475,7 +532,7 @@ class MeshBuilder {
 type MeshBuilderStore = Partial<Record<RenderLayer, MeshBuilder>>;
 
 function builderFor(builders: MeshBuilderStore, layer: RenderLayer): MeshBuilder {
-  return builders[layer] ??= new MeshBuilder(layer === 'opaqueTiled');
+  return (builders[layer] ??= new MeshBuilder(layer === 'opaqueTiled'));
 }
 
 function atlasUv(rect: AtlasRect, u: number, v: number, uvScale: [number, number] = [16, 16]): [number, number] {
@@ -483,21 +540,21 @@ function atlasUv(rect: AtlasRect, u: number, v: number, uvScale: [number, number
   const height = Math.max(UV_EPS * 2, uvScale[1]);
   const tu = Math.min(width - UV_EPS, Math.max(UV_EPS, u));
   const tv = Math.min(height - UV_EPS, Math.max(UV_EPS, v));
-  return [
-    rect.u0 + (tu / width) * (rect.u1 - rect.u0),
-    rect.v0 + (tv / height) * (rect.v1 - rect.v0),
-  ];
+  return [rect.u0 + (tu / width) * (rect.u1 - rect.u0), rect.v0 + (tv / height) * (rect.v1 - rect.v0)];
 }
 
 function blockOccludes(res: MesherResources, view: WorldView, x: number, y: number, z: number): boolean {
-  return view instanceof SectionViewCache
-    ? view.occludesAt(x, y, z)
-    : res.info(view.getBlock(x, y, z).name).occludes;
+  return view instanceof SectionViewCache ? view.occludesAt(x, y, z) : res.info(view.getBlock(x, y, z).name).occludes;
 }
 
 function smoothVertexLightPacked(
-  res: MesherResources, view: WorldView, q: BakedQuad, vi: number,
-  bx: number, by: number, bz: number,
+  res: MesherResources,
+  view: WorldView,
+  q: BakedQuad,
+  vi: number,
+  bx: number,
+  by: number,
+  bz: number,
 ): number {
   const [a1, a2] = TANGENTS[q.face];
   const c1 = q.positions[vi * 3 + a1] > 0.5 ? 1 : -1;
@@ -514,7 +571,9 @@ function smoothVertexLightPacked(
   const occ1 = blockOccludes(res, view, x1, y1, z1);
   const occ2 = blockOccludes(res, view, x2, y2, z2);
   const occ3 = blockOccludes(res, view, x3, y3, z3);
-  let sky = 0, block = 0, count = 0;
+  let sky = 0,
+    block = 0,
+    count = 0;
   sky += view.getSkyLight(bx, by, bz);
   block += view.getBlockLight(bx, by, bz);
   count++;
@@ -533,7 +592,9 @@ function smoothVertexLightPacked(
     block += view.getBlockLight(x3, y3, z3);
     count++;
   }
-  const s1 = occ1 ? 1 : 0, s2 = occ2 ? 1 : 0, co = occ3 ? 1 : 0;
+  const s1 = occ1 ? 1 : 0,
+    s2 = occ2 ? 1 : 0,
+    co = occ3 ? 1 : 0;
   const aoLevel = s1 && s2 ? 0 : 3 - (s1 + s2 + co);
   const skyQ = quantByte(sky / Math.max(count, 1) / 15);
   const blockQ = quantByte(block / Math.max(count, 1) / 15);
@@ -541,9 +602,18 @@ function smoothVertexLightPacked(
 }
 
 function emitQuad(
-  res: MesherResources, view: WorldView, builder: MeshBuilder, q: BakedQuad,
-  lx: number, ly: number, lz: number, wx: number, wy: number, wz: number,
-  tint: Rgb, smooth: boolean,
+  res: MesherResources,
+  view: WorldView,
+  builder: MeshBuilder,
+  q: BakedQuad,
+  lx: number,
+  ly: number,
+  lz: number,
+  wx: number,
+  wy: number,
+  wz: number,
+  tint: Rgb,
+  smooth: boolean,
 ) {
   const rect = res.atlas[q.texture] ?? res.atlas[MISSING_TEXTURE];
   const uvWidth = Math.max(UV_EPS * 2, q.uvScale[0]);
@@ -562,7 +632,8 @@ function emitQuad(
   const bx = outside ? wx + d[0] : wx;
   const by = outside ? wy + d[1] : wy;
   const bz = outside ? wz + d[2] : wz;
-  let flatSky = 0, flatBlock = 0;
+  let flatSky = 0,
+    flatBlock = 0;
   // A model can explicitly disable ambient occlusion (hoppers do). That is a
   // request for ordinary flat face lighting, not zero light; leaving it out
   // made every exterior hopper quad nearly black.
@@ -582,7 +653,9 @@ function emitQuad(
     }
   }
   for (let i = 0; i < 4; i++) {
-    let sky = flatSky, block = flatBlock, ao = 1;
+    let sky = flatSky,
+      block = flatBlock,
+      ao = 1;
     if (smooth && outside && q.ao) {
       const s = smoothVertexLightPacked(res, view, q, i, bx, by, bz);
       sky = (s & 255) / 255;
@@ -595,10 +668,18 @@ function emitQuad(
     const u = rect.u0 + (rawU / uvWidth) * atlasWidth;
     const v = rect.v0 + (rawV / uvHeight) * atlasHeight;
     builder.vertex(
-      lx + q.positions[i * 3], ly + q.positions[i * 3 + 1], lz + q.positions[i * 3 + 2],
-      u, v,
-      tint[0] * m, tint[1] * m, tint[2] * m, sky, block,
-      undefined, res.textureAnimationIds?.[q.texture] ?? 0,
+      lx + q.positions[i * 3],
+      ly + q.positions[i * 3 + 1],
+      lz + q.positions[i * 3 + 2],
+      u,
+      v,
+      tint[0] * m,
+      tint[1] * m,
+      tint[2] * m,
+      sky,
+      block,
+      undefined,
+      res.textureAnimationIds?.[q.texture] ?? 0,
     );
   }
   builder.quadIndices();
@@ -647,9 +728,7 @@ function rotatedFaceY(face: Direction, sin: number, cos: number): Direction {
 }
 
 function exteriorFace(q: BakedQuad): Direction | null {
-  const axis = q.face === 'up' || q.face === 'down' ? 1
-    : q.face === 'east' || q.face === 'west' ? 0
-      : 2;
+  const axis = q.face === 'up' || q.face === 'down' ? 1 : q.face === 'east' || q.face === 'west' ? 0 : 2;
   const boundary = q.face === 'up' || q.face === 'east' || q.face === 'south' ? 1 : 0;
   for (let i = 0; i < 4; i++) {
     if (Math.abs(q.positions[i * 3 + axis] - boundary) > GEOMETRY_EPS) return null;
@@ -666,29 +745,32 @@ function arrayMatches(a: Float32Array, b: Float32Array): boolean {
 }
 
 function isDefaultCubeFace(q: BakedQuad, dir: Direction): boolean {
-  return q.face === dir
-    && q.cullFace === dir
-    && q.tintIndex < 0
-    && q.uvScale[0] === 16
-    && q.uvScale[1] === 16
-    && arrayMatches(q.positions, FULL_FACE_POSITIONS[dir])
-    && arrayMatches(q.uvs, FULL_FACE_UVS);
+  return (
+    q.face === dir &&
+    q.cullFace === dir &&
+    q.tintIndex < 0 &&
+    q.uvScale[0] === 16 &&
+    q.uvScale[1] === 16 &&
+    arrayMatches(q.positions, FULL_FACE_POSITIONS[dir]) &&
+    arrayMatches(q.uvs, FULL_FACE_UVS)
+  );
 }
 
 /** A full cube can contain extra visual quads (such as the grass overlay),
  * while the greedy path below intentionally accepts only the exact six-face
  * case. Keep those notions separate so decoration never disables culling. */
-function opaqueFullCubeFromQuads(
-  quads: BakedQuad[], textureHasAlpha?: TextureAlphaMap,
-): boolean {
+function opaqueFullCubeFromQuads(quads: BakedQuad[], textureHasAlpha?: TextureAlphaMap): boolean {
   let mask = 0;
   for (const q of quads) {
     // Tint affects colour only; a biome-tinted full face still occludes.
-    if (q.face !== q.cullFace
-      || q.uvScale[0] !== 16
-      || q.uvScale[1] !== 16
-      || !arrayMatches(q.positions, FULL_FACE_POSITIONS[q.face])
-      || !arrayMatches(q.uvs, FULL_FACE_UVS)) continue;
+    if (
+      q.face !== q.cullFace ||
+      q.uvScale[0] !== 16 ||
+      q.uvScale[1] !== 16 ||
+      !arrayMatches(q.positions, FULL_FACE_POSITIONS[q.face]) ||
+      !arrayMatches(q.uvs, FULL_FACE_UVS)
+    )
+      continue;
     // Animation changes a sprite frame, not whether its face is solid. Such a
     // cube must still cull its neighbours (sculk is a notable example).
     if (textureHasAlpha?.[q.texture]) continue;
@@ -698,17 +780,27 @@ function opaqueFullCubeFromQuads(
 }
 
 const OPPOSITE_DIRECTION: Record<Direction, Direction> = {
-  down: 'up', up: 'down', north: 'south', south: 'north', west: 'east', east: 'west',
+  down: 'up',
+  up: 'down',
+  north: 'south',
+  south: 'north',
+  west: 'east',
+  east: 'west',
 };
 
 function faceBounds(q: BakedQuad, dir: Direction): [number, number, number, number] {
   const [a1, a2] = TANGENTS[dir];
-  let min1 = Infinity, max1 = -Infinity, min2 = Infinity, max2 = -Infinity;
+  let min1 = Infinity,
+    max1 = -Infinity,
+    min2 = Infinity,
+    max2 = -Infinity;
   for (let i = 0; i < 4; i++) {
     const v1 = q.positions[i * 3 + a1];
     const v2 = q.positions[i * 3 + a2];
-    min1 = Math.min(min1, v1); max1 = Math.max(max1, v1);
-    min2 = Math.min(min2, v2); max2 = Math.max(max2, v2);
+    min1 = Math.min(min1, v1);
+    max1 = Math.max(max1, v1);
+    min2 = Math.min(min2, v2);
+    max2 = Math.max(max2, v2);
   }
   return [min1, max1, min2, max2];
 }
@@ -716,12 +808,18 @@ function faceBounds(q: BakedQuad, dir: Direction): [number, number, number, numb
 function faceCovers(candidate: BakedQuad, source: BakedQuad, sourceDirection: Direction): boolean {
   const [sMin1, sMax1, sMin2, sMax2] = faceBounds(source, sourceDirection);
   const [nMin1, nMax1, nMin2, nMax2] = faceBounds(candidate, sourceDirection);
-  return nMin1 <= sMin1 + GEOMETRY_EPS && nMax1 >= sMax1 - GEOMETRY_EPS
-    && nMin2 <= sMin2 + GEOMETRY_EPS && nMax2 >= sMax2 - GEOMETRY_EPS;
+  return (
+    nMin1 <= sMin1 + GEOMETRY_EPS &&
+    nMax1 >= sMax1 - GEOMETRY_EPS &&
+    nMin2 <= sMin2 + GEOMETRY_EPS &&
+    nMax2 >= sMax2 - GEOMETRY_EPS
+  );
 }
 
 function simpleCubeFromQuads(
-  quads: BakedQuad[], textureHasAlpha?: TextureAlphaMap, textureAnimationIds?: Record<string, number>,
+  quads: BakedQuad[],
+  textureHasAlpha?: TextureAlphaMap,
+  textureAnimationIds?: Record<string, number>,
 ): SimpleCubeDef | null {
   if (quads.length !== SECTION_VISIBILITY_DIRECTIONS.length) return null;
   const faces: Partial<SimpleCubeDef> = {};
@@ -742,20 +840,30 @@ function quantByte(value: number): number {
 }
 
 function greedyCellForQuad(
-  res: MesherResources, view: WorldView, q: BakedQuad, textureKey: number,
-  wx: number, wy: number, wz: number, smooth: boolean,
+  res: MesherResources,
+  view: WorldView,
+  q: BakedQuad,
+  textureKey: number,
+  wx: number,
+  wy: number,
+  wz: number,
+  smooth: boolean,
 ): GreedyCell | null {
   const rect = res.atlas[q.texture] ?? res.atlas[MISSING_TEXTURE];
   if (!rect) return null;
   const shade = q.shade ? SHADE[q.face] : 1;
   const d = DIR_VEC[q.face];
-  const bx = wx + d[0], by = wy + d[1], bz = wz + d[2];
+  const bx = wx + d[0],
+    by = wy + d[1],
+    bz = wz + d[2];
   const flatSky = view.getSkyLight(bx, by, bz) / 15;
   const flatBlock = view.getBlockLight(bx, by, bz) / 15;
   let key = 0;
   let out: GreedyCell | null = null;
   for (let i = 0; i < 4; i++) {
-    let sky = flatSky, block = flatBlock, ao = 1;
+    let sky = flatSky,
+      block = flatBlock,
+      ao = 1;
     if (smooth && q.ao) {
       const s = smoothVertexLightPacked(res, view, q, i, bx, by, bz);
       sky = (s & 255) / 255;
@@ -778,7 +886,11 @@ function greedyCellForQuad(
 
 function addGreedyCell(
   grids: (GreedyGrid | null)[],
-  dir: Direction, slice: number, u: number, v: number, cell: GreedyCell,
+  dir: Direction,
+  slice: number,
+  u: number,
+  v: number,
+  cell: GreedyCell,
 ) {
   const gridIndex = DIRECTION_INDEX[dir] * 17 + slice;
   let grid = grids[gridIndex];
@@ -794,33 +906,74 @@ function greedyCellsEqual(a: GreedyCell | null, b: GreedyCell | null): boolean {
 }
 
 function emitGreedyQuad(
-  builder: MeshBuilder, dir: Direction, slice: number,
-  u0: number, u1: number, v0: number, v1: number, cell: GreedyCell,
+  builder: MeshBuilder,
+  dir: Direction,
+  slice: number,
+  u0: number,
+  u1: number,
+  v0: number,
+  v1: number,
+  cell: GreedyCell,
 ) {
   let verts: [number, number, number][];
   switch (dir) {
     case 'up':
-      verts = [[u0, slice, v0], [u1, slice, v0], [u1, slice, v1], [u0, slice, v1]];
+      verts = [
+        [u0, slice, v0],
+        [u1, slice, v0],
+        [u1, slice, v1],
+        [u0, slice, v1],
+      ];
       break;
     case 'down':
-      verts = [[u0, slice, v1], [u1, slice, v1], [u1, slice, v0], [u0, slice, v0]];
+      verts = [
+        [u0, slice, v1],
+        [u1, slice, v1],
+        [u1, slice, v0],
+        [u0, slice, v0],
+      ];
       break;
     case 'north':
-      verts = [[u1, v1, slice], [u0, v1, slice], [u0, v0, slice], [u1, v0, slice]];
+      verts = [
+        [u1, v1, slice],
+        [u0, v1, slice],
+        [u0, v0, slice],
+        [u1, v0, slice],
+      ];
       break;
     case 'south':
-      verts = [[u0, v1, slice], [u1, v1, slice], [u1, v0, slice], [u0, v0, slice]];
+      verts = [
+        [u0, v1, slice],
+        [u1, v1, slice],
+        [u1, v0, slice],
+        [u0, v0, slice],
+      ];
       break;
     case 'west':
-      verts = [[slice, v1, u0], [slice, v1, u1], [slice, v0, u1], [slice, v0, u0]];
+      verts = [
+        [slice, v1, u0],
+        [slice, v1, u1],
+        [slice, v0, u1],
+        [slice, v0, u0],
+      ];
       break;
     case 'east':
-      verts = [[slice, v1, u1], [slice, v1, u0], [slice, v0, u0], [slice, v0, u1]];
+      verts = [
+        [slice, v1, u1],
+        [slice, v1, u0],
+        [slice, v0, u0],
+        [slice, v0, u1],
+      ];
       break;
   }
   const w = u1 - u0;
   const h = v1 - v0;
-  const uvs: [number, number][] = [[0, 0], [w, 0], [w, h], [0, h]];
+  const uvs: [number, number][] = [
+    [0, 0],
+    [w, 0],
+    [w, h],
+    [0, h],
+  ];
   for (let i = 0; i < 4; i++) {
     const [x, y, z] = verts[i];
     const [u, v] = uvs[i];
@@ -867,9 +1020,17 @@ function isSameFluid(res: MesherResources, texture: string, state: BlockStateRef
 }
 
 function emitFluid(
-  res: MesherResources, view: WorldView, builders: MeshBuilderStore,
-  fluid: NonNullable<BlockInfo['fluid']>, state: BlockStateRef,
-  lx: number, ly: number, lz: number, wx: number, wy: number, wz: number,
+  res: MesherResources,
+  view: WorldView,
+  builders: MeshBuilderStore,
+  fluid: NonNullable<BlockInfo['fluid']>,
+  state: BlockStateRef,
+  lx: number,
+  ly: number,
+  lz: number,
+  wx: number,
+  wy: number,
+  wz: number,
 ) {
   const builder = builderFor(builders, fluid.layer ?? 'translucent');
   const tint = res.tint(fluid.tint, undefined, view.getBiome(wx, wy, wz), state);
@@ -952,8 +1113,7 @@ function emitFluid(
   // Vanilla selects the flowing sprite from the horizontal flow vector, not
   // directly from the encoded fluid level. Equal-height non-source or falling
   // columns can still have a zero horizontal vector and use the still sprite.
-  const flowingTop = !!fluid.flowTexture
-    && (Math.abs(flowX) > HEIGHT_EPS || Math.abs(flowZ) > HEIGHT_EPS);
+  const flowingTop = !!fluid.flowTexture && (Math.abs(flowX) > HEIGHT_EPS || Math.abs(flowZ) > HEIGHT_EPS);
   const flowAngle = Math.atan2(flowZ, flowX) - Math.PI / 2;
   const flowCos = Math.cos(flowAngle);
   const flowSin = Math.sin(flowAngle);
@@ -962,12 +1122,18 @@ function emitFluid(
     const s = 16;
     const [v0, v1, v2] = v;
     switch (dir) {
-      case 'down': return [v0 * s, s - v2 * s];
-      case 'up': return [v0 * s, v2 * s];
-      case 'north': return [s - v0 * s, s - v1 * s];
-      case 'south': return [v0 * s, s - v1 * s];
-      case 'west': return [v2 * s, s - v1 * s];
-      case 'east': return [s - v2 * s, s - v1 * s];
+      case 'down':
+        return [v0 * s, s - v2 * s];
+      case 'up':
+        return [v0 * s, v2 * s];
+      case 'north':
+        return [s - v0 * s, s - v1 * s];
+      case 'south':
+        return [v0 * s, s - v1 * s];
+      case 'west':
+        return [v2 * s, s - v1 * s];
+      case 'east':
+        return [s - v2 * s, s - v1 * s];
     }
   };
   const flowTopUv = (v: [number, number, number]): [number, number] => {
@@ -975,7 +1141,8 @@ function emitFluid(
     // not an affine texture rotation. In particular, the south-east vertex
     // has `cos - sin` for V; treating it as a square projection was the
     // source of the discontinuity visible on flowing water.
-    const x = v[0], z = v[2];
+    const x = v[0],
+      z = v[2];
     const s = 8;
     const q = 4;
     if (x < 0.5 && z < 0.5) return [s + q * (-flowCos - flowSin), s + q * (-flowCos + flowSin)];
@@ -984,23 +1151,33 @@ function emitFluid(
     return [s + q * (flowCos - flowSin), s + q * (-flowCos - flowSin)];
   };
 
-  const face = (
-    dir: Direction, verts: [number, number, number][], explicitUvs?: [number, number][],
-  ) => {
-    const texture = dir === 'up'
-      ? (flowingTop ? fluid.flowTexture! : fluid.texture)
-      : dir === 'down'
-        ? fluid.texture
-        : (fluid.flowTexture ?? fluid.texture);
+  const face = (dir: Direction, verts: [number, number, number][], explicitUvs?: [number, number][]) => {
+    const texture =
+      dir === 'up'
+        ? flowingTop
+          ? fluid.flowTexture!
+          : fluid.texture
+        : dir === 'down'
+          ? fluid.texture
+          : (fluid.flowTexture ?? fluid.texture);
     const rect = res.atlas[texture] ?? res.atlas[MISSING_TEXTURE];
     const shade = SHADE[dir];
     verts.forEach((v) => {
       const uv = explicitUvs?.[verts.indexOf(v)] ?? (dir === 'up' && flowingTop ? flowTopUv(v) : faceUv(dir, v));
       const [u, vv] = atlasUv(rect, ...uv);
       builder.vertex(
-        lx + v[0], ly + v[1], lz + v[2], u, vv,
-        tint[0] * shade, tint[1] * shade, tint[2] * shade, sky, block,
-        undefined, res.textureAnimationIds?.[texture] ?? 0,
+        lx + v[0],
+        ly + v[1],
+        lz + v[2],
+        u,
+        vv,
+        tint[0] * shade,
+        tint[1] * shade,
+        tint[2] * shade,
+        sky,
+        block,
+        undefined,
+        res.textureAnimationIds?.[texture] ?? 0,
       );
     });
     builder.quadIndices();
@@ -1029,8 +1206,10 @@ function emitFluid(
       return v;
     };
     const emitSide = (
-      topA: [number, number, number], topB: [number, number, number],
-      bottomB: [number, number, number], bottomA: [number, number, number],
+      topA: [number, number, number],
+      topB: [number, number, number],
+      bottomB: [number, number, number],
+      bottomA: [number, number, number],
     ) => face(dir, [inset(topA), inset(topB), inset(bottomB), inset(bottomA)], sideUvs(topA, topB));
     const n = neighbor(dir);
     if (isSameFluid(res, fluid.texture, n)) {
@@ -1044,9 +1223,7 @@ function emitFluid(
     }
   };
 
-  const sideUvs = (
-    topA: [number, number, number], topB: [number, number, number],
-  ): [number, number][] => {
+  const sideUvs = (topA: [number, number, number], topB: [number, number, number]): [number, number][] => {
     // FluidRenderer maps every exposed side to the lower-left 8×8 region of
     // the flowing sprite: U 0..8 and V (1-height)*8..8. The winding comes
     // from the face vertices, so it must not be re-projected by world axis.
@@ -1054,7 +1231,12 @@ function emitFluid(
     const vB = (1 - topB[1]) * 8;
     // `face` stores side vertices in the renderer's counter-clockwise order
     // (the inverse of FluidRenderer's emission order), hence U is 8..0 here.
-    return [[8, vA], [0, vB], [0, 8], [8, 8]];
+    return [
+      [8, vA],
+      [0, vB],
+      [0, 8],
+      [8, 8],
+    ];
   };
 
   // Vanilla keeps the fluid surface just inside the block to avoid depth
@@ -1062,35 +1244,89 @@ function emitFluid(
   // four corners, including still/source fluids.
   const topY = (h: number) => Math.max(0, h - 0.001);
   if (!aboveSame && !aboveOccludes) {
-    face('up', [[0, topY(hNW), 0], [1, topY(hNE), 0], [1, topY(hSE), 1], [0, topY(hSW), 1]]);
+    face('up', [
+      [0, topY(hNW), 0],
+      [1, topY(hNE), 0],
+      [1, topY(hSE), 1],
+      [0, topY(hSW), 1],
+    ]);
   }
-  if (shouldDraw('down')) face('down', [[0, 0, 1], [1, 0, 1], [1, 0, 0], [0, 0, 0]]);
-  side('north',
-    [[1, hNE, 0], [0, hNW, 0]],
-    [[1, 0, 0], [0, 0, 0]],
-    () => [[1, cornerHeight(wx, wz - 1, 1, 1), 0], [0, cornerHeight(wx, wz - 1, -1, 1), 0]],
+  if (shouldDraw('down'))
+    face('down', [
+      [0, 0, 1],
+      [1, 0, 1],
+      [1, 0, 0],
+      [0, 0, 0],
+    ]);
+  side(
+    'north',
+    [
+      [1, hNE, 0],
+      [0, hNW, 0],
+    ],
+    [
+      [1, 0, 0],
+      [0, 0, 0],
+    ],
+    () => [
+      [1, cornerHeight(wx, wz - 1, 1, 1), 0],
+      [0, cornerHeight(wx, wz - 1, -1, 1), 0],
+    ],
   );
-  side('south',
-    [[0, hSW, 1], [1, hSE, 1]],
-    [[0, 0, 1], [1, 0, 1]],
-    () => [[0, cornerHeight(wx, wz + 1, -1, -1), 1], [1, cornerHeight(wx, wz + 1, 1, -1), 1]],
+  side(
+    'south',
+    [
+      [0, hSW, 1],
+      [1, hSE, 1],
+    ],
+    [
+      [0, 0, 1],
+      [1, 0, 1],
+    ],
+    () => [
+      [0, cornerHeight(wx, wz + 1, -1, -1), 1],
+      [1, cornerHeight(wx, wz + 1, 1, -1), 1],
+    ],
   );
-  side('west',
-    [[0, hNW, 0], [0, hSW, 1]],
-    [[0, 0, 0], [0, 0, 1]],
-    () => [[0, cornerHeight(wx - 1, wz, 1, -1), 0], [0, cornerHeight(wx - 1, wz, 1, 1), 1]],
+  side(
+    'west',
+    [
+      [0, hNW, 0],
+      [0, hSW, 1],
+    ],
+    [
+      [0, 0, 0],
+      [0, 0, 1],
+    ],
+    () => [
+      [0, cornerHeight(wx - 1, wz, 1, -1), 0],
+      [0, cornerHeight(wx - 1, wz, 1, 1), 1],
+    ],
   );
-  side('east',
-    [[1, hSE, 1], [1, hNE, 0]],
-    [[1, 0, 1], [1, 0, 0]],
-    () => [[1, cornerHeight(wx + 1, wz, -1, 1), 1], [1, cornerHeight(wx + 1, wz, -1, -1), 0]],
+  side(
+    'east',
+    [
+      [1, hSE, 1],
+      [1, hNE, 0],
+    ],
+    [
+      [1, 0, 1],
+      [1, 0, 0],
+    ],
+    () => [
+      [1, cornerHeight(wx + 1, wz, -1, 1), 1],
+      [1, cornerHeight(wx + 1, wz, -1, -1), 0],
+    ],
   );
 }
 
 /** 网格化一个 16³ section。坐标相对 section 原点。 */
 export function meshSection(
-  res: MesherResources, view: WorldView,
-  cx: number, sy: number, cz: number,
+  res: MesherResources,
+  view: WorldView,
+  cx: number,
+  sy: number,
+  cz: number,
   smoothLighting = true,
   renderInstances: readonly RenderModelInstance[] = [],
 ): MeshSectionResult {
@@ -1123,18 +1359,15 @@ export function meshSection(
       const bi = cachedInfo(state.name);
       const blockLayer = bi.layer === 'opaqueTiled' ? 'opaque' : bi.layer;
       const waterlogged = state.properties.waterlogged === 'true' || !!bi.waterlogged;
-      const fullOccluder = bi.occludes
-        && cachedOpaqueFullCube(localRes.baker.getQuads(state, 0), localRes.textureHasAlpha);
+      const fullOccluder =
+        bi.occludes && cachedOpaqueFullCube(localRes.baker.getQuads(state, 0), localRes.textureHasAlpha);
       hit = {
         bi,
         blockLayer,
         waterlogged,
         fullOccluder,
-        simpleEligible: !waterlogged
-          && blockLayer === 'opaque'
-          && bi.occludes
-          && bi.tint === 'none'
-          && bi.fixedTint === undefined,
+        simpleEligible:
+          !waterlogged && blockLayer === 'opaque' && bi.occludes && bi.tint === 'none' && bi.fixedTint === undefined,
       };
       metaCache.set(state, hit);
     }
@@ -1143,7 +1376,9 @@ export function meshSection(
   const faceOccluded = (q: BakedQuad, state: BlockStateRef, x: number, y: number, z: number): boolean => {
     if (!q.cullFace) return false;
     const d = DIR_VEC[q.cullFace];
-    const nx = x + d[0], ny = y + d[1], nz = z + d[2];
+    const nx = x + d[0],
+      ny = y + d[1],
+      nz = z + d[2];
     if (cachedView.occludesLocal(nx, ny, nz)) return true;
     const neighbor = cachedView.blockLocal(nx, ny, nz);
     if (AIR_NAMES.has(neighbor.name)) return false;
@@ -1152,18 +1387,25 @@ export function meshSection(
     if (nInfo.layer === 'translucent' && !sameTranslucent) return false;
     const opposite = OPPOSITE_DIRECTION[q.cullFace];
     const neighborQuads = localRes.baker.getQuads(neighbor, hash3(nx + ox, ny + oy, nz + oz));
-    return neighborQuads.some((candidate) => candidate.face === opposite
-      && candidate.cullFace === opposite
-      && (sameTranslucent || !localRes.textureHasAlpha?.[candidate.texture])
-      && faceCovers(candidate, q, q.cullFace!));
+    return neighborQuads.some(
+      (candidate) =>
+        candidate.face === opposite &&
+        candidate.cullFace === opposite &&
+        (sameTranslucent || !localRes.textureHasAlpha?.[candidate.texture]) &&
+        faceCovers(candidate, q, q.cullFace!),
+    );
   };
   const builders: MeshBuilderStore = {};
   const greedyGrids = new Array<GreedyGrid | null>(6 * 17).fill(null);
-  const ox = cx * 16, oy = sy * 16, oz = cz * 16;
+  const ox = cx * 16,
+    oy = sy * 16,
+    oz = cz * 16;
   for (let y = 0; y < 16; y++) {
     for (let z = 0; z < 16; z++) {
       for (let x = 0; x < 16; x++) {
-        const wx = ox + x, wy = oy + y, wz = oz + z;
+        const wx = ox + x,
+          wy = oy + y,
+          wz = oz + z;
         const state = cachedView.blockLocal(x, y, z);
         if (AIR_NAMES.has(state.name)) continue;
         const meta = metaOf(state);
@@ -1175,7 +1417,20 @@ export function meshSection(
         }
         if (waterlogged) {
           const water = cachedInfo('minecraft:water').fluid;
-          if (water) emitFluid(localRes, cachedView, builders, water, { name: 'minecraft:water', properties: { level: '0' } }, x, y, z, wx, wy, wz);
+          if (water)
+            emitFluid(
+              localRes,
+              cachedView,
+              builders,
+              water,
+              { name: 'minecraft:water', properties: { level: '0' } },
+              x,
+              y,
+              z,
+              wx,
+              wy,
+              wz,
+            );
         }
         let occludedFaceMask = -1;
         if (!waterlogged && fullOccluder) {
@@ -1188,26 +1443,65 @@ export function meshSection(
         }
 
         const quads = localRes.baker.getQuads(state, hash3(wx, wy, wz));
-        const simple = meta.simpleEligible ? cachedSimpleCube(quads, localRes.textureHasAlpha, localRes.textureAnimationIds) : null;
+        const simple = meta.simpleEligible
+          ? cachedSimpleCube(quads, localRes.textureHasAlpha, localRes.textureAnimationIds)
+          : null;
         if (simple) {
           for (const dir of SECTION_VISIBILITY_DIRECTIONS) {
             const q = simple[dir];
             const d = DIR_VEC[dir];
-            if (occludedFaceMask >= 0
-              ? (occludedFaceMask & (1 << DIRECTION_INDEX[dir])) !== 0
-              : cachedView.occludesLocal(x + d[0], y + d[1], z + d[2])) continue;
-            const cell = greedyCellForQuad(localRes, cachedView, q, textureKeyOf(q.texture), wx, wy, wz, smoothLighting);
+            if (
+              occludedFaceMask >= 0
+                ? (occludedFaceMask & (1 << DIRECTION_INDEX[dir])) !== 0
+                : cachedView.occludesLocal(x + d[0], y + d[1], z + d[2])
+            )
+              continue;
+            const cell = greedyCellForQuad(
+              localRes,
+              cachedView,
+              q,
+              textureKeyOf(q.texture),
+              wx,
+              wy,
+              wz,
+              smoothLighting,
+            );
             if (cell) {
               switch (dir) {
-                case 'up': addGreedyCell(greedyGrids, dir, y + 1, x, z, cell); break;
-                case 'down': addGreedyCell(greedyGrids, dir, y, x, z, cell); break;
-                case 'north': addGreedyCell(greedyGrids, dir, z, x, y, cell); break;
-                case 'south': addGreedyCell(greedyGrids, dir, z + 1, x, y, cell); break;
-                case 'west': addGreedyCell(greedyGrids, dir, x, z, y, cell); break;
-                case 'east': addGreedyCell(greedyGrids, dir, x + 1, z, y, cell); break;
+                case 'up':
+                  addGreedyCell(greedyGrids, dir, y + 1, x, z, cell);
+                  break;
+                case 'down':
+                  addGreedyCell(greedyGrids, dir, y, x, z, cell);
+                  break;
+                case 'north':
+                  addGreedyCell(greedyGrids, dir, z, x, y, cell);
+                  break;
+                case 'south':
+                  addGreedyCell(greedyGrids, dir, z + 1, x, y, cell);
+                  break;
+                case 'west':
+                  addGreedyCell(greedyGrids, dir, x, z, y, cell);
+                  break;
+                case 'east':
+                  addGreedyCell(greedyGrids, dir, x + 1, z, y, cell);
+                  break;
               }
             } else {
-              emitQuad(localRes, cachedView, builderFor(builders, 'opaque'), q, x, y, z, wx, wy, wz, WHITE, smoothLighting);
+              emitQuad(
+                localRes,
+                cachedView,
+                builderFor(builders, 'opaque'),
+                q,
+                x,
+                y,
+                z,
+                wx,
+                wy,
+                wz,
+                WHITE,
+                smoothLighting,
+              );
             }
           }
           continue;
@@ -1215,13 +1509,15 @@ export function meshSection(
 
         for (const q of quads) {
           if (q.cullFace) {
-            if (occludedFaceMask >= 0
-              ? (occludedFaceMask & (1 << DIRECTION_INDEX[q.cullFace])) !== 0
-              : faceOccluded(q, state, x, y, z)) continue;
+            if (
+              occludedFaceMask >= 0
+                ? (occludedFaceMask & (1 << DIRECTION_INDEX[q.cullFace])) !== 0
+                : faceOccluded(q, state, x, y, z)
+            )
+              continue;
           }
-          const tint = q.tintIndex >= 0
-            ? localRes.tint(bi.tint, bi.fixedTint, cachedView.getBiome(wx, wy, wz), state)
-            : WHITE;
+          const tint =
+            q.tintIndex >= 0 ? localRes.tint(bi.tint, bi.fixedTint, cachedView.getBiome(wx, wy, wz), state) : WHITE;
           const layer = blockLayer === 'opaque' && localRes.textureHasAlpha?.[q.texture] ? 'cutout' : blockLayer;
           emitQuad(localRes, cachedView, builderFor(builders, layer), q, x, y, z, wx, wy, wz, tint, smoothLighting);
         }
@@ -1243,8 +1539,13 @@ export function meshSection(
   if (greedyGrids.some(Boolean)) flushGreedyGrids(greedyGrids, builderFor(builders, 'opaqueTiled'));
   const layers: SectionMeshes = {};
   for (const layer of [
-    'opaque', 'opaqueTiled', 'cutout', 'translucent',
-    'specialOpaque', 'specialCutout', 'specialTranslucent',
+    'opaque',
+    'opaqueTiled',
+    'cutout',
+    'translucent',
+    'specialOpaque',
+    'specialCutout',
+    'specialTranslucent',
   ] as RenderLayer[]) {
     const builder = builders[layer];
     if (builder && !builder.empty) layers[layer] = builder.build();

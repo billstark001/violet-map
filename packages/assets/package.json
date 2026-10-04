@@ -1,10 +1,10 @@
 {
   "name": "@violet-map/assets",
   "version": "0.1.0",
-  "type": "module",
   "bin": {
     "vm-assets": "./dist/cli.js"
   },
+  "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli.ts",

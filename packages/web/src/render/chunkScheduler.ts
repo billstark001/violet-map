@@ -60,25 +60,15 @@ const DEFAULT_IMPORTANCE_DECAY_DISTANCE_POWER = 1.75;
 const DEFAULT_DISTANCE_WEIGHT_POWER = 0.65;
 const DEFAULT_DISTANCE_INVERSE_SQUARE_RADIUS_RATIO = 0.35;
 const DEFAULT_NEIGHBOR_PRECISION_EPSILON = 1e-6;
-const DEFAULT_NEIGHBOR_SATISFACTION_PENALTY_BY_COUNT = [
-  0,
-  0,
-  0.035,
-  0.075,
-  0.12,
-  0.18,
-  0.25,
-  0.34,
-  0.45,
-] as const;
+const DEFAULT_NEIGHBOR_SATISFACTION_PENALTY_BY_COUNT = [0, 0, 0.035, 0.075, 0.12, 0.18, 0.25, 0.34, 0.45] as const;
 
 export const LOD_STEPS = [1, 2, 4, 8] as const;
-export type LodStep = typeof LOD_STEPS[number];
+export type LodStep = (typeof LOD_STEPS)[number];
 export type MeshTaskKind = 'full' | 'lod';
 export type ChunkSchedulerCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 
 export const SCHEDULER_PRESETS = ['potato', 'low', 'medium', 'high', 'extreme'] as const;
-export type SchedulerPreset = typeof SCHEDULER_PRESETS[number];
+export type SchedulerPreset = (typeof SCHEDULER_PRESETS)[number];
 
 export interface ChunkSchedulingTuning {
   /** Camera-grid active radius in chunks. This is independent from fog/view-distance UI settings. */
@@ -275,7 +265,14 @@ export type SchedulerEvent =
   | { type: 'meshDeferred'; key: string; kind: MeshTaskKind; step: LodStep; fallbackTier: number; now: number }
   | { type: 'meshInvalidated'; entry: ChunkSchedulerEntry; now: number }
   | { type: 'chunkStored'; entry: ChunkSchedulerEntry; now: number }
-  | { type: 'meshDisplayed'; entry: ChunkSchedulerEntry; kind: MeshTaskKind; step: LodStep; version: number; now: number }
+  | {
+      type: 'meshDisplayed';
+      entry: ChunkSchedulerEntry;
+      kind: MeshTaskKind;
+      step: LodStep;
+      version: number;
+      now: number;
+    }
   | { type: 'chunkDropped'; key: string };
 
 export interface SchedulerMeshResult {
@@ -588,7 +585,9 @@ function normalizeNeighborPenalty(value: readonly number[] | undefined): readonl
       continue;
     }
     const raw = source[i];
-    const clamped = Number.isFinite(raw) ? Math.max(0, Math.min(1, raw)) : DEFAULT_NEIGHBOR_SATISFACTION_PENALTY_BY_COUNT[i];
+    const clamped = Number.isFinite(raw)
+      ? Math.max(0, Math.min(1, raw))
+      : DEFAULT_NEIGHBOR_SATISFACTION_PENALTY_BY_COUNT[i];
     previous = Math.max(previous, clamped);
     out[i] = previous;
   }
@@ -605,7 +604,7 @@ function heightForSurfaceY(surfaceY: number): number {
 }
 
 function normalizeLodStep(value: number, fallback: LodStep): LodStep {
-  return LOD_STEPS.includes(value as LodStep) ? value as LodStep : fallback;
+  return LOD_STEPS.includes(value as LodStep) ? (value as LodStep) : fallback;
 }
 
 function precisionForStep(step: number): number {
@@ -691,7 +690,7 @@ export class ChunkScheduler {
   private lastNearPresenceRadiusChunks = DEFAULT_NEAR_PRESENCE_RADIUS_CHUNKS;
   private tmpDirection = new THREE.Vector3();
 
-  constructor(private opts: ChunkSchedulerOptions = {}) { }
+  constructor(private opts: ChunkSchedulerOptions = {}) {}
 
   syncStats(stats: ChunkRenderStats, profileStats: ChunkProfileStats = EMPTY_PROFILE_STATS): ChunkSchedulerStats {
     this.renderStats = { ...stats };
@@ -792,7 +791,13 @@ export class ChunkScheduler {
     this.pruneQueues(input.now, input.entryFor);
     this.expirePriorities(input.now);
 
-    const evictedKeys = this.evictKeys(frame.keepKeys, frame.protectedKeys, input.entries, input.now, newCandidateCount);
+    const evictedKeys = this.evictKeys(
+      frame.keepKeys,
+      frame.protectedKeys,
+      input.entries,
+      input.now,
+      newCandidateCount,
+    );
     for (const key of evictedKeys) actions.push({ type: 'dropChunk', key });
 
     return {
@@ -961,7 +966,7 @@ export class ChunkScheduler {
         ? this.shouldScheduleCriticalCell(entry, info, targetStep)
         : nearPresence
           ? this.shouldScheduleNearPresenceCell(entry, info, targetStep)
-        : this.shouldScheduleCell(cell, entry, info, targetStep, cfg);
+          : this.shouldScheduleCell(cell, entry, info, targetStep, cfg);
       if (!shouldSchedule) continue;
 
       candidates.push({
@@ -977,8 +982,9 @@ export class ChunkScheduler {
           : nearPresence
             ? this.tierForNearPresenceCell(entry, targetStep)
             : this.tierForCell(cell, entry, targetStep),
-        score: this.scoreForCell(cell, entry, targetStep, centerCx, centerCz)
-          + (nearCritical
+        score:
+          this.scoreForCell(cell, entry, targetStep, centerCx, centerCz) +
+          (nearCritical
             ? CRITICAL_NEAR_SCORE_BOOST
             : critical
               ? CRITICAL_SCORE_BOOST
@@ -1071,11 +1077,7 @@ export class ChunkScheduler {
     return this.nearPresenceCells(centerCx, centerCz, radius);
   }
 
-  private nearPresenceCells(
-    centerCx: number,
-    centerCz: number,
-    radius: number,
-  ): CriticalCell[] {
+  private nearPresenceCells(centerCx: number, centerCz: number, radius: number): CriticalCell[] {
     const out: CriticalCell[] = [];
     for (let di = -radius; di <= radius; di++) {
       for (let dj = -radius; dj <= radius; dj++) {
@@ -1192,12 +1194,7 @@ export class ChunkScheduler {
     const batchSize = this.shouldLoadMore(input)
       ? this.ioBatchSize(HASH_BATCH_SIZE, input)
       : BLOCKED_RENDER_HASH_BATCH_SIZE;
-    return this.nextIoBatch(
-      this.hashQueue,
-      batchSize,
-      (entry) => entry?.state === 'checking',
-      input.entryFor,
-    );
+    return this.nextIoBatch(this.hashQueue, batchSize, (entry) => entry?.state === 'checking', input.entryFor);
   }
 
   private nextFetchBatch(input: SchedulerWorkInput): string[] {
@@ -1348,7 +1345,8 @@ export class ChunkScheduler {
 
     if (this.lodDisabled()) return null;
     if (entry.pendingLod && entry.pendingLodStep > 0 && entry.pendingLodStep <= targetStep && !entry.dirty) return null;
-    if (entry.displayed === 'lod' && entry.displayedLodStep > 0 && entry.displayedLodStep <= targetStep && !entry.dirty) return null;
+    if (entry.displayed === 'lod' && entry.displayedLodStep > 0 && entry.displayedLodStep <= targetStep && !entry.dirty)
+      return null;
     return { key: entry.key, kind: 'lod', step: targetStep, ...priority };
   }
 
@@ -1379,10 +1377,7 @@ export class ChunkScheduler {
     this.meshCooldownUntil.set(key, now + MESH_RETRY_COOLDOWN_MS);
   }
 
-  private pruneQueues(
-    now: number,
-    entryFor: (key: string) => ChunkSchedulerEntry | null,
-  ) {
+  private pruneQueues(now: number, entryFor: (key: string) => ChunkSchedulerEntry | null) {
     const keepQueued = (key: string): boolean => this.priorityFreshByKey(key, now) || this.recordFreshByKey(key, now);
 
     for (const key of this.hashQueue) {
@@ -1449,12 +1444,13 @@ export class ChunkScheduler {
     // touch current candidates or the critical neighborhood: those are allowed
     // to survive even when their transient tracker score is low.
     const lowValueVictims = this.evictionVictims(
-      all.filter((entry) => (
-        keepKeys.has(entry.key)
-        && !protectedKeys.has(entry.key)
-        && !already.has(entry.key)
-        && this.isLowValueActiveEntry(entry, now)
-      )),
+      all.filter(
+        (entry) =>
+          keepKeys.has(entry.key) &&
+          !protectedKeys.has(entry.key) &&
+          !already.has(entry.key) &&
+          this.isLowValueActiveEntry(entry, now),
+      ),
       now,
       LOW_VALUE_ACTIVE_EVICT_LIMIT,
     );
@@ -1490,12 +1486,13 @@ export class ChunkScheduler {
 
     if (tracked > softLimit) {
       const staleActiveVictims = this.evictionVictims(
-        all.filter((entry) => (
-          keepKeys.has(entry.key)
-          && !protectedKeys.has(entry.key)
-          && !already.has(entry.key)
-          && !this.priorityFresh(entry, now)
-        )),
+        all.filter(
+          (entry) =>
+            keepKeys.has(entry.key) &&
+            !protectedKeys.has(entry.key) &&
+            !already.has(entry.key) &&
+            !this.priorityFresh(entry, now),
+        ),
         now,
         tracked - softLimit,
       );
@@ -1569,16 +1566,18 @@ export class ChunkScheduler {
 
   private scheduleInvalidatedMesh(entry: ChunkSchedulerEntry, now: number) {
     const previous = this.recordFor(entry);
-    const displayedStep = entry.displayed === 'full'
-      ? 1
-      : entry.displayed === 'lod' && entry.displayedLodStep > 0
-        ? entry.displayedLodStep
-        : entry.pendingFull
-          ? 1
-          : entry.pendingLodStep;
-    const targetStep = this.lodDisabled() || displayedStep === 1
-      ? 1
-      : normalizeLodStep(displayedStep || previous?.lastTargetStep || entry.lastTargetStep, 8);
+    const displayedStep =
+      entry.displayed === 'full'
+        ? 1
+        : entry.displayed === 'lod' && entry.displayedLodStep > 0
+          ? entry.displayedLodStep
+          : entry.pendingFull
+            ? 1
+            : entry.pendingLodStep;
+    const targetStep =
+      this.lodDisabled() || displayedStep === 1
+        ? 1
+        : normalizeLodStep(displayedStep || previous?.lastTargetStep || entry.lastTargetStep, 8);
     const priority: ChunkPriority = {
       // A boundary change affects visible geometry. Put it ahead of ordinary
       // background work, without leapfrogging the critical camera cell tier.
@@ -1628,36 +1627,47 @@ export class ChunkScheduler {
       MIN_ACTIVE_RADIUS_CHUNKS,
       MAX_ACTIVE_RADIUS_CHUNKS,
     );
-    const maxCandidates = Math.max(1, Math.floor(clampFinite(
-      scheduling.maxCandidates,
-      activeCellCapacity(activeRadiusChunks),
+    const maxCandidates = Math.max(
       1,
-      activeCellCapacity(MAX_ACTIVE_RADIUS_CHUNKS),
-    )));
-    const maxFrameCandidates = Math.max(1, Math.floor(clampFinite(
-      scheduling.maxFrameCandidates,
-      MAX_FRAME_CANDIDATES,
+      Math.floor(
+        clampFinite(
+          scheduling.maxCandidates,
+          activeCellCapacity(activeRadiusChunks),
+          1,
+          activeCellCapacity(MAX_ACTIVE_RADIUS_CHUNKS),
+        ),
+      ),
+    );
+    const maxFrameCandidates = Math.max(
       1,
-      activeCellCapacity(MAX_ACTIVE_RADIUS_CHUNKS),
-    )));
-    const maxTrackedChunks = Math.max(64, Math.floor(clampFinite(
-      scheduling.maxTrackedChunks,
-      DEFAULT_MAX_TRACKED_CHUNKS,
+      Math.floor(
+        clampFinite(
+          scheduling.maxFrameCandidates,
+          MAX_FRAME_CANDIDATES,
+          1,
+          activeCellCapacity(MAX_ACTIVE_RADIUS_CHUNKS),
+        ),
+      ),
+    );
+    const maxTrackedChunks = Math.max(
       64,
-      4096,
-    )));
-    const criticalNearRadiusChunks = Math.max(1, Math.floor(clampFinite(
-      scheduling.criticalNearRadiusChunks,
-      DEFAULT_CRITICAL_NEAR_RADIUS_CHUNKS,
+      Math.floor(clampFinite(scheduling.maxTrackedChunks, DEFAULT_MAX_TRACKED_CHUNKS, 64, 4096)),
+    );
+    const criticalNearRadiusChunks = Math.max(
       1,
-      24,
-    )));
-    const nearPresenceRadiusChunks = Math.max(criticalNearRadiusChunks, Math.floor(clampFinite(
-      scheduling.nearPresenceRadiusChunks,
-      DEFAULT_NEAR_PRESENCE_RADIUS_CHUNKS,
+      Math.floor(clampFinite(scheduling.criticalNearRadiusChunks, DEFAULT_CRITICAL_NEAR_RADIUS_CHUNKS, 1, 24)),
+    );
+    const nearPresenceRadiusChunks = Math.max(
       criticalNearRadiusChunks,
-      32,
-    )));
+      Math.floor(
+        clampFinite(
+          scheduling.nearPresenceRadiusChunks,
+          DEFAULT_NEAR_PRESENCE_RADIUS_CHUNKS,
+          criticalNearRadiusChunks,
+          32,
+        ),
+      ),
+    );
     const tauImportance = clampFinite(scheduling.tauImportance, 0.85, 0.05, 10);
     const baseImportanceHalfLife = tauImportance * Math.LN2;
     const nearImportanceHalfLife = clampFinite(
@@ -1666,20 +1676,24 @@ export class ChunkScheduler {
       0.05,
       30,
     );
-    const farImportanceHalfLife = Math.min(nearImportanceHalfLife, clampFinite(
-      scheduling.farImportanceHalfLife,
-      baseImportanceHalfLife * DEFAULT_FAR_IMPORTANCE_HALF_LIFE_RATIO,
-      0.02,
-      30,
-    ));
-    const distanceInverseSquareRadiusBlocks = scheduling.distanceInverseSquareRadiusChunks === null
-      ? null
-      : clampFinite(
-        scheduling.distanceInverseSquareRadiusChunks,
-        activeRadiusChunks * DEFAULT_DISTANCE_INVERSE_SQUARE_RADIUS_RATIO,
-        2,
-        activeRadiusChunks,
-      ) * CHUNK_SIZE_BLOCKS;
+    const farImportanceHalfLife = Math.min(
+      nearImportanceHalfLife,
+      clampFinite(
+        scheduling.farImportanceHalfLife,
+        baseImportanceHalfLife * DEFAULT_FAR_IMPORTANCE_HALF_LIFE_RATIO,
+        0.02,
+        30,
+      ),
+    );
+    const distanceInverseSquareRadiusBlocks =
+      scheduling.distanceInverseSquareRadiusChunks === null
+        ? null
+        : clampFinite(
+            scheduling.distanceInverseSquareRadiusChunks,
+            activeRadiusChunks * DEFAULT_DISTANCE_INVERSE_SQUARE_RADIUS_RATIO,
+            2,
+            activeRadiusChunks,
+          ) * CHUNK_SIZE_BLOCKS;
 
     const neighborSatisfactionPenaltyByCount = normalizeNeighborPenalty(scheduling.neighborSatisfactionPenaltyByCount);
     const minSatisfaction = clampFinite(
@@ -1727,7 +1741,8 @@ export class ChunkScheduler {
 
   private ensureTracker(cfg: TrackerRuntimeConfig, force: boolean) {
     const key = trackerConfigKey(cfg);
-    const radiusChanged = Math.abs(cfg.activeRadiusChunks - this.lastActiveRadiusChunks) > TRACKER_RESET_RADIUS_DELTA_CHUNKS;
+    const radiusChanged =
+      Math.abs(cfg.activeRadiusChunks - this.lastActiveRadiusChunks) > TRACKER_RESET_RADIUS_DELTA_CHUNKS;
     if (!force && this.tracker && this.trackerKey === key && !radiusChanged) return;
 
     this.tracker = new CameraGridTracker({
@@ -1766,9 +1781,8 @@ export class ChunkScheduler {
   private poseFromCamera(camera: ChunkSchedulerCamera): Pose {
     camera.updateMatrixWorld(true);
     camera.getWorldDirection(this.tmpDirection);
-    const direction = this.tmpDirection.lengthSq() > 0
-      ? this.tmpDirection.normalize()
-      : this.tmpDirection.set(0, 0, -1);
+    const direction =
+      this.tmpDirection.lengthSq() > 0 ? this.tmpDirection.normalize() : this.tmpDirection.set(0, 0, -1);
 
     return {
       p: {
@@ -1835,7 +1849,8 @@ export class ChunkScheduler {
   ): boolean {
     if (info?.hasChunkSource === false) return false;
     if (entry?.state === 'absent' || entry?.state === 'error') return false;
-    if (entry && (!this.displayCoversTarget(entry, targetStep) || this.shouldDowngradeFullToLod(entry, targetStep))) return true;
+    if (entry && (!this.displayCoversTarget(entry, targetStep) || this.shouldDowngradeFullToLod(entry, targetStep)))
+      return true;
     if (!entry) {
       return cell.importance >= cfg.minImportanceToSchedule || cell.gap >= cfg.minGapToSchedule;
     }
@@ -1906,7 +1921,8 @@ export class ChunkScheduler {
   ): number {
     const distance = Math.hypot(cell.i + 0.5 - (centerCx + 0.5), cell.j + 0.5 - (centerCz + 0.5));
     const renderBoost = entry?.state === 'stored' && !this.displaySatisfiesTarget(entry, targetStep) ? -300 : 0;
-    const ioPenalty = !entry || entry.state === 'checking' || entry.state === 'hashed' || entry.state === 'fetching' ? 120 : 0;
+    const ioPenalty =
+      !entry || entry.state === 'checking' || entry.state === 'hashed' || entry.state === 'fetching' ? 120 : 0;
     return renderBoost + ioPenalty - cell.gap * 1200 - cell.importance * 320 + distance * 0.7;
   }
 
@@ -1989,9 +2005,7 @@ export class ChunkScheduler {
 
   private trimMeshQueue() {
     if (this.meshQueue.size <= MAX_MESH_QUEUE) return;
-    const kept = [...this.meshQueue.values()]
-      .sort((a, b) => this.comparePriority(a, b))
-      .slice(0, MAX_MESH_QUEUE);
+    const kept = [...this.meshQueue.values()].sort((a, b) => this.comparePriority(a, b)).slice(0, MAX_MESH_QUEUE);
     this.meshQueue.clear();
     for (const task of kept) this.meshQueue.set(priorityKey(task), task);
   }
@@ -2032,16 +2046,13 @@ export class ChunkScheduler {
   }
 
   private displaySatisfiesTarget(entry: ChunkSchedulerEntry, targetStep: LodStep): boolean {
-    return !entry.dirty
-      && this.displayCoversTarget(entry, targetStep)
-      && !this.shouldDowngradeFullToLod(entry, targetStep);
+    return (
+      !entry.dirty && this.displayCoversTarget(entry, targetStep) && !this.shouldDowngradeFullToLod(entry, targetStep)
+    );
   }
 
   private shouldDowngradeFullToLod(entry: ChunkSchedulerEntry, targetStep: LodStep): boolean {
-    return !this.lodDisabled()
-      && targetStep > 1
-      && entry.displayed === 'full'
-      && !entry.dirty;
+    return !this.lodDisabled() && targetStep > 1 && entry.displayed === 'full' && !entry.dirty;
   }
 
   private lodDisabled(): boolean {
@@ -2075,7 +2086,10 @@ export class ChunkScheduler {
     if (entry.pendingFull || entry.pendingLod) return false;
     if (now - this.lastWantedAt(entry) < LOW_VALUE_ACTIVE_DROP_MS) return false;
     if (this.priorityFresh(entry, now)) return false;
-    if (Math.hypot(entry.cx - this.lastCenterCx, entry.cz - this.lastCenterCz) < this.lastCriticalNearRadiusChunks + 1) {
+    if (
+      Math.hypot(entry.cx - this.lastCenterCx, entry.cz - this.lastCenterCz) <
+      this.lastCriticalNearRadiusChunks + 1
+    ) {
       return false;
     }
 
@@ -2086,8 +2100,7 @@ export class ChunkScheduler {
     // Coarse LOD islands are the common case. Also discard long-idle entries
     // that never produced a mesh, rather than letting old failed/empty work
     // occupy the tracked-chunk budget indefinitely.
-    return (entry.displayed === 'lod' && entry.displayedLodStep >= 4)
-      || entry.displayed === 'none';
+    return (entry.displayed === 'lod' && entry.displayedLodStep >= 4) || entry.displayed === 'none';
   }
 
   private evictionImportance(entry: ChunkSchedulerEntry): number {

@@ -158,11 +158,7 @@ function transparentAlpha(state: BlockStateRef, info: BlockInfo): number {
 
 function mixColor(base: Rgb, over: Rgb, alpha: number): Rgb {
   const a = clamp01(alpha);
-  return [
-    base[0] * (1 - a) + over[0] * a,
-    base[1] * (1 - a) + over[1] * a,
-    base[2] * (1 - a) + over[2] * a,
-  ];
+  return [base[0] * (1 - a) + over[0] * a, base[1] * (1 - a) + over[1] * a, base[2] * (1 - a) + over[2] * a];
 }
 
 function applyTransparentLayers(base: Rgb, layers: { color: Rgb; alpha: number }[]): Rgb {
@@ -240,34 +236,36 @@ export function prepareTopMapTile(payload: TopMapTilePayload): PreparedTopMapTil
   const colorPixels = payload.size.colorSamples * payload.size.colorSamples;
   const lightPixels = payload.size.lightSamples * payload.size.lightSamples;
   if (
-    payload.schema !== TOP_MAP_SCHEMA
-    || payload.kind !== 'topmap-region'
-    || (payload.approach !== 'top' && payload.approach !== 'bottom')
-    || payload.heightEncoding !== 'int16le'
-    || payload.colorEncoding !== 'rgba8888'
-    || payload.lightEncoding !== 'sky-block-u4'
-    || payload.size.blocks !== TOP_MAP_TILE_BLOCKS
-    || payload.sampleStride < 1
-    || payload.colorStride < 1
-    || payload.lightStride < 1
-    || payload.size.samples !== Math.floor(payload.size.blocks / payload.sampleStride)
-    || payload.size.colorSamples !== Math.floor(payload.size.blocks / payload.colorStride)
-    || payload.size.lightSamples !== Math.floor(payload.size.blocks / payload.lightStride)
-    || payload.heights.byteLength !== heightPixels * 2
-    || payload.colors.byteLength !== colorPixels * 4
-    || payload.lights.byteLength !== lightPixels * 2
+    payload.schema !== TOP_MAP_SCHEMA ||
+    payload.kind !== 'topmap-region' ||
+    (payload.approach !== 'top' && payload.approach !== 'bottom') ||
+    payload.heightEncoding !== 'int16le' ||
+    payload.colorEncoding !== 'rgba8888' ||
+    payload.lightEncoding !== 'sky-block-u4' ||
+    payload.size.blocks !== TOP_MAP_TILE_BLOCKS ||
+    payload.sampleStride < 1 ||
+    payload.colorStride < 1 ||
+    payload.lightStride < 1 ||
+    payload.size.samples !== Math.floor(payload.size.blocks / payload.sampleStride) ||
+    payload.size.colorSamples !== Math.floor(payload.size.blocks / payload.colorStride) ||
+    payload.size.lightSamples !== Math.floor(payload.size.blocks / payload.lightStride) ||
+    payload.heights.byteLength !== heightPixels * 2 ||
+    payload.colors.byteLength !== colorPixels * 4 ||
+    payload.lights.byteLength !== lightPixels * 2
   ) {
     throw new Error(`bad top-map tile payload for region ${payload.region.x},${payload.region.z}`);
   }
   return {
     payload,
     heights: decodeInt16Le(payload.heights, heightPixels),
-    colors: payload.colors.byteOffset === 0 && payload.colors.byteLength === payload.colors.buffer.byteLength
-      ? payload.colors
-      : new Uint8Array(payload.colors),
-    lights: payload.lights.byteOffset === 0 && payload.lights.byteLength === payload.lights.buffer.byteLength
-      ? payload.lights
-      : new Uint8Array(payload.lights),
+    colors:
+      payload.colors.byteOffset === 0 && payload.colors.byteLength === payload.colors.buffer.byteLength
+        ? payload.colors
+        : new Uint8Array(payload.colors),
+    lights:
+      payload.lights.byteOffset === 0 && payload.lights.byteLength === payload.lights.buffer.byteLength
+        ? payload.lights
+        : new Uint8Array(payload.lights),
   };
 }
 
@@ -393,12 +391,18 @@ function addWall(
   light: readonly [number, number],
 ) {
   if (topY <= bottomY + EPS) return;
-  addQuad(builder, size, [
-    [ax, topY, az],
-    [bx, topY, bz],
-    [bx, bottomY, bz],
-    [ax, bottomY, az],
-  ], shade, light);
+  addQuad(
+    builder,
+    size,
+    [
+      [ax, topY, az],
+      [bx, topY, bz],
+      [bx, bottomY, bz],
+      [ax, bottomY, az],
+    ],
+    shade,
+    light,
+  );
 }
 
 function sampleIndex(data: PreparedTopMapTile, x: number, z: number): number {
@@ -426,7 +430,13 @@ function cellIndex(cellCount: number, x: number, z: number): number {
   return z * cellCount + x;
 }
 
-function cellHeight(cellHeights: Int16Array, cellStatus: Uint8Array, cellCount: number, x: number, z: number): number | null {
+function cellHeight(
+  cellHeights: Int16Array,
+  cellStatus: Uint8Array,
+  cellCount: number,
+  x: number,
+  z: number,
+): number | null {
   if (x < 0 || z < 0 || x >= cellCount || z >= cellCount) return null;
   const i = cellIndex(cellCount, x, z);
   return cellStatus[i] !== CELL_STATUS_ABSENT ? cellHeights[i] : null;
@@ -496,23 +506,17 @@ function buildCells(
   const isOnlineCell = (cx: number, cz: number): boolean => {
     if (cx < 0 || cz < 0 || cx >= cellCount || cz >= cellCount) return false;
     if (onlineChunkMask) {
-      const chunkX = Math.floor(cx * step / 16);
-      const chunkZ = Math.floor(cz * step / 16);
+      const chunkX = Math.floor((cx * step) / 16);
+      const chunkZ = Math.floor((cz * step) / 16);
       const index = chunkZ * 32 + chunkX;
-      return index >= 0
-        && index < FULL_TILE_CHUNKS
-        && (onlineChunkMask[index >> 3] & (1 << (index & 7))) !== 0;
+      return index >= 0 && index < FULL_TILE_CHUNKS && (onlineChunkMask[index >> 3] & (1 << (index & 7))) !== 0;
     }
     if (!onlineChunks) return false;
     return onlineChunks.has(chunkKeyForLocal(data, cx * step, cz * step));
   };
 
-  const hasOfflineNeighbor = (cx: number, cz: number): boolean => (
-    !isOnlineCell(cx - 1, cz)
-    || !isOnlineCell(cx + 1, cz)
-    || !isOnlineCell(cx, cz - 1)
-    || !isOnlineCell(cx, cz + 1)
-  );
+  const hasOfflineNeighbor = (cx: number, cz: number): boolean =>
+    !isOnlineCell(cx - 1, cz) || !isOnlineCell(cx + 1, cz) || !isOnlineCell(cx, cz - 1) || !isOnlineCell(cx, cz + 1);
 
   for (let cz = 0; cz < cellCount; cz++) {
     for (let cx = 0; cx < cellCount; cx++) {
@@ -520,9 +524,8 @@ function buildCells(
       const x0 = cx * step;
       const z0 = cz * step;
       const currentOnline = isOnlineCell(cx, cz);
-      const onlineBoundaryCell = (onlineChunkMask !== undefined || onlineChunks !== undefined)
-        && currentOnline
-        && hasOfflineNeighbor(cx, cz);
+      const onlineBoundaryCell =
+        (onlineChunkMask !== undefined || onlineChunks !== undefined) && currentOnline && hasOfflineNeighbor(cx, cz);
       if (currentOnline && !onlineBoundaryCell) continue;
 
       const x1 = Math.min(size, x0 + step);
@@ -562,7 +565,14 @@ function buildCells(
   return { cellCount, cellHeights, cellStatus, cellLights };
 }
 
-function topShade(cellHeights: Int16Array, cellStatus: Uint8Array, cellCount: number, cx: number, cz: number, h: number): number {
+function topShade(
+  cellHeights: Int16Array,
+  cellStatus: Uint8Array,
+  cellCount: number,
+  cx: number,
+  cz: number,
+  h: number,
+): number {
   const north = cellHeight(cellHeights, cellStatus, cellCount, cx, cz - 1) ?? h;
   const south = cellHeight(cellHeights, cellStatus, cellCount, cx, cz + 1) ?? h;
   const west = cellHeight(cellHeights, cellStatus, cellCount, cx - 1, cz) ?? h;
@@ -600,12 +610,19 @@ export function buildTopMapMesh(data: PreparedTopMapTile, opts: BuildTopMapMeshO
       const z1 = Math.min(size, z0 + step);
       const light = cellLight(cellLights, cellCount, cx, cz);
 
-      addQuad(builder, size, [
-        [x0, h, z0],
-        [x1, h, z0],
-        [x1, h, z1],
-        [x0, h, z1],
-      ], topShade(cellHeights, cellStatus, cellCount, cx, cz, h), light, flipTop);
+      addQuad(
+        builder,
+        size,
+        [
+          [x0, h, z0],
+          [x1, h, z0],
+          [x1, h, z1],
+          [x0, h, z1],
+        ],
+        topShade(cellHeights, cellStatus, cellCount, cx, cz, h),
+        light,
+        flipTop,
+      );
 
       const north = cellHeight(cellHeights, cellStatus, cellCount, cx, cz - 1);
       const south = cellHeight(cellHeights, cellStatus, cellCount, cx, cz + 1);

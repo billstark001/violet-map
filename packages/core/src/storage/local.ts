@@ -9,7 +9,9 @@ export class LocalWorldStorage implements WorldStorage {
   readonly kind = 'local' as const;
   private readonly root: string;
 
-  constructor(root: string) { this.root = path.resolve(root); }
+  constructor(root: string) {
+    this.root = path.resolve(root);
+  }
 
   private abs(filePath: string): string {
     const clean = cleanStoragePath(filePath);
@@ -19,7 +21,11 @@ export class LocalWorldStorage implements WorldStorage {
   }
 
   async read(filePath: string): Promise<Uint8Array | null> {
-    try { return new Uint8Array(await fs.readFile(this.abs(filePath))); } catch { return null; }
+    try {
+      return new Uint8Array(await fs.readFile(this.abs(filePath)));
+    } catch {
+      return null;
+    }
   }
 
   async readRange(filePath: string, start: number, length: number): Promise<Uint8Array | null> {
@@ -29,7 +35,11 @@ export class LocalWorldStorage implements WorldStorage {
       const buffer = Buffer.alloc(Math.max(0, length));
       const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, Math.max(0, start));
       return new Uint8Array(buffer.buffer, buffer.byteOffset, bytesRead).slice();
-    } catch { return null; } finally { await handle?.close().catch(() => {}); }
+    } catch {
+      return null;
+    } finally {
+      await handle?.close().catch(() => {});
+    }
   }
 
   async write(filePath: string, bytes: Uint8Array): Promise<void> {
@@ -38,7 +48,9 @@ export class LocalWorldStorage implements WorldStorage {
     await fs.writeFile(file, bytes);
   }
 
-  async delete(filePath: string): Promise<void> { await fs.rm(this.abs(filePath), { force: true }).catch(() => {}); }
+  async delete(filePath: string): Promise<void> {
+    await fs.rm(this.abs(filePath), { force: true }).catch(() => {});
+  }
 
   async deletePrefix(prefix: string): Promise<number> {
     const clean = cleanStoragePath(prefix);
@@ -51,7 +63,9 @@ export class LocalWorldStorage implements WorldStorage {
     try {
       const stat = await fs.stat(this.abs(filePath));
       return stat.isFile() ? { path: cleanStoragePath(filePath), size: stat.size, modifiedAt: stat.mtimeMs } : null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }
 
   async list(prefix = ''): Promise<StoredFileInfo[]> {
@@ -59,13 +73,21 @@ export class LocalWorldStorage implements WorldStorage {
     const files: StoredFileInfo[] = [];
     const walk = async (directory: string) => {
       let entries: Dirent[];
-      try { entries = await fs.readdir(directory, { withFileTypes: true }); } catch { return; }
+      try {
+        entries = await fs.readdir(directory, { withFileTypes: true });
+      } catch {
+        return;
+      }
       for (const entry of entries) {
         const file = path.join(directory, entry.name);
         if (entry.isDirectory()) await walk(file);
         else if (entry.isFile()) {
           const stat = await fs.stat(file);
-          files.push({ path: path.relative(this.root, file).split(path.sep).join('/'), size: stat.size, modifiedAt: stat.mtimeMs });
+          files.push({
+            path: path.relative(this.root, file).split(path.sep).join('/'),
+            size: stat.size,
+            modifiedAt: stat.mtimeMs,
+          });
         }
       }
     };
@@ -76,7 +98,12 @@ export class LocalWorldStorage implements WorldStorage {
   async listDirectories(prefix = ''): Promise<string[]> {
     try {
       const entries = await fs.readdir(this.abs(cleanStoragePath(prefix)), { withFileTypes: true });
-      return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
-    } catch { return []; }
+      return entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .sort();
+    } catch {
+      return [];
+    }
   }
 }

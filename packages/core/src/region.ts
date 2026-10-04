@@ -15,14 +15,20 @@ export function getRegionChunk(region: Uint8Array, localX: number, localZ: numbe
   const compression = view.getUint8(base + 4);
   const payload = region.subarray(base + 5, base + 4 + length);
   switch (compression) {
-    case 1: return pako.ungzip(payload);
-    case 2: return pako.inflate(payload);
-    case 3: return payload.slice();
-    default: throw new Error(`Unknown region compression type ${compression}`);
+    case 1:
+      return pako.ungzip(payload);
+    case 2:
+      return pako.inflate(payload);
+    case 3:
+      return payload.slice();
+    default:
+      throw new Error(`Unknown region compression type ${compression}`);
   }
 }
 
-export function* iterateRegionChunks(region: Uint8Array): Generator<{ localX: number; localZ: number; data: Uint8Array }> {
+export function* iterateRegionChunks(
+  region: Uint8Array,
+): Generator<{ localX: number; localZ: number; data: Uint8Array }> {
   for (let z = 0; z < 32; z++) {
     for (let x = 0; x < 32; x++) {
       const data = getRegionChunk(region, x, z);

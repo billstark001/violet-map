@@ -11,7 +11,7 @@ function stripComment(line: string): string {
   let quote: string | null = null;
   for (let i = 0; i < line.length; i++) {
     const ch = line[i];
-    if ((ch === '"' || ch === "'") && line[i - 1] !== '\\') quote = quote === ch ? null : quote ?? ch;
+    if ((ch === '"' || ch === "'") && line[i - 1] !== '\\') quote = quote === ch ? null : (quote ?? ch);
     if (ch === '#' && !quote) return line.slice(0, i);
   }
   return line;
@@ -27,7 +27,11 @@ function parseScalar(raw: string): YamlValue {
   if (value === 'false') return false;
   if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
   if (value.startsWith('[') && value.endsWith(']')) {
-    return value.slice(1, -1).split(',').map((part) => String(parseScalar(part))).filter(Boolean);
+    return value
+      .slice(1, -1)
+      .split(',')
+      .map((part) => String(parseScalar(part)))
+      .filter(Boolean);
   }
   return value;
 }
@@ -146,12 +150,20 @@ function pathConfig(envName: string, fallback: string, ...yamlKeys: string[]): s
 
 function stringListConfig(envName: string, fallback: string[], ...yamlKeys: string[]): string[] {
   const env = process.env[envName];
-  if (env !== undefined) return env.split(',').map((p) => p.trim()).filter(Boolean).map((p) => path.resolve(p));
+  if (env !== undefined)
+    return env
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((p) => path.resolve(p));
   const value = yamlValue(...yamlKeys);
   const values = Array.isArray(value)
     ? value.map(String)
     : typeof value === 'string'
-      ? value.split(',').map((p) => p.trim()).filter(Boolean)
+      ? value
+          .split(',')
+          .map((p) => p.trim())
+          .filter(Boolean)
       : fallback;
   return values.map((p) => path.resolve(yamlBase, p));
 }
@@ -163,9 +175,12 @@ if (worldStorage !== 'local' && worldStorage !== 's3') {
 }
 const dataDir = pathConfig('DATA_DIR', 'data', 'dataDir', 'data.dir');
 const databaseDirOverride = process.env.DATABASE_DIR ?? yamlValue('databaseDir', 'database.dir');
-const databaseDir = databaseDirOverride === undefined
-  ? path.join(dataDir, 'users.pglite')
-  : path.resolve(process.env.DATABASE_DIR ? String(databaseDirOverride) : path.resolve(yamlBase, String(databaseDirOverride)));
+const databaseDir =
+  databaseDirOverride === undefined
+    ? path.join(dataDir, 'users.pglite')
+    : path.resolve(
+        process.env.DATABASE_DIR ? String(databaseDirOverride) : path.resolve(yamlBase, String(databaseDirOverride)),
+      );
 
 export const config = {
   port: numberConfig('PORT', 3300, 'port', 'server.port'),

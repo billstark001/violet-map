@@ -6,7 +6,10 @@ export interface StorageCacheOptions {
   listTtlMs?: number;
 }
 
-interface CacheEntry<T> { expiresAt: number; value: T; }
+interface CacheEntry<T> {
+  expiresAt: number;
+  value: T;
+}
 
 /**
  * Short-TTL metadata cache for a shared storage backend. It coalesces repeated
@@ -22,7 +25,10 @@ export class CachedWorldStorage implements WorldStorage {
   private readonly directories = new Map<string, CacheEntry<string[]>>();
   private readonly inflight = new Map<string, Promise<unknown>>();
 
-  constructor(private readonly storage: WorldStorage, options: StorageCacheOptions = {}) {
+  constructor(
+    private readonly storage: WorldStorage,
+    options: StorageCacheOptions = {},
+  ) {
     this.kind = storage.kind;
     this.statTtlMs = Math.max(0, options.statTtlMs ?? 1_000);
     this.listTtlMs = Math.max(0, options.listTtlMs ?? 2_000);
@@ -57,8 +63,12 @@ export class CachedWorldStorage implements WorldStorage {
     }
   }
 
-  read(filePath: string) { return this.storage.read(filePath); }
-  readRange(filePath: string, start: number, length: number) { return this.storage.readRange(filePath, start, length); }
+  read(filePath: string) {
+    return this.storage.read(filePath);
+  }
+  readRange(filePath: string, start: number, length: number) {
+    return this.storage.readRange(filePath, start, length);
+  }
   async write(filePath: string, bytes: Uint8Array, contentType?: string): Promise<void> {
     await this.storage.write(filePath, bytes, contentType);
     this.clearMetadata();
@@ -72,7 +82,13 @@ export class CachedWorldStorage implements WorldStorage {
     this.clearMetadata();
     return deleted;
   }
-  stat(filePath: string) { return this.cached(this.stats, filePath, this.statTtlMs, () => this.storage.stat(filePath)); }
-  list(prefix = '') { return this.cached(this.lists, prefix, this.listTtlMs, () => this.storage.list(prefix)); }
-  listDirectories(prefix = '') { return this.cached(this.directories, prefix, this.listTtlMs, () => this.storage.listDirectories(prefix)); }
+  stat(filePath: string) {
+    return this.cached(this.stats, filePath, this.statTtlMs, () => this.storage.stat(filePath));
+  }
+  list(prefix = '') {
+    return this.cached(this.lists, prefix, this.listTtlMs, () => this.storage.list(prefix));
+  }
+  listDirectories(prefix = '') {
+    return this.cached(this.directories, prefix, this.listTtlMs, () => this.storage.listDirectories(prefix));
+  }
 }

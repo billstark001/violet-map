@@ -14,8 +14,11 @@ export * from './sync.js';
 
 export function createWorldStorage(options: StorageOptions): WorldStorage {
   switch (options.kind) {
-    case 'local': return new LocalWorldStorage(options.root);
-    case 's3': return new S3WorldStorage(options);
-    case 'server': return new ServerWorldStorage(options);
+    case 'local':
+      return new LocalWorldStorage(options.root);
+    case 's3':
+      return new S3WorldStorage(options);
+    case 'server':
+      return new ServerWorldStorage(options);
   }
 }

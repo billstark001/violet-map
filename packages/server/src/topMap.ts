@@ -1,8 +1,5 @@
 import { cleanStoragePath, worldStorage } from './storage.js';
-import {
-  TOP_MAP_SCHEMA,
-  type TopMapManifest,
-} from '@violet-map/core';
+import { TOP_MAP_SCHEMA, type TopMapManifest } from '@violet-map/core';
 
 const WORLD_RE = /^[A-Za-z0-9_.-]+$/;
 const TOP_MAP_ROOT = '.violet-map/top-map';
@@ -10,9 +7,12 @@ const TOP_MAP_ROOT = '.violet-map/top-map';
 export interface WorldCapabilities {
   world: string;
   hasTopMap: boolean;
-  dimensions: Record<string, {
-    hasTopMap: boolean;
-  }>;
+  dimensions: Record<
+    string,
+    {
+      hasTopMap: boolean;
+    }
+  >;
 }
 
 interface ManifestCacheEntry {
@@ -94,12 +94,7 @@ export async function getWorldCapabilities(world: string): Promise<WorldCapabili
   return toCapabilities(world, await getTopMapManifest(world));
 }
 
-export async function readTopMapTile(
-  world: string,
-  dim: string,
-  rx: number,
-  rz: number,
-): Promise<Uint8Array | null> {
+export async function readTopMapTile(world: string, dim: string, rx: number, rz: number): Promise<Uint8Array | null> {
   const manifest = await getTopMapManifest(world);
   const dimension = manifest?.dimensions[dim];
   if (!dimension) return null;

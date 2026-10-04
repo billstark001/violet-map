@@ -1,6 +1,27 @@
 {
-  "minecraft:water": { "occludes": false, "layer": "translucent", "tint": "water", "filter": 1, "fluid": { "texture": "minecraft:block/water_still", "flowTexture": "minecraft:block/water_flow", "tint": "water", "layer": "translucent" } },
-  "minecraft:lava": { "occludes": false, "layer": "cutout", "emit": 15, "fluid": { "texture": "minecraft:block/lava_still", "flowTexture": "minecraft:block/lava_flow", "tint": "none", "layer": "cutout" } },
+  "minecraft:water": {
+    "occludes": false,
+    "layer": "translucent",
+    "tint": "water",
+    "filter": 1,
+    "fluid": {
+      "texture": "minecraft:block/water_still",
+      "flowTexture": "minecraft:block/water_flow",
+      "tint": "water",
+      "layer": "translucent"
+    }
+  },
+  "minecraft:lava": {
+    "occludes": false,
+    "layer": "cutout",
+    "emit": 15,
+    "fluid": {
+      "texture": "minecraft:block/lava_still",
+      "flowTexture": "minecraft:block/lava_flow",
+      "tint": "none",
+      "layer": "cutout"
+    }
+  },
   "minecraft:grass_block": { "tint": "grass" },
   "minecraft:short_grass": { "tint": "grass" },
   "minecraft:grass": { "tint": "grass" },

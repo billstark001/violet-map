@@ -22,9 +22,15 @@ function dataVersion(version: string): number {
   }
 }
 
-const byte = (value: boolean | number): Tag => ({ type: 'byte', value: typeof value === 'boolean' ? (value ? 1 : 0) : value });
+const byte = (value: boolean | number): Tag => ({
+  type: 'byte',
+  value: typeof value === 'boolean' ? (value ? 1 : 0) : value,
+});
 const int = (value: number): Tag => ({ type: 'int', value });
-const long = (value: bigint | number): Tag => ({ type: 'long', value: typeof value === 'bigint' ? value : BigInt(value) });
+const long = (value: bigint | number): Tag => ({
+  type: 'long',
+  value: typeof value === 'bigint' ? value : BigInt(value),
+});
 const double = (value: number): Tag => ({ type: 'double', value });
 const string = (value: string): Tag => ({ type: 'string', value });
 const compound = (value: Record<string, Tag>): Tag => ({ type: 'compound', value });

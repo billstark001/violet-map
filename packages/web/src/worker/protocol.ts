@@ -1,5 +1,12 @@
 import type {
-  AssetBundle, AtlasIndex, BiomeMap, BlockInfoMap, DimensionDef, MeshBuffers, RenderLayer, TextureAlphaMap,
+  AssetBundle,
+  AtlasIndex,
+  BiomeMap,
+  BlockInfoMap,
+  DimensionDef,
+  MeshBuffers,
+  RenderLayer,
+  TextureAlphaMap,
 } from '@violet-map/core';
 
 export interface WorkerInit {
@@ -16,12 +23,24 @@ export interface WorkerInit {
 }
 export type WorkerRequest =
   | WorkerInit
-  | { type: 'chunk'; key: string; cx: number; cz: number; dimension: DimensionDef; chunk: ArrayBuffer; entities?: ArrayBuffer }
+  | {
+      type: 'chunk';
+      key: string;
+      cx: number;
+      cz: number;
+      dimension: DimensionDef;
+      chunk: ArrayBuffer;
+      entities?: ArrayBuffer;
+    }
   | { type: 'mesh'; key: string; version: number }
   | { type: 'lod'; key: string; step: number; version: number }
   | { type: 'drop'; key: string };
 
-export interface SectionMeshMsg { sy: number; layers: Partial<Record<RenderLayer, MeshBuffers>>; visibility?: number }
+export interface SectionMeshMsg {
+  sy: number;
+  layers: Partial<Record<RenderLayer, MeshBuffers>>;
+  visibility?: number;
+}
 
 export interface WorkerChunkProfile {
   chunkBytes: number;
@@ -42,12 +61,12 @@ export type WorkerResponse =
   | { type: 'chunkError'; key: string; error: string }
   | { type: 'meshResult'; key: string; version: number; sections: SectionMeshMsg[]; profile?: WorkerMeshProfile }
   | {
-    type: 'lodResult';
-    key: string;
-    version: number;
-    step: number;
-    mesh: MeshBuffers | null;
-    profile?: WorkerMeshProfile;
-  };
+      type: 'lodResult';
+      key: string;
+      version: number;
+      step: number;
+      mesh: MeshBuffers | null;
+      profile?: WorkerMeshProfile;
+    };
 
 export const chunkKey = (world: string, dim: string, cx: number, cz: number) => `${world}|${dim}|${cx},${cz}`;

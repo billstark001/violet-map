@@ -13,11 +13,7 @@ import {
   type WorldCapabilities,
 } from '../api';
 import { buildAtlas, collectTextureIds, loadColormap } from '../atlas';
-import {
-  ChunkManager,
-  type ChunkManagerDiagnosticSnapshot,
-  type TopClipRange,
-} from './chunkManager';
+import { ChunkManager, type ChunkManagerDiagnosticSnapshot, type TopClipRange } from './chunkManager';
 import {
   EMPTY_CHUNK_SCHEDULER_STATS,
   schedulerTuningForPreset,
@@ -26,8 +22,12 @@ import {
 } from './chunkScheduler';
 import { clampFlyPitch, FlyControls, normalizeFlyYaw, TopDownControls, type FlyView } from './controls';
 import {
-  createMaterials, createSharedUniforms, createTextureAnimationUniforms,
-  type SharedUniforms, type TerrainMaterials, type TextureAnimationUniforms,
+  createMaterials,
+  createSharedUniforms,
+  createTextureAnimationUniforms,
+  type SharedUniforms,
+  type TerrainMaterials,
+  type TextureAnimationUniforms,
 } from './materials';
 import { TopMapManager, type TopMapDiagnosticSnapshot } from './topMapManager';
 import type { WorkerInit } from '../worker/protocol';
@@ -239,9 +239,8 @@ function viewFromSaved(saved: Partial<FlyView> | null, defaults: FlyView = DEFAU
 
 function readInitialView(): InitialView {
   return (
-    viewFromParams(new URLSearchParams(location.search))
-    ?? viewFromSaved(parseSavedView(localStorage.getItem(VIEW_STORAGE_KEY)))
-    ?? { ...DEFAULT_VIEW, hasAngles: false }
+    viewFromParams(new URLSearchParams(location.search)) ??
+    viewFromSaved(parseSavedView(localStorage.getItem(VIEW_STORAGE_KEY))) ?? { ...DEFAULT_VIEW, hasAngles: false }
   );
 }
 
@@ -268,10 +267,7 @@ function persistView(view: FlyView, updateUrl: boolean) {
   history.replaceState(null, '', buildViewUrl(location.pathname, location.search, location.hash, view));
 }
 
-function lookAtTargetFromParams(
-  params: URLSearchParams,
-  fallback: THREE.Vector3,
-): [number, number, number] | null {
+function lookAtTargetFromParams(params: URLSearchParams, fallback: THREE.Vector3): [number, number, number] | null {
   if (!params.has('lookAtX') && !params.has('lookAtY') && !params.has('lookAtZ')) return null;
   return [
     finiteParam(params, 'lookAtX', fallback.x),
@@ -292,8 +288,8 @@ function cameraView(camera: THREE.Camera, yaw: number, pitch: number): FlyView {
 
 function resizeTopCamera(camera: THREE.OrthographicCamera, width: number, height: number) {
   const aspect = width / Math.max(1, height);
-  camera.left = -TOP_ORTHO_HEIGHT * aspect / 2;
-  camera.right = TOP_ORTHO_HEIGHT * aspect / 2;
+  camera.left = (-TOP_ORTHO_HEIGHT * aspect) / 2;
+  camera.right = (TOP_ORTHO_HEIGHT * aspect) / 2;
   camera.top = TOP_ORTHO_HEIGHT / 2;
   camera.bottom = -TOP_ORTHO_HEIGHT / 2;
   camera.updateProjectionMatrix();
@@ -395,7 +391,13 @@ function stableStringify(value: unknown): string {
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(',')}}`;
 }
 
-function buildRenderKey(atlasKey: string, bundle: unknown, blockInfo: unknown, grassMap: Uint8Array | null, foliageMap: Uint8Array | null): string {
+function buildRenderKey(
+  atlasKey: string,
+  bundle: unknown,
+  blockInfo: unknown,
+  grassMap: Uint8Array | null,
+  foliageMap: Uint8Array | null,
+): string {
   let h = hashString(`${MESH_CACHE_SCHEMA}:${atlasKey}`);
   h = hashString(stableStringify(bundle), h);
   h = hashString(stableStringify(blockInfo), h);
@@ -693,8 +695,17 @@ function createScene(): THREE.Scene {
   return scene;
 }
 
-function createPerspectiveCamera(container: HTMLElement, initialView: InitialView, params: URLSearchParams): THREE.PerspectiveCamera {
-  const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, LONG_RANGE_CAMERA_FAR);
+function createPerspectiveCamera(
+  container: HTMLElement,
+  initialView: InitialView,
+  params: URLSearchParams,
+): THREE.PerspectiveCamera {
+  const camera = new THREE.PerspectiveCamera(
+    75,
+    container.clientWidth / container.clientHeight,
+    0.1,
+    LONG_RANGE_CAMERA_FAR,
+  );
   camera.rotation.order = 'YXZ';
   camera.position.set(initialView.x, initialView.y, initialView.z);
   const lookAtTarget = initialView.hasAngles ? null : lookAtTargetFromParams(params, camera.position);
@@ -866,9 +877,8 @@ function syncViewMode(engine: Engine, currentMode: ViewMode, nextMode: ViewMode)
   if (currentMode === nextMode) return currentMode;
   const source = engine.activeCamera;
   if (isTopViewMode(nextMode)) {
-    const targetControls = nextMode === 'topPerspective'
-      ? engine.topPerspectiveControls
-      : engine.topOrthographicControls;
+    const targetControls =
+      nextMode === 'topPerspective' ? engine.topPerspectiveControls : engine.topOrthographicControls;
     targetControls.setPosition(source.position.x, Math.max(TOP_CAMERA_HEIGHT, source.position.y), source.position.z);
     engine.activeCamera = cameraForMode(engine, nextMode);
   } else {
@@ -898,13 +908,7 @@ function updateChunksAndTopMap(
 
   engine.topMap.configure(props.world, props.dimension, offlineTopMap);
   if (manager) manager.root.visible = true;
-  manager?.update(
-    engine.activeCamera,
-    now,
-    false,
-    topView,
-    props.topClipRange,
-  );
+  manager?.update(engine.activeCamera, now, false, topView, props.topClipRange);
   engine.topMap.update(engine.activeCamera, now, {
     mode: topView ? 'top' : 'perspective',
     radiusBlocks: TOP_MAP_FREE_VIEW_MAX_DISTANCE_BLOCKS,
@@ -920,11 +924,7 @@ function dayFactorForDimension(dimDef: ViewerDimensionDef, timeOfDay: number): n
   return clamp01(Math.cos(timeOfDay * Math.PI * 2) * 2 + 0.5);
 }
 
-function resolveBiomeName(
-  manager: ChunkManager | null,
-  dimDef: ViewerDimensionDef,
-  camera: THREE.Camera,
-): string {
+function resolveBiomeName(manager: ChunkManager | null, dimDef: ViewerDimensionDef, camera: THREE.Camera): string {
   const ccx = Math.floor(camera.position.x / 16);
   const ccz = Math.floor(camera.position.z / 16);
   return manager?.biomeAt(ccx, ccz) ?? dimDef?.defaultBiome ?? 'minecraft:plains';
@@ -1005,12 +1005,13 @@ function applyLightingAndFog(
     .setRGB(fog[0] * fogBright, fog[1] * fogBright, fog[2] * fogBright)
     .lerp(skyColor, dimensionSky === 'normal' ? 0.3 : 0.1);
 
-  engine.shared.fogColor.value
-    .copy(horizonColor)
-    .lerp(engine.scene.background as THREE.Color, dense ? 0.15 : 0.45);
+  engine.shared.fogColor.value.copy(horizonColor).lerp(engine.scene.background as THREE.Color, dense ? 0.15 : 0.45);
   engine.shared.envFogColor.value
     .copy(engine.shared.fogColor.value)
-    .lerp(engine.scene.background as THREE.Color, dimensionSky === 'normal' ? 0.35 : dimensionSky === 'end' ? 0.3 : 0.1);
+    .lerp(
+      engine.scene.background as THREE.Color,
+      dimensionSky === 'normal' ? 0.35 : dimensionSky === 'end' ? 0.3 : 0.1,
+    );
   if (!topView) engine.shared.envFogDensity.value = fogDensity(dimensionSky);
 
   updateSkyObjects(
@@ -1042,7 +1043,13 @@ function maybeReportStats(
   state.lastStatsReport = now;
 }
 
-function maybePersistActiveView(state: FrameState, now: number, engine: Engine, camera: THREE.Camera, viewMode: ViewMode) {
+function maybePersistActiveView(
+  state: FrameState,
+  now: number,
+  engine: Engine,
+  camera: THREE.Camera,
+  viewMode: ViewMode,
+) {
   if (now - state.lastPersist <= 500) return;
   const updateUrl = now - state.lastUrlPersist > 1500;
   persistView(getPersistableView(engine, camera, viewMode), updateUrl);
@@ -1108,19 +1115,9 @@ function moveCameraToTarget(engine: Engine, target: CameraPositionRequest, viewM
   setControlsEnabled(engine, viewMode);
 }
 
-function updateManagerAfterCameraTarget(
-  engine: Engine,
-  manager: ChunkManager | null,
-  props: ViewerProps,
-) {
+function updateManagerAfterCameraTarget(engine: Engine, manager: ChunkManager | null, props: ViewerProps) {
   const topView = isTopViewMode(props.viewMode);
-  manager?.update(
-    engine.activeCamera,
-    performance.now(),
-    true,
-    topView,
-    props.topClipRange,
-  );
+  manager?.update(engine.activeCamera, performance.now(), true, topView, props.topClipRange);
 }
 
 export function Viewer(props: ViewerProps) {
@@ -1235,13 +1232,7 @@ export function Viewer(props: ViewerProps) {
     const manager = managerRef.current;
     if (!ready || !engine || !manager) return;
     manager.setScheduling(schedulerTuningForPreset(props.schedulerPreset, props.viewDistance, props.lodDistance));
-    manager.update(
-      engine.activeCamera,
-      performance.now(),
-      true,
-      isTopViewMode(props.viewMode),
-      props.topClipRange,
-    );
+    manager.update(engine.activeCamera, performance.now(), true, isTopViewMode(props.viewMode), props.topClipRange);
   }, [ready, props.schedulerPreset, props.viewDistance, props.lodDistance]);
 
   useEffect(() => {
@@ -1276,11 +1267,22 @@ export function Viewer(props: ViewerProps) {
   return (
     <div ref={containerRef} style={{ position: 'absolute', inset: 0 }}>
       {error && (
-        <div style={{
-          position: 'fixed', left: '50%', top: '50%', transform: 'translate(-50%, -50%)', zIndex: 100,
-          maxWidth: 'min(560px, calc(100vw - 32px))', padding: '14px 18px', borderRadius: 8,
-          color: '#fecaca', background: 'rgba(69, 10, 10, .96)', border: '1px solid #ef4444', textAlign: 'center',
-        }}>
+        <div
+          style={{
+            position: 'fixed',
+            left: '50%',
+            top: '50%',
+            transform: 'translate(-50%, -50%)',
+            zIndex: 100,
+            maxWidth: 'min(560px, calc(100vw - 32px))',
+            padding: '14px 18px',
+            borderRadius: 8,
+            color: '#fecaca',
+            background: 'rgba(69, 10, 10, .96)',
+            border: '1px solid #ef4444',
+            textAlign: 'center',
+          }}
+        >
           {t('initFailed', { message: error })}
         </div>
       )}

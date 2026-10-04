@@ -1,9 +1,14 @@
 export type Direction = 'down' | 'up' | 'north' | 'south' | 'west' | 'east';
 export type RenderLayer =
-  | 'opaque' | 'opaqueTiled' | 'cutout' | 'translucent'
+  | 'opaque'
+  | 'opaqueTiled'
+  | 'cutout'
+  | 'translucent'
   /** Resource-driven block entities / entities. Kept separate so the viewer
    * can apply its full-chunk radius policy without affecting terrain. */
-  | 'specialOpaque' | 'specialCutout' | 'specialTranslucent';
+  | 'specialOpaque'
+  | 'specialCutout'
+  | 'specialTranslucent';
 export type TintType = 'none' | 'grass' | 'foliage' | 'water' | 'redstone' | 'stem' | 'attachedStem';
 
 export interface BlockStateRef {
@@ -70,7 +75,12 @@ export interface AtlasAnimation {
   times: number[];
   interpolate?: boolean;
 }
-export interface AtlasFrameRect { u0: number; v0: number; u1: number; v1: number }
+export interface AtlasFrameRect {
+  u0: number;
+  v0: number;
+  u1: number;
+  v1: number;
+}
 export type AtlasIndex = Record<string, AtlasRect>;
 
 export interface MeshBuffers {
@@ -97,7 +107,10 @@ export interface AssetBundle {
   textureAnimations?: TextureAnimationMap;
 }
 
-export interface TextureAnimationFrameDef { index: number; time?: number }
+export interface TextureAnimationFrameDef {
+  index: number;
+  time?: number;
+}
 export interface TextureAnimationDef {
   frametime?: number;
   frames?: TextureAnimationFrameDef[];
@@ -170,9 +183,12 @@ export interface BlockStateVariantJson {
 
 export const DIRECTIONS: Direction[] = ['down', 'up', 'north', 'south', 'west', 'east'];
 export const DIR_VEC: Record<Direction, [number, number, number]> = {
-  down: [0, -1, 0], up: [0, 1, 0],
-  north: [0, 0, -1], south: [0, 0, 1],
-  west: [-1, 0, 0], east: [1, 0, 0],
+  down: [0, -1, 0],
+  up: [0, 1, 0],
+  north: [0, 0, -1],
+  south: [0, 0, 1],
+  west: [-1, 0, 0],
+  east: [1, 0, 0],
 };
 
 export function normalizeId(id: string): string {

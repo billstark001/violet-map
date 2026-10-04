@@ -93,7 +93,9 @@ function parseOptions(args: string[]): BakeOptions {
     assetDirs: resolveAssetDirs(reader.get('--assets-dir')),
     sampleStride: Math.floor(numberArg(reader.get('--sample-stride'), DEFAULT_SAMPLE_STRIDE, 1)),
     colorStride: Math.floor(numberArg(reader.get('--color-stride'), DEFAULT_COLOR_STRIDE, 1)),
-    lightStride: Math.floor(numberArg(reader.get('--light-stride'), numberArg(reader.get('--color-stride'), DEFAULT_COLOR_STRIDE, 1), 1)),
+    lightStride: Math.floor(
+      numberArg(reader.get('--light-stride'), numberArg(reader.get('--color-stride'), DEFAULT_COLOR_STRIDE, 1), 1),
+    ),
     approach: parseApproach(reader.get('--approach')),
     lightMode: parseLightMode(reader.get('--light-mode')),
   };
@@ -111,7 +113,8 @@ async function readManifest(out: string, world: string): Promise<TopMapManifest>
   const file = path.join(out, 'manifest.json');
   try {
     const manifest = JSON.parse(await fs.readFile(file, 'utf8')) as TopMapManifest;
-    if (manifest.schema === TOP_MAP_SCHEMA && manifest.dimensions && typeof manifest.dimensions === 'object') return manifest;
+    if (manifest.schema === TOP_MAP_SCHEMA && manifest.dimensions && typeof manifest.dimensions === 'object')
+      return manifest;
   } catch {
     // Create a fresh manifest below.
   }
@@ -184,11 +187,7 @@ interface BakeRegionResult {
   empty: boolean;
 }
 
-function bakeColumnLight(
-  entry: ColumnEntry,
-  opts: BakeOptions,
-  infoOf: (name: string) => BlockInfo,
-) {
+function bakeColumnLight(entry: ColumnEntry, opts: BakeOptions, infoOf: (name: string) => BlockInfo) {
   if (opts.lightMode === 'rebake') {
     computeColumnLight(entry.col, infoOf, opts.hasSkyLight, { writeSky: opts.hasSkyLight, writeBlock: true });
     entry.litSky = !opts.hasSkyLight || entry.col.hasStoredSkyLight;
@@ -377,7 +376,8 @@ export async function runBakeTopMap(args: string[]) {
   const blockInfo = await loadBlockInfo(opts.blockInfo);
   const infoOf = infoGetter(blockInfo);
   const biomeColors = await loadBiomeColors(opts.assetDirs, opts.biomes);
-  const colorOf = await makeTextureColorOf(opts.assetDirs, infoOf, biomeColors) ?? (blockInfo ? makeColorOf(infoOf) : null);
+  const colorOf =
+    (await makeTextureColorOf(opts.assetDirs, infoOf, biomeColors)) ?? (blockInfo ? makeColorOf(infoOf) : null);
   const regions = await selectRegions(opts);
   console.log(`bake-topmap world=${opts.world} dim=${opts.dim} regions=${regions.length} out=${opts.out}`);
   console.log(`  approach=${opts.approach} light=${opts.lightMode}${opts.hasSkyLight ? '' : ' no-sky'}`);
@@ -385,20 +385,23 @@ export async function runBakeTopMap(args: string[]) {
   console.log(`  biome colors=${biomeColors ? 'enabled' : 'fallback'}`);
   const manifest = await readManifest(opts.out, opts.world);
   const previousTopMap = manifest.dimensions[opts.dim]?.topMap;
-  const force = previousTopMap?.format !== 'msgpack'
-    || previousTopMap.tileSizeBlocks !== TOP_MAP_TILE_BLOCKS
-    || previousTopMap.sampleStride !== opts.sampleStride
-    || previousTopMap.colorStride !== opts.colorStride
-    || previousTopMap.lightStride !== opts.lightStride
-    || previousTopMap.colorVersion !== TOPMAP_COLOR_VERSION
-    || previousTopMap.lightVersion !== TOPMAP_LIGHT_VERSION
-    || previousTopMap.approach !== opts.approach
-    || previousTopMap.lightMode !== opts.lightMode;
-  const previousByKey = new Map<string, RegionManifestEntry>((force ? [] : previousTopMap?.regions ?? [])
-    .map((region) => [`${region.x},${region.z}`, region] as const));
+  const force =
+    previousTopMap?.format !== 'msgpack' ||
+    previousTopMap.tileSizeBlocks !== TOP_MAP_TILE_BLOCKS ||
+    previousTopMap.sampleStride !== opts.sampleStride ||
+    previousTopMap.colorStride !== opts.colorStride ||
+    previousTopMap.lightStride !== opts.lightStride ||
+    previousTopMap.colorVersion !== TOPMAP_COLOR_VERSION ||
+    previousTopMap.lightVersion !== TOPMAP_LIGHT_VERSION ||
+    previousTopMap.approach !== opts.approach ||
+    previousTopMap.lightMode !== opts.lightMode;
+  const previousByKey = new Map<string, RegionManifestEntry>(
+    (force ? [] : (previousTopMap?.regions ?? [])).map((region) => [`${region.x},${region.z}`, region] as const),
+  );
   const previousSources = previousTopMap?.sources ?? [];
-  const previousSourceByKey = new Map<string, RegionSourceEntry>((force ? [] : previousSources)
-    .map((region) => [`${region.x},${region.z}`, region] as const));
+  const previousSourceByKey = new Map<string, RegionSourceEntry>(
+    (force ? [] : previousSources).map((region) => [`${region.x},${region.z}`, region] as const),
+  );
   const currentKeys = new Set<string>(regions.map((region) => `${region.rx},${region.rz}`));
   const nextRegions: RegionManifestEntry[] = [];
   const nextSources: RegionSourceEntry[] = [];
@@ -408,7 +411,7 @@ export async function runBakeTopMap(args: string[]) {
   let removed = 0;
 
   await ensureDir(dimOutDir(opts.out, opts.dim));
-  for (const previous of previousSources.length ? previousSources : previousTopMap?.regions ?? []) {
+  for (const previous of previousSources.length ? previousSources : (previousTopMap?.regions ?? [])) {
     const key = `${previous.x},${previous.z}`;
     if (!force && currentKeys.has(key)) continue;
     await fs.rm(tileFile(opts.out, opts.dim, previous.x, previous.z), { force: true });
@@ -450,5 +453,7 @@ export async function runBakeTopMap(args: string[]) {
     } satisfies TopMapTileSetManifest,
   });
   await writeManifest(opts.out, manifest);
-  console.log(`wrote ${path.join(opts.out, 'manifest.json')} (${wrote} updated, ${skipped} unchanged, ${empty} empty, ${removed} removed)`);
+  console.log(
+    `wrote ${path.join(opts.out, 'manifest.json')} (${wrote} updated, ${skipped} unchanged, ${empty} empty, ${removed} removed)`,
+  );
 }

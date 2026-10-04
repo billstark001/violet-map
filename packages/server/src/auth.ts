@@ -10,7 +10,9 @@ function bearer(c: Context): string | undefined {
   return authorization?.toLowerCase().startsWith('bearer ') ? authorization.slice(7).trim() : undefined;
 }
 
-export function hasRole(actual: Role, required: Role): boolean { return ROLE_POWER[actual] >= ROLE_POWER[required]; }
+export function hasRole(actual: Role, required: Role): boolean {
+  return ROLE_POWER[actual] >= ROLE_POWER[required];
+}
 
 export async function principalFor(c: Context): Promise<Principal | undefined> {
   const token = bearer(c);

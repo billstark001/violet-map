@@ -6,7 +6,9 @@ function value(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
   return index >= 0 ? args[index + 1] : undefined;
 }
-function flag(args: string[], name: string): boolean { return args.includes(name); }
+function flag(args: string[], name: string): boolean {
+  return args.includes(name);
+}
 function required(args: string[], name: string): string {
   const result = value(args, name);
   if (!result) throw new Error(`missing ${name}`);
@@ -32,21 +34,37 @@ async function main(): Promise<void> {
   await getDatabase();
   switch (command) {
     case 'list':
-      console.table((await listUsers()).map((user) => ({ username: user.username, role: user.role, enabled: user.enabled, virtual: !!user.virtual, createdAt: user.createdAt ?? '' })));
+      console.table(
+        (await listUsers()).map((user) => ({
+          username: user.username,
+          role: user.role,
+          enabled: user.enabled,
+          virtual: !!user.virtual,
+          createdAt: user.createdAt ?? '',
+        })),
+      );
       return;
     case 'create': {
       const role = required(args, '--role');
-      if (!CREATABLE_ROLES.includes(role as typeof CREATABLE_ROLES[number])) throw new Error(`--role must be one of: ${CREATABLE_ROLES.join(', ')}`);
-      const user = await createUser({ username: required(args, '--username'), password: required(args, '--password'), role: role as typeof CREATABLE_ROLES[number] });
+      if (!CREATABLE_ROLES.includes(role as (typeof CREATABLE_ROLES)[number]))
+        throw new Error(`--role must be one of: ${CREATABLE_ROLES.join(', ')}`);
+      const user = await createUser({
+        username: required(args, '--username'),
+        password: required(args, '--password'),
+        role: role as (typeof CREATABLE_ROLES)[number],
+      });
       console.log(`created ${user.username} (${user.role})`);
       return;
     }
     case 'update': {
       const role = value(args, '--role');
-      if (role && !CREATABLE_ROLES.includes(role as typeof CREATABLE_ROLES[number])) throw new Error(`--role must be one of: ${CREATABLE_ROLES.join(', ')}`);
-      if (flag(args, '--enable') && flag(args, '--disable')) throw new Error('use either --enable or --disable, not both');
+      if (role && !CREATABLE_ROLES.includes(role as (typeof CREATABLE_ROLES)[number]))
+        throw new Error(`--role must be one of: ${CREATABLE_ROLES.join(', ')}`);
+      if (flag(args, '--enable') && flag(args, '--disable'))
+        throw new Error('use either --enable or --disable, not both');
       const user = await updateUser(required(args, '--username'), {
-        password: value(args, '--password'), role: role as typeof CREATABLE_ROLES[number] | undefined,
+        password: value(args, '--password'),
+        role: role as (typeof CREATABLE_ROLES)[number] | undefined,
         enabled: flag(args, '--enable') ? true : flag(args, '--disable') ? false : undefined,
       });
       console.log(`updated ${user.username} (${user.role}, ${user.enabled ? 'enabled' : 'disabled'})`);
@@ -61,7 +79,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error('Error:', error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-}).finally(() => closeDatabase());
+main()
+  .catch((error) => {
+    console.error('Error:', error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  })
+  .finally(() => closeDatabase());

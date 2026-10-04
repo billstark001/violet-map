@@ -59,7 +59,9 @@ async function createDatabase(): Promise<DatabaseContext> {
   return {
     db: drizzlePglite({ client, schema }),
     driver: 'pglite',
-    close: async () => { await client.close(); },
+    close: async () => {
+      await client.close();
+    },
   };
 }
 

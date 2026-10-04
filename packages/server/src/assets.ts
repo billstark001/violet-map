@@ -3,7 +3,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  AssetBundle, AtlasAnimation, AtlasFrameRect, AtlasIndex, TextureAlphaMap, TextureAnimationDef, normalizeId,
+  AssetBundle,
+  AtlasAnimation,
+  AtlasFrameRect,
+  AtlasIndex,
+  TextureAlphaMap,
+  TextureAnimationDef,
+  normalizeId,
 } from '@violet-map/core';
 import { PNG } from 'pngjs';
 import { config } from './config.js';
@@ -12,7 +18,11 @@ type JsonEntry = { rel: string; file: string };
 
 async function walkJson(dir: string, entries: JsonEntry[] = [], rel = ''): Promise<JsonEntry[]> {
   let dirents;
-  try { dirents = await fs.readdir(dir, { withFileTypes: true }); } catch { return entries; }
+  try {
+    dirents = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return entries;
+  }
   for (const e of dirents) {
     const r = rel ? `${rel}/${e.name}` : e.name;
     if (e.isDirectory()) await walkJson(path.join(dir, e.name), entries, r);
@@ -23,7 +33,11 @@ async function walkJson(dir: string, entries: JsonEntry[] = [], rel = ''): Promi
 
 async function walkAnimationMeta(dir: string, entries: JsonEntry[] = [], rel = ''): Promise<JsonEntry[]> {
   let dirents;
-  try { dirents = await fs.readdir(dir, { withFileTypes: true }); } catch { return entries; }
+  try {
+    dirents = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return entries;
+  }
   for (const e of dirents) {
     const r = rel ? `${rel}/${e.name}` : e.name;
     if (e.isDirectory()) await walkAnimationMeta(path.join(dir, e.name), entries, r);
@@ -39,15 +53,19 @@ function parseAnimationDef(value: unknown): TextureAnimationDef | null {
   const frametime = Number.isFinite(raw.frametime) ? Math.max(1, Math.floor(Number(raw.frametime))) : 1;
   const frames = Array.isArray(raw.frames)
     ? raw.frames.flatMap((frame) => {
-      if (Number.isFinite(frame)) return [{ index: Math.max(0, Math.floor(Number(frame))) }];
-      if (!frame || typeof frame !== 'object' || Array.isArray(frame)) return [];
-      const f = frame as { index?: unknown; time?: unknown };
-      if (!Number.isFinite(f.index)) return [];
-      const time = Number.isFinite(f.time) ? Math.max(1, Math.floor(Number(f.time))) : undefined;
-      return [{ index: Math.max(0, Math.floor(Number(f.index))), ...(time === undefined ? {} : { time }) }];
-    })
+        if (Number.isFinite(frame)) return [{ index: Math.max(0, Math.floor(Number(frame))) }];
+        if (!frame || typeof frame !== 'object' || Array.isArray(frame)) return [];
+        const f = frame as { index?: unknown; time?: unknown };
+        if (!Number.isFinite(f.index)) return [];
+        const time = Number.isFinite(f.time) ? Math.max(1, Math.floor(Number(f.time))) : undefined;
+        return [{ index: Math.max(0, Math.floor(Number(f.index))), ...(time === undefined ? {} : { time }) }];
+      })
     : undefined;
-  return { frametime, ...(frames?.length ? { frames } : {}), ...(raw.interpolate === true ? { interpolate: true } : {}) };
+  return {
+    frametime,
+    ...(frames?.length ? { frames } : {}),
+    ...(raw.interpolate === true ? { interpolate: true } : {}),
+  };
 }
 
 let bundleCache: AssetBundle | null = null;
@@ -114,7 +132,9 @@ export async function buildAssetBundle(force = false): Promise<AssetBundle> {
       let namespaces: string[] = [];
       try {
         namespaces = (await fs.readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
-      } catch { continue; }
+      } catch {
+        continue;
+      }
       for (const ns of namespaces) {
         const bsEntries = await walkJson(path.join(dir, ns, 'blockstates'));
         const modelEntries = await walkJson(path.join(dir, ns, 'models'));
@@ -123,12 +143,20 @@ export async function buildAssetBundle(force = false): Promise<AssetBundle> {
           ...modelEntries.map(({ rel, file }) => ({ id: `${ns}:${rel.slice(0, -5)}`, file, target: bundle.models })),
         ];
         await mapWithConcurrency(reads, 32, async ({ id, file, target }) => {
-          try { target[id] = JSON.parse(await fs.readFile(file, 'utf8')); } catch { /* malformed resource files are skipped */ }
+          try {
+            target[id] = JSON.parse(await fs.readFile(file, 'utf8'));
+          } catch {
+            /* malformed resource files are skipped */
+          }
         });
         try {
-          const renderers = JSON.parse(await fs.readFile(path.join(dir, ns, 'violet_map', 'renderers.json'), 'utf8')) as AssetBundle['renderers'];
-          if (renderers?.blockEntities) bundle.renderers!.blockEntities = { ...bundle.renderers!.blockEntities, ...renderers.blockEntities };
-          if (renderers?.entities) bundle.renderers!.entities = { ...bundle.renderers!.entities, ...renderers.entities };
+          const renderers = JSON.parse(
+            await fs.readFile(path.join(dir, ns, 'violet_map', 'renderers.json'), 'utf8'),
+          ) as AssetBundle['renderers'];
+          if (renderers?.blockEntities)
+            bundle.renderers!.blockEntities = { ...bundle.renderers!.blockEntities, ...renderers.blockEntities };
+          if (renderers?.entities)
+            bundle.renderers!.entities = { ...bundle.renderers!.entities, ...renderers.entities };
         } catch {
           // Renderer resources are optional and intentionally use a dedicated
           // namespace path so normal Java resource packs remain valid.
@@ -138,7 +166,9 @@ export async function buildAssetBundle(force = false): Promise<AssetBundle> {
           try {
             const definition = parseAnimationDef(JSON.parse(await fs.readFile(file, 'utf8')));
             if (definition) bundle.textureAnimations![`${ns}:${rel.slice(0, -'.png.mcmeta'.length)}`] = definition;
-          } catch { /* malformed sidecars are ignored like model JSON */ }
+          } catch {
+            /* malformed sidecars are ignored like model JSON */
+          }
         });
       }
     }
@@ -191,7 +221,9 @@ export async function textureFilePath(id: string): Promise<string | null> {
       await fs.access(file);
       texturePathCache.set(nid, file);
       return file;
-    } catch { /* next */ }
+    } catch {
+      /* next */
+    }
   }
   texturePathCache.set(nid, null);
   return null;
@@ -270,7 +302,11 @@ function readPixel(data: Uint8Array, width: number, x: number, y: number): [numb
   return [data[i], data[i + 1], data[i + 2], data[i + 3]];
 }
 
-interface TextureTile { data: Uint8Array; width: number; height: number }
+interface TextureTile {
+  data: Uint8Array;
+  width: number;
+  height: number;
+}
 
 function missingTile(size = 16): TextureTile {
   const data = new Uint8Array(size * size * 4);
@@ -283,7 +319,11 @@ function missingTile(size = 16): TextureTile {
   return { data, width: size, height: size };
 }
 
-interface TextureFrames { tiles: TextureTile[]; times: number[]; interpolate: boolean }
+interface TextureFrames {
+  tiles: TextureTile[];
+  times: number[];
+  interpolate: boolean;
+}
 
 function blendTiles(from: TextureTile, to: TextureTile, amount: number): TextureTile {
   const data = new Uint8Array(from.data.length);
@@ -300,7 +340,11 @@ function scaledDimensions(width: number, height: number): [number, number] {
 }
 
 function sampleTile(
-  png: PNG, sourceX: number, sourceY: number, sourceWidth: number, sourceHeight: number,
+  png: PNG,
+  sourceX: number,
+  sourceY: number,
+  sourceWidth: number,
+  sourceHeight: number,
 ): TextureTile {
   const [width, height] = scaledDimensions(sourceWidth, sourceHeight);
   const data = new Uint8Array(width * height * 4);
@@ -351,7 +395,11 @@ async function readTextureFrames(id: string, def?: TextureAnimationDef): Promise
           interpolated.push(blendTiles(tiles[i], next, tick / duration));
         }
       }
-      return { tiles: interpolated.length ? interpolated : tiles, times: new Array(interpolated.length).fill(1), interpolate: false };
+      return {
+        tiles: interpolated.length ? interpolated : tiles,
+        times: new Array(interpolated.length).fill(1),
+        interpolate: false,
+      };
     }
     return { tiles: tiles.length ? tiles : [missingTile()], times: frames.map((f) => f.time), interpolate: false };
   } catch {
@@ -373,7 +421,10 @@ function blitPaddedTile(dst: PNG, tile: TextureTile, x0: number, y0: number, pad
 }
 
 function tileStats(tile: TextureTile): { avg: [number, number, number]; alpha: boolean } {
-  let r = 0, g = 0, b = 0, n = 0;
+  let r = 0,
+    g = 0,
+    b = 0,
+    n = 0;
   let alpha = false;
   for (let p = 0; p < tile.data.length; p += 4) {
     if (tile.data[p + 3] < 250) alpha = true;
@@ -386,7 +437,10 @@ function tileStats(tile: TextureTile): { avg: [number, number, number]; alpha: b
   return { avg: n ? [r / n / 255, g / n / 255, b / n / 255] : [1, 0, 1], alpha };
 }
 
-interface PackedTile { x: number; y: number }
+interface PackedTile {
+  x: number;
+  y: number;
+}
 
 function packTiles(tiles: TextureTile[], pad: number): { size: number; placements: PackedTile[] } {
   const area = tiles.reduce((sum, tile) => sum + (tile.width + pad * 2) * (tile.height + pad * 2), 0);
@@ -396,7 +450,9 @@ function packTiles(tiles: TextureTile[], pad: number): { size: number; placement
 
   const layout = (atlasWidth: number): { height: number; placements: PackedTile[] } => {
     const placements: PackedTile[] = [];
-    let x = 0, y = 0, rowHeight = 0;
+    let x = 0,
+      y = 0,
+      rowHeight = 0;
     for (const tile of tiles) {
       const cellWidth = tile.width + pad * 2;
       const cellHeight = tile.height + pad * 2;
@@ -427,11 +483,15 @@ function rememberAtlas(key: string, value: { png: Uint8Array; manifest: TextureA
   while (atlasCache.size > MAX_ATLAS_CACHE_ENTRIES) atlasCache.delete(atlasCache.keys().next().value!);
 }
 
-async function buildTextureAtlasInner(normalized: string[]): Promise<{ key: string; manifest: TextureAtlasManifest; png: Uint8Array }> {
+async function buildTextureAtlasInner(
+  normalized: string[],
+): Promise<{ key: string; manifest: TextureAtlasManifest; png: Uint8Array }> {
   const textureAnimations = (await buildAssetBundle()).textureAnimations;
-  const sprites = await mapWithConcurrency(normalized, 32, async (id) => id === '__missing__'
-    ? { tiles: [missingTile()], times: [1], interpolate: false }
-    : readTextureFrames(id, textureAnimations?.[id]));
+  const sprites = await mapWithConcurrency(normalized, 32, async (id) =>
+    id === '__missing__'
+      ? { tiles: [missingTile()], times: [1], interpolate: false }
+      : readTextureFrames(id, textureAnimations?.[id]),
+  );
   const hash = createHash('sha1').update(JSON.stringify(normalized));
   for (const sprite of sprites) {
     hash.update(JSON.stringify({ times: sprite.times, interpolate: sprite.interpolate }));
@@ -467,16 +527,19 @@ async function buildTextureAtlasInner(normalized: string[]): Promise<{ key: stri
       const ty = y + pad;
       blitPaddedTile(png, tile, x, y, pad);
       frameRects.push({
-        u0: tx / size, v0: ty / size,
-        u1: (tx + tile.width) / size, v1: (ty + tile.height) / size,
+        u0: tx / size,
+        v0: ty / size,
+        u1: (tx + tile.width) / size,
+        v1: (ty + tile.height) / size,
       });
       firstStats ??= tileStats(tile);
       tileIndex++;
     }
     const first = frameRects[0];
-    const animation: AtlasAnimation | undefined = frameRects.length > 1
-      ? { frames: frameRects, times: sprites[sprite].times, interpolate: sprites[sprite].interpolate || undefined }
-      : undefined;
+    const animation: AtlasAnimation | undefined =
+      frameRects.length > 1
+        ? { frames: frameRects, times: sprites[sprite].times, interpolate: sprites[sprite].interpolate || undefined }
+        : undefined;
     index[id] = { ...first, ...(animation ? { animation } : {}) };
     avgColors[id] = firstStats?.avg ?? [1, 0, 1];
     hasAlpha[id] = firstStats?.alpha ?? true;
@@ -496,10 +559,13 @@ async function buildTextureAtlasInner(normalized: string[]): Promise<{ key: stri
   return { key, png: bytes, manifest };
 }
 
-export async function buildTextureAtlas(ids: string[]): Promise<{ key: string; manifest: TextureAtlasManifest; png: Uint8Array }> {
+export async function buildTextureAtlas(
+  ids: string[],
+): Promise<{ key: string; manifest: TextureAtlasManifest; png: Uint8Array }> {
   // Canonical order makes equivalent client requests share one in-flight build and cache entry.
   const normalized = ['__missing__', ...Array.from(new Set(ids.map(normalizeId))).sort()];
-  if (normalized.length - 1 > MAX_ATLAS_TEXTURES) throw new Error(`atlas supports at most ${MAX_ATLAS_TEXTURES} textures`);
+  if (normalized.length - 1 > MAX_ATLAS_TEXTURES)
+    throw new Error(`atlas supports at most ${MAX_ATLAS_TEXTURES} textures`);
   const requestKey = normalized.join('\n');
   const pending = atlasInflight.get(requestKey);
   if (pending) return pending;
