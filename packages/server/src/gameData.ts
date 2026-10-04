@@ -9,11 +9,17 @@ import { buildAssetBundle } from './assets.js';
 const defaultsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../data-defaults');
 const dataFileCache = new Map<string, unknown>();
 const dataFileInflight = new Map<string, Promise<unknown>>();
+let dataGeneration = 0;
+
+function isMissingFile(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException)?.code === 'ENOENT';
+}
 
 async function readDataFile<T>(name: string): Promise<T> {
   if (dataFileCache.has(name)) return dataFileCache.get(name) as T;
   const pending = dataFileInflight.get(name);
   if (pending) return pending as Promise<T>;
+  const generation = dataGeneration;
   const load = (async () => {
     const candidates = [
       path.join(config.dataDir, 'versions', config.mcVersion, name),
@@ -22,13 +28,21 @@ async function readDataFile<T>(name: string): Promise<T> {
       path.join(defaultsDir, name),
     ];
     for (const file of candidates) {
+      let text: string;
       try {
-        const value = JSON.parse(await fs.readFile(file, 'utf8')) as T;
-        dataFileCache.set(name, value);
-        return value;
-      } catch {
-        /* try next */
+        text = await fs.readFile(file, 'utf8');
+      } catch (error) {
+        if (isMissingFile(error)) continue;
+        throw error;
       }
+      let value: T;
+      try {
+        value = JSON.parse(text) as T;
+      } catch (error) {
+        throw new Error(`invalid JSON in ${file}`, { cause: error });
+      }
+      if (generation === dataGeneration) dataFileCache.set(name, value);
+      return value;
     }
     throw new Error(`missing data file: ${name}`);
   })();
@@ -39,10 +53,13 @@ async function readDataFile<T>(name: string): Promise<T> {
     if (dataFileInflight.get(name) === load) dataFileInflight.delete(name);
   }
 }
+/** Write a root data file and invalidate readers that started before the write. */
 export async function writeDataFile(name: string, value: unknown): Promise<void> {
   await fs.mkdir(config.dataDir, { recursive: true });
   await fs.writeFile(path.join(config.dataDir, name), JSON.stringify(value, null, 2));
+  dataGeneration++;
   dataFileCache.delete(name);
+  dataFileInflight.delete(name);
 }
 
 export const readBiomes = () => readDataFile<BiomeMap>('biomes.json');
@@ -52,8 +69,11 @@ let blockInfoCache: BlockInfoMap | null = null;
 let blockInfoPromise: Promise<BlockInfoMap> | null = null;
 
 export function clearGameDataCaches(): void {
+  dataGeneration++;
   dataFileCache.clear();
+  dataFileInflight.clear();
   blockInfoCache = null;
+  blockInfoPromise = null;
 }
 
 function latestSupportedMcDataVersion(): string {
@@ -80,6 +100,7 @@ function loadMinecraftData(version = config.mcDataVersion) {
 export async function buildBlockInfo(): Promise<BlockInfoMap> {
   if (blockInfoCache) return blockInfoCache;
   if (blockInfoPromise) return blockInfoPromise;
+  const generation = dataGeneration;
   const build = (async () => {
     let d = loadMinecraftData();
     try {
@@ -121,7 +142,7 @@ export async function buildBlockInfo(): Promise<BlockInfoMap> {
         };
       }
     }
-    blockInfoCache = map;
+    if (generation === dataGeneration) blockInfoCache = map;
     return map;
   })();
   blockInfoPromise = build;

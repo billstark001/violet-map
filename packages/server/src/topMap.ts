@@ -23,6 +23,13 @@ interface ManifestCacheEntry {
 
 const manifestCache = new Map<string, ManifestCacheEntry>();
 const MANIFEST_REVALIDATE_MS = 5_000;
+let manifestGeneration = 0;
+
+/** Drop a manifest after a local or protected-storage mutation. */
+export function invalidateTopMapManifest(world: string): void {
+  manifestGeneration++;
+  manifestCache.delete(world);
+}
 
 function assertWorldName(world: string) {
   if (!WORLD_RE.test(world)) throw new Error('invalid world name');
@@ -58,34 +65,58 @@ function toCapabilities(world: string, manifest: TopMapManifest | null): WorldCa
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Check the fields that the capabilities and tile endpoints dereference. */
+function parseTopMapManifest(value: unknown): TopMapManifest | null {
+  if (!isRecord(value) || value.schema !== TOP_MAP_SCHEMA || !isRecord(value.dimensions)) return null;
+  for (const dimension of Object.values(value.dimensions)) {
+    if (!isRecord(dimension) || typeof dimension.hasTopMap !== 'boolean') return null;
+    const topMap = dimension.topMap;
+    if (dimension.hasTopMap && !isRecord(topMap)) return null;
+    if (topMap !== undefined) {
+      if (!isRecord(topMap) || !Array.isArray(topMap.regions)) return null;
+      for (const region of topMap.regions) {
+        if (!isRecord(region) || !Number.isSafeInteger(region.x) || !Number.isSafeInteger(region.z)) return null;
+      }
+    }
+  }
+  return value as unknown as TopMapManifest;
+}
+
 export async function getTopMapManifest(world: string): Promise<TopMapManifest | null> {
   const path = manifestPath(world);
+  const generation = manifestGeneration;
   const cached = manifestCache.get(world);
   if (cached && Date.now() - cached.checkedAt < MANIFEST_REVALIDATE_MS) return cached.manifest;
   const info = await worldStorage.stat(path);
   const currentValidator = info ? validator(info.size, info.modifiedAt, info.etag) : 'missing';
-  if (cached?.validator === currentValidator) {
+  if (generation === manifestGeneration && cached?.validator === currentValidator) {
     cached.checkedAt = Date.now();
     return cached.manifest;
   }
   if (!info) {
-    manifestCache.set(world, { validator: currentValidator, manifest: null, checkedAt: Date.now() });
+    if (generation === manifestGeneration)
+      manifestCache.set(world, { validator: currentValidator, manifest: null, checkedAt: Date.now() });
     return null;
   }
   const bytes = await worldStorage.read(path);
   if (!bytes) {
-    manifestCache.set(world, { validator: currentValidator, manifest: null, checkedAt: Date.now() });
+    if (generation === manifestGeneration)
+      manifestCache.set(world, { validator: currentValidator, manifest: null, checkedAt: Date.now() });
     return null;
   }
   try {
-    const manifest = JSON.parse(new TextDecoder().decode(bytes)) as TopMapManifest;
-    if (manifest.schema !== TOP_MAP_SCHEMA || !manifest.dimensions || typeof manifest.dimensions !== 'object') {
-      throw new Error('invalid top-map manifest');
-    }
-    manifestCache.set(world, { validator: currentValidator, manifest, checkedAt: Date.now() });
+    const manifest = parseTopMapManifest(JSON.parse(new TextDecoder().decode(bytes)));
+    if (!manifest) throw new Error('invalid top-map manifest');
+    if (generation === manifestGeneration)
+      manifestCache.set(world, { validator: currentValidator, manifest, checkedAt: Date.now() });
     return manifest;
   } catch {
-    manifestCache.set(world, { validator: currentValidator, manifest: null, checkedAt: Date.now() });
+    if (generation === manifestGeneration)
+      manifestCache.set(world, { validator: currentValidator, manifest: null, checkedAt: Date.now() });
     return null;
   }
 }

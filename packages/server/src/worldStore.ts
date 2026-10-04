@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto';
 import { getRegionChunk } from '@violet-map/core/region';
+import { assertDimensionId, mapWithConcurrency } from '@violet-map/core';
 import { parseNbt, decompress } from '@violet-map/core/nbt';
 import { createMinimalLevelDat } from './levelDat.js';
 import { cleanStoragePath, worldStorage, type StoredFileInfo } from './storage.js';
 import { ensureWorldIdentity, PrefixedWorldStorage } from '@violet-map/core/storage';
+import { invalidateTopMapManifest } from './topMap.js';
+import { isChunkCoordinate } from './chunkCoordinates.js';
 
 const VANILLA_DIMS: Record<string, string[]> = {
   'minecraft:overworld': ['region', 'dimensions/minecraft/overworld/region'],
@@ -101,8 +104,11 @@ const MAX_FILE_HASH_CACHE = 4096;
 const MAX_REGION_CACHE_BYTES = Number(process.env.REGION_CACHE_BYTES ?? 256 * 1024 * 1024);
 const MAX_CHUNK_NBT_CACHE_BYTES = Number(process.env.CHUNK_NBT_CACHE_BYTES ?? 128 * 1024 * 1024);
 const REGION_LOCATION_BYTES = 4096;
+const MAX_PARALLEL_STORAGE_READS = 16;
+const MAX_PARALLEL_HASH_READS = 4;
 let regionCacheBytes = 0;
 let chunkNbtCacheBytes = 0;
+let storageCacheGeneration = 0;
 const WORLD_LIST_CACHE_MS = 15_000;
 let worldListCache: { expiresAt: number; worlds: WorldInfo[] } | null = null;
 let worldListInflight: Promise<WorldInfo[]> | null = null;
@@ -113,6 +119,7 @@ export function assertWorldName(world: string) {
 
 function invalidateWorldList(): void {
   worldListCache = null;
+  worldListInflight = null;
 }
 
 const dimDirName = (dim: string) => encodeURIComponent(dim);
@@ -175,9 +182,9 @@ function deleteRegionCache(key: string) {
 
 function rememberChunkNbtCache(key: string, value: ChunkCacheEntry): ChunkCacheEntry {
   const previous = chunkNbtCache.get(key);
-  if (previous) chunkNbtCacheBytes -= previous.data.byteLength;
+  if (previous) chunkNbtCacheBytes -= chunkCacheEntryBytes(previous);
   touchLru(chunkNbtCache, key, value);
-  chunkNbtCacheBytes += value.data.byteLength;
+  chunkNbtCacheBytes += chunkCacheEntryBytes(value);
   while (chunkNbtCache.size > MAX_CHUNK_NBT_CACHE || chunkNbtCacheBytes > MAX_CHUNK_NBT_CACHE_BYTES) {
     const oldestKey = chunkNbtCache.keys().next().value;
     if (!oldestKey) break;
@@ -189,11 +196,16 @@ function rememberChunkNbtCache(key: string, value: ChunkCacheEntry): ChunkCacheE
 function deleteChunkNbtCache(key: string) {
   const hit = chunkNbtCache.get(key);
   if (!hit) return;
-  chunkNbtCacheBytes -= hit.data.byteLength;
+  chunkNbtCacheBytes -= chunkCacheEntryBytes(hit);
   chunkNbtCache.delete(key);
 }
 
+function chunkCacheEntryBytes(entry: ChunkCacheEntry): number {
+  return entry.data.byteLength + (entry.entities?.byteLength ?? 0);
+}
+
 function invalidatePath(filePath: string) {
+  storageCacheGeneration++;
   const clean = cleanStoragePath(filePath);
   fileHashCache.delete(clean);
   deleteRegionCache(clean);
@@ -206,9 +218,38 @@ function invalidatePath(filePath: string) {
 }
 
 function clearChunkCacheFor(world: string, dim?: string) {
+  storageCacheGeneration++;
   const prefix = dim ? `${world}|${dim}|` : `${world}|`;
   for (const key of [...chunkNbtCache.keys()]) {
     if (key.startsWith(prefix)) deleteChunkNbtCache(key);
+  }
+}
+
+function clearWorldDirectoryCaches(world: string): void {
+  for (const key of regionDirCache.keys()) if (key.startsWith(`${world}|`)) regionDirCache.delete(key);
+  for (const key of entityDirCache.keys()) if (key.startsWith(`${world}|`)) entityDirCache.delete(key);
+}
+
+/** Notify world-facing caches after a protected storage file changes. */
+export function invalidateStoredFile(filePath: string): void {
+  const clean = cleanStoragePath(filePath);
+  invalidatePath(clean);
+  const separator = clean.indexOf('/');
+  if (separator < 1) return;
+  const world = clean.slice(0, separator);
+  if (!WORLD_RE.test(world)) return;
+  const relative = clean.slice(separator + 1);
+  invalidateWorldList();
+  if (relative === '.violet-map/top-map/manifest.json') invalidateTopMapManifest(world);
+  if (
+    relative.includes('/region/') ||
+    relative.startsWith('region/') ||
+    relative.includes('/entities/') ||
+    relative.startsWith('entities/') ||
+    relative.startsWith('chunks/')
+  ) {
+    clearWorldDirectoryCaches(world);
+    clearChunkCacheFor(world);
   }
 }
 
@@ -217,14 +258,17 @@ async function hashFileInfo(info: StoredFileInfo): Promise<string> {
   const v = validator(info);
   const hit = fileHashCache.get(clean);
   if (hit?.validator === v) return hit.hash;
+  const generation = storageCacheGeneration;
   const bytes = await worldStorage.read(clean);
   if (!bytes) throw new Error(`file disappeared while hashing: ${clean}`);
   const hash = sha256(bytes);
-  rememberLru(fileHashCache, clean, { validator: v, hash }, MAX_FILE_HASH_CACHE);
+  if (generation === storageCacheGeneration)
+    rememberLru(fileHashCache, clean, { validator: v, hash }, MAX_FILE_HASH_CACHE);
   return hash;
 }
 
 function dimensionRegionCandidates(dim: string): string[] {
+  assertDimensionId(dim);
   if (VANILLA_DIMS[dim]) return VANILLA_DIMS[dim];
   const [namespace, rawPath = ''] = dim.includes(':') ? dim.split(':') : ['minecraft', dim];
   const dimPath = rawPath.split('/').map(encodeURIComponent).join('/');
@@ -252,7 +296,8 @@ async function regionDir(world: string, dim: string): Promise<string> {
       return candidate;
     }
   }
-  regionDirCache.set(key, candidates[0]);
+  // An empty world may receive its first region through remote storage sync.
+  // Do not pin the fallback before a file establishes the actual layout.
   return candidates[0];
 }
 
@@ -268,12 +313,12 @@ async function entityDir(world: string, dim: string): Promise<string> {
       return candidate;
     }
   }
-  entityDirCache.set(key, candidates[0]);
   return candidates[0];
 }
 
 function chunkOverrideDir(world: string, dim: string): string {
   assertWorldName(world);
+  assertDimensionId(dim);
   return `${world}/chunks/${dimDirName(dim)}`;
 }
 
@@ -316,11 +361,12 @@ async function readRegionFile(filePath: string): Promise<RegionCacheEntry | null
   }
   const pending = regionReadInflight.get(clean);
   if (pending) return pending;
-  const load = (async () => {
+  let load!: Promise<RegionCacheEntry | null>;
+  load = (async () => {
     const bytes = await worldStorage.read(clean);
     if (!bytes) return null;
     const hash = sourceHashForInfo(info);
-    if (bytes.length >= REGION_LOCATION_BYTES) {
+    if (regionReadInflight.get(clean) === load && bytes.length >= REGION_LOCATION_BYTES) {
       rememberLru(
         regionHeaderCache,
         clean,
@@ -332,13 +378,14 @@ async function readRegionFile(filePath: string): Promise<RegionCacheEntry | null
         MAX_REGION_HEADER_CACHE,
       );
     }
-    return rememberRegionCache(clean, { validator: v, hash, bytes });
+    const value = { validator: v, hash, bytes };
+    return regionReadInflight.get(clean) === load ? rememberRegionCache(clean, value) : value;
   })();
   regionReadInflight.set(clean, load);
   try {
     return await load;
   } finally {
-    regionReadInflight.delete(clean);
+    if (regionReadInflight.get(clean) === load) regionReadInflight.delete(clean);
   }
 }
 
@@ -359,17 +406,20 @@ async function readRegionHeader(filePath: string): Promise<RegionHeaderCacheEntr
   }
   const pending = regionHeaderInflight.get(clean);
   if (pending) return pending;
-  const load = (async () => {
+  let load!: Promise<RegionHeaderCacheEntry | null>;
+  load = (async () => {
     const header = await worldStorage.readRange(clean, 0, REGION_LOCATION_BYTES);
     if (!header || header.length < REGION_LOCATION_BYTES) return null;
     const value: RegionHeaderCacheEntry = { validator: v, hash: sourceHashForInfo(info), header };
-    return rememberLru(regionHeaderCache, clean, value, MAX_REGION_HEADER_CACHE);
+    return regionHeaderInflight.get(clean) === load
+      ? rememberLru(regionHeaderCache, clean, value, MAX_REGION_HEADER_CACHE)
+      : value;
   })();
   regionHeaderInflight.set(clean, load);
   try {
     return await load;
   } finally {
-    regionHeaderInflight.delete(clean);
+    if (regionHeaderInflight.get(clean) === load) regionHeaderInflight.delete(clean);
   }
 }
 
@@ -393,6 +443,7 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
 }
 
 async function writeWorldMeta(world: string, dimensions = DEFAULT_DIMS): Promise<void> {
+  for (const dim of dimensions) assertDimensionId(dim);
   const now = new Date().toISOString();
   const previous = await readJson<WorldMeta>(worldMetaPath(world));
   const unique = [...new Set([...(previous?.dimensions ?? []), ...dimensions])];
@@ -449,19 +500,11 @@ async function listWorldsUncached(): Promise<WorldInfo[]> {
         if (modern && (await prefixHasRegionFiles(`${world}/${modern}`))) dims.add(dim);
       }
     }
-    try {
-      for (const chunkDim of await worldStorage.listDirectories(`${world}/chunks`)) {
-        dims.add(decodeURIComponent(chunkDim));
-      }
-    } catch {
-      // Optional chunk override directory.
+    for (const chunkDim of await worldStorage.listDirectories(`${world}/chunks`)) {
+      dims.add(decodeURIComponent(chunkDim));
     }
-    try {
-      for (const file of await worldStorage.list(`${world}/dimensions`)) {
-        addDimensionFromPath(file.path.split('/').slice(1), dims);
-      }
-    } catch {
-      // Optional modern custom dimensions directory.
+    for (const file of await worldStorage.list(`${world}/dimensions`)) {
+      addDimensionFromPath(file.path.split('/').slice(1), dims);
     }
     if (dims.size) byWorld.set(world, dims);
   }
@@ -479,7 +522,7 @@ export async function listWorlds(): Promise<WorldInfo[]> {
   worldListInflight = pending;
   try {
     const worlds = await pending;
-    worldListCache = { worlds, expiresAt: Date.now() + WORLD_LIST_CACHE_MS };
+    if (worldListInflight === pending) worldListCache = { worlds, expiresAt: Date.now() + WORLD_LIST_CACHE_MS };
     return worlds;
   } finally {
     if (worldListInflight === pending) worldListInflight = null;
@@ -499,6 +542,7 @@ export async function listRegions(world: string, dim: string): Promise<{ x: numb
   return [...out.values()].sort((a, b) => a.x - b.x || a.z - b.z);
 }
 
+/** List region occupancy masks and loose chunk overrides for one dimension. */
 export async function listChunkSourceCoverage(world: string, dim: string): Promise<ChunkSourceCoverage> {
   const [regions, chunks] = await Promise.all([listRegionChunkMasks(world, dim), listChunkOverrides(world, dim)]);
   return { regions, chunks };
@@ -506,17 +550,20 @@ export async function listChunkSourceCoverage(world: string, dim: string): Promi
 
 async function listRegionChunkMasks(world: string, dim: string): Promise<{ x: number; z: number; mask: string }[]> {
   const out = new Map<string, { x: number; z: number; mask: string }>();
+  const regionFiles: { path: string; x: number; z: number }[] = [];
   for (const sub of dimensionRegionCandidates(dim)) {
     const prefix = `${world}/${sub}`;
     for (const file of await worldStorage.list(prefix)) {
       const match = REGION_RE.exec(file.path.split('/').pop() ?? '');
       if (!match) continue;
-      const x = Number(match[1]);
-      const z = Number(match[2]);
-      const header = await readRegionHeader(file.path);
-      out.set(`${x},${z}`, { x, z, mask: regionChunkMask(header?.header) });
+      regionFiles.push({ path: file.path, x: Number(match[1]), z: Number(match[2]) });
     }
   }
+  const masks = await mapWithConcurrency(regionFiles, MAX_PARALLEL_STORAGE_READS, async (file) => {
+    const header = await readRegionHeader(file.path);
+    return { x: file.x, z: file.z, mask: regionChunkMask(header?.header) };
+  });
+  for (const item of masks) out.set(`${item.x},${item.z}`, item);
   return [...out.values()].sort((a, b) => a.x - b.x || a.z - b.z);
 }
 
@@ -545,6 +592,8 @@ async function listChunkOverrides(world: string, dim: string): Promise<{ cx: num
   return [...out.values()].sort((a, b) => a.cx - b.cx || a.cz - b.cz);
 }
 
+/** Resolve each chunk to its override or region source without reading full NBT.
+ * `hash` includes a separate entities-region validator when that sidecar exists. */
 export async function getChunkMetadataBatch(
   world: string,
   dim: string,
@@ -558,51 +607,47 @@ export async function getChunkMetadataBatch(
     { rx: number; rz: number; filePath: string; items: { index: number; cx: number; cz: number }[] }
   >();
 
-  await Promise.all(
-    chunks.map(async ({ cx, cz }, index) => {
-      if (!Number.isInteger(cx) || !Number.isInteger(cz)) {
-        out[index] = { cx, cz, missing: true };
-        return;
-      }
+  await mapWithConcurrency(chunks, MAX_PARALLEL_STORAGE_READS, async ({ cx, cz }, index) => {
+    if (!isChunkCoordinate(cx) || !isChunkCoordinate(cz)) {
+      out[index] = { cx, cz, missing: true };
+      return;
+    }
 
-      const chunkPath = `${chunkOverrideDir(world, dim)}/c.${cx}.${cz}.nbt`;
-      const chunkInfo = await worldStorage.stat(chunkPath);
-      if (chunkInfo) {
-        const fileHash = sourceHashForInfo(chunkInfo);
-        out[index] = { cx, cz, hash: fileHash, fileHash, source: 'chunk', sourcePath: chunkPath };
-        return;
-      }
+    const chunkPath = `${chunkOverrideDir(world, dim)}/c.${cx}.${cz}.nbt`;
+    const chunkInfo = await worldStorage.stat(chunkPath);
+    if (chunkInfo) {
+      const fileHash = sourceHashForInfo(chunkInfo);
+      out[index] = { cx, cz, hash: fileHash, fileHash, source: 'chunk', sourcePath: chunkPath };
+      return;
+    }
 
-      const rx = cx >> 5;
-      const rz = cz >> 5;
-      const key = `${rx},${rz}`;
-      const filePath = regionPathFromDir(regionBase, rx, rz);
-      const group = byRegion.get(key) ?? { rx, rz, filePath, items: [] };
-      group.items.push({ index, cx, cz });
-      byRegion.set(key, group);
-    }),
-  );
+    const rx = cx >> 5;
+    const rz = cz >> 5;
+    const key = `${rx},${rz}`;
+    const filePath = regionPathFromDir(regionBase, rx, rz);
+    const group = byRegion.get(key) ?? { rx, rz, filePath, items: [] };
+    group.items.push({ index, cx, cz });
+    byRegion.set(key, group);
+  });
 
-  await Promise.all(
-    [...byRegion.values()].map(async (group) => {
-      const region = await readRegionHeader(group.filePath);
-      for (const item of group.items) {
-        if (!region || !hasRegionChunkHeader(region.header, item.cx & 31, item.cz & 31)) {
-          out[item.index] = { cx: item.cx, cz: item.cz, missing: true };
-          continue;
-        }
-        out[item.index] = {
-          cx: item.cx,
-          cz: item.cz,
-          hash: region.hash,
-          fileHash: region.hash,
-          source: 'region',
-          sourcePath: group.filePath,
-          region: { x: group.rx, z: group.rz },
-        };
+  await mapWithConcurrency([...byRegion.values()], MAX_PARALLEL_STORAGE_READS, async (group) => {
+    const region = await readRegionHeader(group.filePath);
+    for (const item of group.items) {
+      if (!region || !hasRegionChunkHeader(region.header, item.cx & 31, item.cz & 31)) {
+        out[item.index] = { cx: item.cx, cz: item.cz, missing: true };
+        continue;
       }
-    }),
-  );
+      out[item.index] = {
+        cx: item.cx,
+        cz: item.cz,
+        hash: region.hash,
+        fileHash: region.hash,
+        source: 'region',
+        sourcePath: group.filePath,
+        region: { x: group.rx, z: group.rz },
+      };
+    }
+  });
 
   // Since 1.17 entities live in a sibling region directory. Attach its
   // validator to the terrain metadata so a changed entity chunk invalidates
@@ -618,21 +663,19 @@ export async function getChunkMetadataBatch(
     group.items.push({ index, cx: meta.cx, cz: meta.cz });
     entityRegions.set(filePath, group);
   }
-  await Promise.all(
-    [...entityRegions.values()].map(async (group) => {
-      const region = await readRegionHeader(group.filePath);
-      if (!region) return;
-      for (const item of group.items) {
-        const meta = out[item.index];
-        if (!meta || !hasRegionChunkHeader(region.header, item.cx & 31, item.cz & 31)) continue;
-        meta.entityHash = region.hash;
-        meta.entitySourcePath = group.filePath;
-        // `hash` is a source validator used before full NBT is fetched. Include
-        // entities here; `nbtHash` below remains the precise payload hash.
-        meta.hash = `v3:${sha256(new TextEncoder().encode(`${meta.hash}|${region.hash}`))}`;
-      }
-    }),
-  );
+  await mapWithConcurrency([...entityRegions.values()], MAX_PARALLEL_STORAGE_READS, async (group) => {
+    const region = await readRegionHeader(group.filePath);
+    if (!region) return;
+    for (const item of group.items) {
+      const meta = out[item.index];
+      if (!meta || !hasRegionChunkHeader(region.header, item.cx & 31, item.cz & 31)) continue;
+      meta.entityHash = region.hash;
+      meta.entitySourcePath = group.filePath;
+      // `hash` is a source validator used before full NBT is fetched. Include
+      // entities here; `nbtHash` below remains the precise payload hash.
+      meta.hash = `v3:${sha256(new TextEncoder().encode(`${meta.hash}|${region.hash}`))}`;
+    }
+  });
 
   return out;
 }
@@ -641,53 +684,52 @@ export async function getChunkMetadata(world: string, dim: string, cx: number, c
   return (await getChunkMetadataBatch(world, dim, [{ cx, cz }]))[0] ?? { cx, cz, missing: true };
 }
 
+/** Read and decompress a batch of chunks, sharing region reads within the batch.
+ * Missing chunks remain null at their original input positions. */
 export async function getChunksNbtWithMetaBatch(
   world: string,
   dim: string,
   chunks: { cx: number; cz: number }[],
 ): Promise<(ChunkReadResult | null)[]> {
+  const generation = storageCacheGeneration;
   const metas = await getChunkMetadataBatch(world, dim, chunks);
   const out = new Array<ChunkReadResult | null>(metas.length).fill(null);
   const byRegion = new Map<string, { meta: ChunkMetadata; index: number }[]>();
 
-  await Promise.all(
-    metas.map(async (meta, index) => {
-      if (!meta.hash || !meta.fileHash || !meta.source || !meta.sourcePath || meta.missing) return;
+  await mapWithConcurrency(metas, MAX_PARALLEL_STORAGE_READS, async (meta, index) => {
+    if (!meta.hash || !meta.fileHash || !meta.source || !meta.sourcePath || meta.missing) return;
 
-      const cacheKey = chunkCacheKey(world, dim, meta.cx, meta.cz);
-      const hit = chunkNbtCache.get(cacheKey);
-      if (hit?.sourcePath === meta.sourcePath && hit.fileHash === meta.fileHash && hit.entityHash === meta.entityHash) {
-        touchLru(chunkNbtCache, cacheKey, hit);
-        out[index] = { ...meta, data: hit.data, entities: hit.entities, nbtHash: hit.nbtHash } as ChunkReadResult;
-        return;
-      }
+    const cacheKey = chunkCacheKey(world, dim, meta.cx, meta.cz);
+    const hit = chunkNbtCache.get(cacheKey);
+    if (hit?.sourcePath === meta.sourcePath && hit.fileHash === meta.fileHash && hit.entityHash === meta.entityHash) {
+      touchLru(chunkNbtCache, cacheKey, hit);
+      out[index] = { ...meta, data: hit.data, entities: hit.entities, nbtHash: hit.nbtHash } as ChunkReadResult;
+      return;
+    }
 
-      if (meta.source === 'chunk') {
-        const bytes = await worldStorage.read(meta.sourcePath);
-        const data = bytes ? decompress(bytes) : null;
-        if (!data) return;
-        out[index] = { ...meta, data, nbtHash: chunkPayloadHash(data) } as ChunkReadResult;
-        return;
-      }
+    if (meta.source === 'chunk') {
+      const bytes = await worldStorage.read(meta.sourcePath);
+      const data = bytes ? decompress(bytes) : null;
+      if (!data) return;
+      out[index] = { ...meta, data, nbtHash: chunkPayloadHash(data) } as ChunkReadResult;
+      return;
+    }
 
-      const group = byRegion.get(meta.sourcePath) ?? [];
-      group.push({ meta, index });
-      byRegion.set(meta.sourcePath, group);
-    }),
-  );
+    const group = byRegion.get(meta.sourcePath) ?? [];
+    group.push({ meta, index });
+    byRegion.set(meta.sourcePath, group);
+  });
 
-  await Promise.all(
-    [...byRegion.entries()].map(async ([filePath, items]) => {
-      const region = await readRegionFile(filePath);
-      if (!region) return;
-      for (const { meta, index } of items) {
-        if (!meta.fileHash || !meta.sourcePath) continue;
-        const data = getRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31);
-        if (!data) continue;
-        out[index] = { ...meta, data, nbtHash: chunkPayloadHash(data) } as ChunkReadResult;
-      }
-    }),
-  );
+  await mapWithConcurrency([...byRegion.entries()], MAX_PARALLEL_STORAGE_READS, async ([filePath, items]) => {
+    const region = await readRegionFile(filePath);
+    if (!region) return;
+    for (const { meta, index } of items) {
+      if (!meta.fileHash || !meta.sourcePath) continue;
+      const data = getRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31);
+      if (!data) continue;
+      out[index] = { ...meta, data, nbtHash: chunkPayloadHash(data) } as ChunkReadResult;
+    }
+  });
 
   const byEntityRegion = new Map<string, { meta: ChunkMetadata; index: number }[]>();
   for (let index = 0; index < metas.length; index++) {
@@ -697,22 +739,21 @@ export async function getChunksNbtWithMetaBatch(
     group.push({ meta, index });
     byEntityRegion.set(meta.entitySourcePath, group);
   }
-  await Promise.all(
-    [...byEntityRegion.entries()].map(async ([filePath, items]) => {
-      const region = await readRegionFile(filePath);
-      if (!region) return;
-      for (const { meta, index } of items) {
-        const result = out[index];
-        if (!result) continue;
-        const entities = getRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31) ?? undefined;
-        result.entities = entities;
-        result.nbtHash = chunkPayloadHash(result.data, entities);
-      }
-    }),
-  );
+  await mapWithConcurrency([...byEntityRegion.entries()], MAX_PARALLEL_STORAGE_READS, async ([filePath, items]) => {
+    const region = await readRegionFile(filePath);
+    if (!region) return;
+    for (const { meta, index } of items) {
+      const result = out[index];
+      if (!result) continue;
+      const entities = getRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31) ?? undefined;
+      result.entities = entities;
+      result.nbtHash = chunkPayloadHash(result.data, entities);
+    }
+  });
 
   // Cache only after both terrain and optional entity NBT have been merged.
   for (const result of out) {
+    if (generation !== storageCacheGeneration) break;
     if (!result?.data || !result.sourcePath || !result.fileHash) continue;
     rememberChunkNbtCache(chunkCacheKey(world, dim, result.cx, result.cz), {
       sourcePath: result.sourcePath,
@@ -751,7 +792,7 @@ export async function saveChunkNbt(world: string, dim: string, bytes: Uint8Array
   const r = root.Level ?? root;
   const x = r.xPos,
     z = r.zPos;
-  if (typeof x !== 'number' || typeof z !== 'number') throw new Error('chunk NBT missing xPos/zPos');
+  if (!isChunkCoordinate(x) || !isChunkCoordinate(z)) throw new Error('chunk NBT has invalid xPos/zPos');
   const data = decompress(bytes);
   const filePath = `${chunkOverrideDir(world, dim)}/c.${x}.${z}.nbt`;
   await worldStorage.write(filePath, data, 'application/octet-stream');
@@ -762,7 +803,7 @@ export async function saveChunkNbt(world: string, dim: string, bytes: Uint8Array
     sourcePath: filePath,
     fileHash,
     data,
-    nbtHash: sha256(data),
+    nbtHash: chunkPayloadHash(data),
   });
   await ensureLevelDat(world, world, [dim]);
   return { x, z };
@@ -777,6 +818,8 @@ export async function deleteWorld(world: string): Promise<{ deleted: number }> {
   assertWorldName(world);
   const deleted = await worldStorage.deletePrefix(world);
   clearChunkCacheFor(world);
+  clearWorldDirectoryCaches(world);
+  invalidateTopMapManifest(world);
   invalidateWorldList();
   return { deleted };
 }
@@ -797,10 +840,10 @@ export async function deleteChunks(
 ): Promise<{ deletedOverrides: number; clearedRegionChunks: number }> {
   let deletedOverrides = 0;
   let clearedRegionChunks = 0;
-  const byRegion = new Map<string, { filePath: string; locals: { localX: number; localZ: number }[] }>();
+  const byRegion = new Map<string, { filePath: string; locals: Map<string, { localX: number; localZ: number }> }>();
 
   for (const { cx, cz } of chunks) {
-    if (!Number.isInteger(cx) || !Number.isInteger(cz)) continue;
+    if (!isChunkCoordinate(cx) || !isChunkCoordinate(cz)) continue;
     const overridePath = `${chunkOverrideDir(world, dim)}/c.${cx}.${cz}.nbt`;
     if (await worldStorage.stat(overridePath)) {
       await worldStorage.delete(overridePath);
@@ -811,15 +854,15 @@ export async function deleteChunks(
     const rz = cz >> 5;
     const filePath = regionPathFromDir(await regionDir(world, dim), rx, rz);
     const key = `${rx},${rz}`;
-    const group = byRegion.get(key) ?? { filePath, locals: [] };
-    group.locals.push({ localX: cx & 31, localZ: cz & 31 });
+    const group = byRegion.get(key) ?? { filePath, locals: new Map() };
+    group.locals.set(`${cx & 31},${cz & 31}`, { localX: cx & 31, localZ: cz & 31 });
     byRegion.set(key, group);
   }
 
   for (const { filePath, locals } of byRegion.values()) {
     const region = await readRegionFile(filePath);
     if (!region) continue;
-    const present = locals.filter((p) => hasRegionChunk(region.bytes, p.localX, p.localZ));
+    const present = [...locals.values()].filter((p) => hasRegionChunk(region.bytes, p.localX, p.localZ));
     if (!present.length) continue;
     await worldStorage.write(filePath, clearRegionChunkEntries(region.bytes, present), 'application/octet-stream');
     invalidatePath(filePath);
@@ -840,7 +883,7 @@ export async function saveWorldFile(
   if (!cleanRel) throw new Error('missing file path');
   const fullPath = `${world}/${cleanRel}`;
   await worldStorage.write(fullPath, bytes, 'application/octet-stream');
-  invalidatePath(fullPath);
+  invalidateStoredFile(fullPath);
   await ensureLevelDat(world, world);
   const info = await worldStorage.stat(fullPath);
   if (!info) throw new Error('uploaded file is not readable');
@@ -851,15 +894,13 @@ export async function worldManifest(world: string): Promise<WorldFileManifestEnt
   assertWorldName(world);
   const prefix = `${world}/`;
   const files = await worldStorage.list(prefix);
-  return Promise.all(
-    files.map(async (file) => ({
-      path: file.path.slice(prefix.length),
-      size: file.size,
-      modifiedAt: file.modifiedAt,
-      etag: file.etag,
-      hash: await hashFileInfo(file),
-    })),
-  );
+  return mapWithConcurrency(files, MAX_PARALLEL_HASH_READS, async (file) => ({
+    path: file.path.slice(prefix.length),
+    size: file.size,
+    modifiedAt: file.modifiedAt,
+    etag: file.etag,
+    hash: await hashFileInfo(file),
+  }));
 }
 
 export async function diffWorldManifest(

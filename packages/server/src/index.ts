@@ -6,6 +6,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { decode, encode } from '@msgpack/msgpack';
 import { config } from './config.js';
+import { parseByteRange } from './httpRange.js';
+import { ChunkReadLimiter, ChunkServiceBusyError } from './chunkReadLimiter.js';
+import { isChunkCoordinate, parseChunkCoordinates } from './chunkCoordinates.js';
+import { readLimitedBody } from './limitedBody.js';
+import { isDimensionId } from '@violet-map/core';
 import { principalFor, requireRole } from './auth.js';
 import { cleanStoragePath, worldStorage } from './storage.js';
 import { createUser, deleteUser, issueCredential, listUsers, login, updateUser, asCreatableRole } from './users.js';
@@ -16,6 +21,7 @@ import {
   getAssetBundlePayload,
   getTextureAtlasPng,
   readTextureFile,
+  MAX_ATLAS_TEXTURES,
 } from './assets.js';
 import { buildBlockInfo, clearGameDataCaches, readBiomes, readDimensions, writeDataFile } from './gameData.js';
 import { getTopMapManifest, getWorldCapabilities, readTopMapTile, warmTopMapManifests } from './topMap.js';
@@ -28,6 +34,7 @@ import {
   getChunkMetadataBatch,
   getChunksNbtWithMetaBatch,
   getChunkNbtWithMeta,
+  invalidateStoredFile,
   listChunkSourceCoverage,
   listRegions,
   listWorlds,
@@ -40,18 +47,23 @@ import {
 const app = new Hono();
 app.use('*', cors());
 app.use('/api/admin/*', requireRole('ci'));
+app.use('/api/worlds/:world/:dim/*', async (c, next) => {
+  if (!isDimensionId(c.req.param('dim'))) return c.json({ error: 'invalid dimension id' }, 400);
+  await next();
+});
+app.use('/api/admin/worlds/:world/:dim/*', async (c, next) => {
+  if (!isDimensionId(c.req.param('dim'))) return c.json({ error: 'invalid dimension id' }, 400);
+  await next();
+});
 
 const MAX_DIAGNOSTIC_BYTES = 2 * 1024 * 1024;
+const MAX_LOGIN_REQUEST_BYTES = 16 * 1024;
 const MAX_CHUNK_REQUEST_BYTES = 64 * 1024;
 const MAX_ATLAS_REQUEST_BYTES = 128 * 1024;
-const MAX_ATLAS_TEXTURES = 2048;
 const MAX_CONCURRENT_CHUNK_READS = 8;
 const MAX_QUEUED_CHUNK_READS = 64;
 const objectPayloadCache = new WeakMap<object, { body: string; etag: string }>();
-let activeChunkReads = 0;
-const chunkReadWaiters: (() => void)[] = [];
-
-class ChunkServiceBusyError extends Error {}
+const chunkReadLimiter = new ChunkReadLimiter(MAX_CONCURRENT_CHUNK_READS, MAX_QUEUED_CHUNK_READS);
 
 function msgpackBody(value: unknown): ArrayBuffer {
   const bytes = encode(value);
@@ -63,18 +75,6 @@ function publicChunkMeta<T extends { sourcePath?: string; entitySourcePath?: str
 ): Omit<T, 'sourcePath' | 'entitySourcePath'> {
   const { sourcePath: _sourcePath, entitySourcePath: _entitySourcePath, ...rest } = value;
   return rest;
-}
-
-function requestedChunks(raw: unknown): { cx: number; cz: number }[] {
-  const body = raw as { chunks?: { cx: number; cz: number }[] };
-  return Array.isArray(body?.chunks) ? body.chunks.slice(0, 256) : [];
-}
-
-async function limitedBytes(c: Context, maxBytes: number): Promise<Uint8Array | null> {
-  const declared = Number(c.req.header('content-length'));
-  if (Number.isFinite(declared) && declared > maxBytes) return null;
-  const bytes = new Uint8Array(await c.req.arrayBuffer());
-  return bytes.byteLength <= maxBytes ? bytes : null;
 }
 
 function jsonPayload(c: Context, payload: { body: string; etag: string }, cacheControl: string) {
@@ -96,32 +96,28 @@ function cachedObjectPayload(value: object): { body: string; etag: string } {
   return payload;
 }
 
-async function withChunkReadSlot<T>(work: () => Promise<T>): Promise<T> {
-  if (activeChunkReads >= MAX_CONCURRENT_CHUNK_READS) {
-    if (chunkReadWaiters.length >= MAX_QUEUED_CHUNK_READS) throw new ChunkServiceBusyError('chunk service is busy');
-    await new Promise<void>((resolve) => chunkReadWaiters.push(resolve));
-  }
-  activeChunkReads++;
-  try {
-    return await work();
-  } finally {
-    activeChunkReads--;
-    chunkReadWaiters.shift()?.();
-  }
-}
-
 function adminStoragePath(c: { req: { path: string } }, segment: 'files' | 'stat'): string {
   const prefix = `/api/admin/storage/${segment}/`;
   return cleanStoragePath(decodeURIComponent(c.req.path.slice(prefix.length)));
 }
 
 app.post('/api/auth/login', async (c) => {
-  const body = await c.req
-    .json<{ username?: string; password?: string }>()
-    .catch(() => ({}) as { username?: string; password?: string });
-  if (typeof body.username !== 'string' || typeof body.password !== 'string')
+  const bytes = await readLimitedBody(c.req.raw, MAX_LOGIN_REQUEST_BYTES);
+  if (!bytes) return c.json({ error: 'request body too large' }, 413);
+  let body: unknown;
+  try {
+    body = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return c.json({ error: 'invalid JSON' }, 400);
+  }
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    typeof (body as { username?: unknown }).username !== 'string' ||
+    typeof (body as { password?: unknown }).password !== 'string'
+  )
     return c.json({ error: 'username and password are required' }, 400);
-  const credential = await login(body.username, body.password);
+  const credential = await login((body as { username: string }).username, (body as { password: string }).password);
   return credential ? c.json(credential) : c.json({ error: 'invalid credentials' }, 401);
 });
 
@@ -134,7 +130,7 @@ app.get('/api/auth/me', requireRole('viewer'), async (c) => {
 });
 
 app.post('/api/diagnostics', requireRole('viewer'), async (c) => {
-  const bytes = await limitedBytes(c, MAX_DIAGNOSTIC_BYTES);
+  const bytes = await readLimitedBody(c.req.raw, MAX_DIAGNOSTIC_BYTES);
   if (!bytes) {
     return c.json({ error: 'diagnostic payload too large' }, 413);
   }
@@ -201,10 +197,10 @@ app.get('/api/worlds/:world/:dim/top-map/tile/:rx/:rz', async (c) => {
 app.get('/api/worlds/:world/:dim/chunk/:cx/:cz', async (c) => {
   const cx = Number(c.req.param('cx')),
     cz = Number(c.req.param('cz'));
-  if (!Number.isInteger(cx) || !Number.isInteger(cz)) return c.text('bad coords', 400);
+  if (!isChunkCoordinate(cx) || !isChunkCoordinate(cz)) return c.text('bad coords', 400);
   let chunk;
   try {
-    chunk = await withChunkReadSlot(() => getChunkNbtWithMeta(c.req.param('world'), c.req.param('dim'), cx, cz));
+    chunk = await chunkReadLimiter.run(() => getChunkNbtWithMeta(c.req.param('world'), c.req.param('dim'), cx, cz));
   } catch (error) {
     if (error instanceof ChunkServiceBusyError) return c.json({ error: error.message }, 503, { 'retry-after': '1' });
     throw error;
@@ -217,7 +213,7 @@ app.get('/api/worlds/:world/:dim/chunk/:cx/:cz', async (c) => {
 });
 
 app.post('/api/worlds/:world/:dim/chunk-hashes', async (c) => {
-  const bytes = await limitedBytes(c, MAX_CHUNK_REQUEST_BYTES);
+  const bytes = await readLimitedBody(c.req.raw, MAX_CHUNK_REQUEST_BYTES);
   if (!bytes) return c.json({ error: 'request body too large' }, 413);
   let body: unknown;
   try {
@@ -225,10 +221,12 @@ app.post('/api/worlds/:world/:dim/chunk-hashes', async (c) => {
   } catch {
     return c.json({ error: 'invalid msgpack' }, 400);
   }
+  const requested = parseChunkCoordinates(body, 256);
+  if (!requested) return c.json({ error: 'invalid chunk coordinates' }, 400);
   let metas;
   try {
-    metas = await withChunkReadSlot(() =>
-      getChunkMetadataBatch(c.req.param('world'), c.req.param('dim'), requestedChunks(body)),
+    metas = await chunkReadLimiter.run(() =>
+      getChunkMetadataBatch(c.req.param('world'), c.req.param('dim'), requested),
     );
   } catch (error) {
     if (error instanceof ChunkServiceBusyError) return c.json({ error: error.message }, 503, { 'retry-after': '1' });
@@ -241,7 +239,7 @@ app.post('/api/worlds/:world/:dim/chunk-hashes', async (c) => {
 });
 
 app.post('/api/worlds/:world/:dim/chunks', async (c) => {
-  const bytes = await limitedBytes(c, MAX_CHUNK_REQUEST_BYTES);
+  const bytes = await readLimitedBody(c.req.raw, MAX_CHUNK_REQUEST_BYTES);
   if (!bytes) return c.json({ error: 'request body too large' }, 413);
   let body: unknown;
   try {
@@ -249,10 +247,11 @@ app.post('/api/worlds/:world/:dim/chunks', async (c) => {
   } catch {
     return c.json({ error: 'invalid msgpack' }, 400);
   }
-  const requested = requestedChunks(body).slice(0, 128);
+  const requested = parseChunkCoordinates(body, 128);
+  if (!requested) return c.json({ error: 'invalid chunk coordinates' }, 400);
   let chunks;
   try {
-    chunks = await withChunkReadSlot(() =>
+    chunks = await chunkReadLimiter.run(() =>
       getChunksNbtWithMetaBatch(c.req.param('world'), c.req.param('dim'), requested),
     );
   } catch (error) {
@@ -282,7 +281,7 @@ app.post('/api/assets/reload', requireRole('admin'), async (c) => {
 });
 
 app.post('/api/assets/atlas', async (c) => {
-  const bytes = await limitedBytes(c, MAX_ATLAS_REQUEST_BYTES);
+  const bytes = await readLimitedBody(c.req.raw, MAX_ATLAS_REQUEST_BYTES);
   if (!bytes) return c.json({ error: 'request body too large' }, 413);
   let body: { ids?: unknown };
   try {
@@ -428,20 +427,28 @@ app.get('/api/admin/storage/files/*', async (c) => {
   const filePath = adminStoragePath(c, 'files');
   const info = await worldStorage.stat(filePath);
   if (!info) return c.json({ error: 'not found' }, 404);
-  const range = c.req.header('range')?.match(/^bytes=(\d+)-(\d*)$/);
-  const start = range ? Number(range[1]) : 0;
-  const end = range?.[2] ? Math.min(Number(range[2]), info.size - 1) : info.size - 1;
+  const rangeHeader = c.req.header('range');
+  const range = rangeHeader === undefined ? null : parseByteRange(rangeHeader, info.size);
+  if (rangeHeader !== undefined && !range)
+    return c.body(null, 416, { 'content-range': `bytes */${info.size}`, 'accept-ranges': 'bytes' });
   const bytes = range
-    ? await worldStorage.readRange(filePath, start, Math.max(0, end - start + 1))
+    ? await worldStorage.readRange(filePath, range.start, range.end - range.start + 1)
     : await worldStorage.read(filePath);
   if (!bytes) return c.json({ error: 'not found' }, 404);
+  if (range && bytes.byteLength === 0) {
+    const latest = await worldStorage.stat(filePath);
+    return c.body(null, 416, {
+      'content-range': `bytes */${latest?.size ?? info.size}`,
+      'accept-ranges': 'bytes',
+    });
+  }
   const responseBytes = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   return c.body(
     responseBytes,
     range ? 206 : 200,
     range
       ? {
-          'content-range': `bytes ${start}-${start + bytes.byteLength - 1}/${info.size}`,
+          'content-range': `bytes ${range.start}-${range.start + bytes.byteLength - 1}/${info.size}`,
           'accept-ranges': 'bytes',
         }
       : undefined,
@@ -449,11 +456,15 @@ app.get('/api/admin/storage/files/*', async (c) => {
 });
 app.put('/api/admin/storage/files/*', async (c) => {
   const bytes = new Uint8Array(await c.req.arrayBuffer());
-  await worldStorage.write(adminStoragePath(c, 'files'), bytes, c.req.header('content-type') ?? undefined);
+  const filePath = adminStoragePath(c, 'files');
+  await worldStorage.write(filePath, bytes, c.req.header('content-type') ?? undefined);
+  invalidateStoredFile(filePath);
   return c.json({ ok: true });
 });
 app.delete('/api/admin/storage/files/*', async (c) => {
-  await worldStorage.delete(adminStoragePath(c, 'files'));
+  const filePath = adminStoragePath(c, 'files');
+  await worldStorage.delete(filePath);
+  invalidateStoredFile(filePath);
   return c.json({ ok: true });
 });
 
@@ -536,6 +547,6 @@ app.post('/api/admin/worlds/:world/upload', async (c) => {
 console.log(
   `[violet-map] server on :${config.port}\n  worlds: ${config.worldsDir}\n  assets: ${config.assetsDirs.join(', ')}`,
 );
-void buildAssetBundle();
-void warmTopMapManifests();
+void buildAssetBundle().catch((error) => console.error('[violet-map] failed to warm asset bundle', error));
+void warmTopMapManifests().catch((error) => console.error('[violet-map] failed to warm top-map manifests', error));
 serve({ fetch: app.fetch, port: config.port });

@@ -12,16 +12,24 @@ import {
   normalizeId,
 } from '@violet-map/core';
 import { PNG } from 'pngjs';
+import { mapWithConcurrency } from '@violet-map/core';
 import { config } from './config.js';
+import { WorkLimiter } from './workLimiter.js';
 
 type JsonEntry = { rel: string; file: string };
+
+function isMissingPath(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
 
 async function walkJson(dir: string, entries: JsonEntry[] = [], rel = ''): Promise<JsonEntry[]> {
   let dirents;
   try {
     dirents = await fs.readdir(dir, { withFileTypes: true });
-  } catch {
-    return entries;
+  } catch (error) {
+    if (isMissingPath(error)) return entries;
+    throw error;
   }
   for (const e of dirents) {
     const r = rel ? `${rel}/${e.name}` : e.name;
@@ -35,8 +43,9 @@ async function walkAnimationMeta(dir: string, entries: JsonEntry[] = [], rel = '
   let dirents;
   try {
     dirents = await fs.readdir(dir, { withFileTypes: true });
-  } catch {
-    return entries;
+  } catch (error) {
+    if (isMissingPath(error)) return entries;
+    throw error;
   }
   for (const e of dirents) {
     const r = rel ? `${rel}/${e.name}` : e.name;
@@ -71,57 +80,37 @@ function parseAnimationDef(value: unknown): TextureAnimationDef | null {
 let bundleCache: AssetBundle | null = null;
 let bundlePromise: Promise<AssetBundle> | null = null;
 let bundlePayloadCache: { bundle: AssetBundle; body: string; etag: string } | null = null;
+let bundleGeneration = 0;
 const atlasCache = new Map<string, { png: Uint8Array; manifest: TextureAtlasManifest }>();
 const atlasInflight = new Map<string, Promise<{ key: string; manifest: TextureAtlasManifest; png: Uint8Array }>>();
 const texturePathCache = new Map<string, string | null>();
 const textureCache = new Map<string, { bytes: Uint8Array; etag: string }>();
 const textureInflight = new Map<string, Promise<{ bytes: Uint8Array; etag: string } | null>>();
-const MAX_ATLAS_TEXTURES = 2048;
+export const MAX_ATLAS_TEXTURES = 2048;
 const MAX_ATLAS_CACHE_ENTRIES = 8;
 const MAX_TEXTURE_CACHE_BYTES = 32 * 1024 * 1024;
 const MAX_CONCURRENT_ATLAS_BUILDS = 1;
 const MAX_QUEUED_ATLAS_BUILDS = 16;
 const BUNDLED_RENDERER_ASSETS = path.join(path.dirname(fileURLToPath(import.meta.url)), '../data-defaults/assets');
 let textureCacheBytes = 0;
-let activeAtlasBuilds = 0;
-const atlasWaiters: (() => void)[] = [];
-
-async function withAtlasSlot<T>(build: () => Promise<T>): Promise<T> {
-  if (activeAtlasBuilds >= MAX_CONCURRENT_ATLAS_BUILDS) {
-    if (atlasWaiters.length >= MAX_QUEUED_ATLAS_BUILDS) throw new Error('atlas service is busy; retry shortly');
-    await new Promise<void>((resolve) => atlasWaiters.push(resolve));
-  }
-  activeAtlasBuilds++;
-  try {
-    return await build();
-  } finally {
-    activeAtlasBuilds--;
-    atlasWaiters.shift()?.();
-  }
-}
-
-async function mapWithConcurrency<T, R>(items: T[], limit: number, map: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const worker = async () => {
-    while (true) {
-      const index = next++;
-      if (index >= items.length) return;
-      results[index] = await map(items[index]);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
+let textureGeneration = 0;
+const atlasBuildLimiter = new WorkLimiter(
+  MAX_CONCURRENT_ATLAS_BUILDS,
+  MAX_QUEUED_ATLAS_BUILDS,
+  () => new Error('atlas service is busy; retry shortly'),
+);
 
 /** 扫描资源目录，合并所有命名空间的 blockstates 与 models（后加载的目录覆盖先前）。 */
 export async function buildAssetBundle(force = false): Promise<AssetBundle> {
   if (force) {
+    bundleGeneration++;
     bundleCache = null;
+    bundlePromise = null;
     bundlePayloadCache = null;
   }
   if (bundleCache && !force) return bundleCache;
   if (bundlePromise) return bundlePromise;
+  const generation = bundleGeneration;
   const pending = (async () => {
     const bundle: AssetBundle = { blockstates: {}, models: {}, renderers: {}, textureAnimations: {} };
     // Keep renderer registrations available even for deployments that set
@@ -132,8 +121,9 @@ export async function buildAssetBundle(force = false): Promise<AssetBundle> {
       let namespaces: string[] = [];
       try {
         namespaces = (await fs.readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
-      } catch {
-        continue;
+      } catch (error) {
+        if (isMissingPath(error)) continue;
+        throw error;
       }
       for (const ns of namespaces) {
         const bsEntries = await walkJson(path.join(dir, ns, 'blockstates'));
@@ -176,8 +166,10 @@ export async function buildAssetBundle(force = false): Promise<AssetBundle> {
     if (!Object.keys(bundle.renderers!.entities ?? {}).length) delete bundle.renderers!.entities;
     if (!Object.keys(bundle.renderers!).length) delete bundle.renderers;
     if (!Object.keys(bundle.textureAnimations!).length) delete bundle.textureAnimations;
-    bundleCache = bundle;
-    bundlePayloadCache = null;
+    if (generation === bundleGeneration) {
+      bundleCache = bundle;
+      bundlePayloadCache = null;
+    }
     return bundle;
   })();
   bundlePromise = pending;
@@ -199,6 +191,7 @@ export async function getAssetBundlePayload(): Promise<{ body: string; etag: str
 }
 
 export function clearTextureAtlasCache(): void {
+  textureGeneration++;
   atlasCache.clear();
   atlasInflight.clear();
   texturePathCache.clear();
@@ -214,18 +207,19 @@ export async function textureFilePath(id: string): Promise<string | null> {
   const nid = normalizeId(id);
   if (!TEXTURE_ID_RE.test(nid) || nid.includes('..')) return null;
   if (texturePathCache.has(nid)) return texturePathCache.get(nid)!;
+  const generation = textureGeneration;
   const [ns, rest] = nid.split(':');
   for (let i = config.assetsDirs.length - 1; i >= 0; i--) {
     const file = path.join(config.assetsDirs[i], ns, 'textures', `${rest}.png`);
     try {
       await fs.access(file);
-      texturePathCache.set(nid, file);
+      if (generation === textureGeneration) texturePathCache.set(nid, file);
       return file;
-    } catch {
-      /* next */
+    } catch (error) {
+      if (!isMissingPath(error)) throw error;
     }
   }
-  texturePathCache.set(nid, null);
+  if (generation === textureGeneration) texturePathCache.set(nid, null);
   return null;
 }
 
@@ -254,16 +248,18 @@ export async function readTextureFile(id: string): Promise<{ bytes: Uint8Array; 
   }
   const pending = textureInflight.get(nid);
   if (pending) return pending;
+  const generation = textureGeneration;
   const read = (async () => {
     const file = await textureFilePath(nid);
     if (!file) return null;
     try {
       const bytes = new Uint8Array(await fs.readFile(file));
       const value = { bytes, etag: `"${createHash('sha1').update(bytes).digest('hex')}"` };
-      if (bytes.byteLength <= MAX_TEXTURE_CACHE_BYTES) rememberTexture(nid, value);
+      if (generation === textureGeneration && bytes.byteLength <= MAX_TEXTURE_CACHE_BYTES) rememberTexture(nid, value);
       return value;
-    } catch {
-      texturePathCache.delete(nid);
+    } catch (error) {
+      if (!isMissingPath(error)) throw error;
+      if (generation === textureGeneration) texturePathCache.delete(nid);
       return null;
     }
   })();
@@ -333,6 +329,12 @@ function blendTiles(from: TextureTile, to: TextureTile, amount: number): Texture
 }
 
 const MAX_ATLAS_SPRITE_SIZE = 256;
+const MAX_SOURCE_TEXTURE_BYTES = 32 * 1024 * 1024;
+const MAX_SOURCE_TEXTURE_DIMENSION = 4096;
+const MAX_SOURCE_TEXTURE_PIXELS = MAX_SOURCE_TEXTURE_DIMENSION ** 2;
+const MAX_SPRITE_SAMPLED_PIXELS = 2 * 1024 * 1024;
+const MAX_ATLAS_SAMPLED_PIXELS = 32 * 1024 * 1024;
+const MAX_PARALLEL_ATLAS_TEXTURE_READS = 4;
 
 function scaledDimensions(width: number, height: number): [number, number] {
   const scale = Math.min(1, MAX_ATLAS_SPRITE_SIZE / Math.max(width, height));
@@ -363,6 +365,19 @@ async function readTextureFrames(id: string, def?: TextureAnimationDef): Promise
   const texture = await readTextureFile(id);
   if (!texture) return { tiles: [missingTile()], times: [1], interpolate: false };
   try {
+    if (texture.bytes.byteLength > MAX_SOURCE_TEXTURE_BYTES || texture.bytes.byteLength < 24)
+      throw new Error('texture PNG size is outside atlas limits');
+    const header = new DataView(texture.bytes.buffer, texture.bytes.byteOffset, texture.bytes.byteLength);
+    const sourceWidth = header.getUint32(16);
+    const sourceHeight = header.getUint32(20);
+    if (
+      !sourceWidth ||
+      !sourceHeight ||
+      sourceWidth > MAX_SOURCE_TEXTURE_DIMENSION ||
+      sourceHeight > MAX_SOURCE_TEXTURE_DIMENSION ||
+      sourceWidth * sourceHeight > MAX_SOURCE_TEXTURE_PIXELS
+    )
+      throw new Error('texture PNG dimensions exceed atlas limits');
     const png = PNG.sync.read(Buffer.from(texture.bytes.buffer, texture.bytes.byteOffset, texture.bytes.byteLength));
     if (!def) {
       // Static entity skins (signs are 64x32, chests are 64x64) and higher
@@ -376,22 +391,24 @@ async function readTextureFrames(id: string, def?: TextureAnimationDef): Promise
     const declared: { index: number; time?: number }[] = def.frames?.length
       ? def.frames
       : Array.from({ length: available }, (_, index) => ({ index }));
-    // A malformed sidecar must not turn an atlas request into an unbounded
-    // allocation. Vanilla animations are far below this limit.
-    const frames = declared.slice(0, 512).map((entry) => ({
+    const [sampledWidth, sampledHeight] = scaledDimensions(frameSize, frameSize);
+    const maxSampledFrames = Math.max(1, Math.floor(MAX_SPRITE_SAMPLED_PIXELS / (sampledWidth * sampledHeight)));
+    const frames = declared.slice(0, Math.min(512, maxSampledFrames)).map((entry) => ({
       index: Math.min(available - 1, Math.max(0, entry.index)),
       time: Math.max(1, Math.min(255, entry.time ?? def?.frametime ?? 1)),
     }));
     const tiles = frames.map(({ index }) => sampleTile(png, 0, index * frameSize, frameSize, frameSize));
     if (def.interpolate && tiles.length > 1) {
+      if (frames.reduce((total, frame) => total + frame.time, 0) > Math.min(4096, maxSampledFrames))
+        return { tiles, times: frames.map((frame) => frame.time), interpolate: false };
       // Minecraft's interpolated sprites blend within a frame duration. Bake
       // those 20-tick subframes into the atlas so the normal frame selector
       // remains compact and every WebGL target gets the same result.
       const interpolated: TextureTile[] = [];
-      for (let i = 0; i < tiles.length && interpolated.length < 4096; i++) {
+      for (let i = 0; i < tiles.length; i++) {
         const duration = frames[i].time;
         const next = tiles[(i + 1) % tiles.length];
-        for (let tick = 0; tick < duration && interpolated.length < 4096; tick++) {
+        for (let tick = 0; tick < duration; tick++) {
           interpolated.push(blendTiles(tiles[i], next, tick / duration));
         }
       }
@@ -487,11 +504,16 @@ async function buildTextureAtlasInner(
   normalized: string[],
 ): Promise<{ key: string; manifest: TextureAtlasManifest; png: Uint8Array }> {
   const textureAnimations = (await buildAssetBundle()).textureAnimations;
-  const sprites = await mapWithConcurrency(normalized, 32, async (id) =>
-    id === '__missing__'
-      ? { tiles: [missingTile()], times: [1], interpolate: false }
-      : readTextureFrames(id, textureAnimations?.[id]),
-  );
+  let sampledPixels = 0;
+  const sprites = await mapWithConcurrency(normalized, MAX_PARALLEL_ATLAS_TEXTURE_READS, async (id) => {
+    const sprite =
+      id === '__missing__'
+        ? { tiles: [missingTile()], times: [1], interpolate: false }
+        : await readTextureFrames(id, textureAnimations?.[id]);
+    sampledPixels += sprite.tiles.reduce((total, tile) => total + tile.width * tile.height, 0);
+    if (sampledPixels > MAX_ATLAS_SAMPLED_PIXELS) throw new Error('texture atlas source pixels exceed budget');
+    return sprite;
+  });
   const hash = createHash('sha1').update(JSON.stringify(normalized));
   for (const sprite of sprites) {
     hash.update(JSON.stringify({ times: sprite.times, interpolate: sprite.interpolate }));
@@ -569,7 +591,7 @@ export async function buildTextureAtlas(
   const requestKey = normalized.join('\n');
   const pending = atlasInflight.get(requestKey);
   if (pending) return pending;
-  const build = withAtlasSlot(() => buildTextureAtlasInner(normalized));
+  const build = atlasBuildLimiter.run(() => buildTextureAtlasInner(normalized));
   atlasInflight.set(requestKey, build);
   try {
     return await build;
