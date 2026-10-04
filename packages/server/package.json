@@ -20,7 +20,8 @@
     "pako": "^3.0.0",
     "pg": "^8.22.0",
     "pngjs": "^7.0.0",
-    "prismarine-nbt": "^2.8.0"
+    "prismarine-nbt": "^2.8.0",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/node": "^26.1.0",

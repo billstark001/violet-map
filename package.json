@@ -13,6 +13,7 @@
     "start:light": "pnpm --filter=@violet-map/server --filter=@violet-map/web --parallel -r run start",
     "start:full": "pnpm --filter=@violet-map/server --filter=@violet-map/web --filter=@violet-map/admin --parallel -r run start",
     "typecheck": "pnpm -r run typecheck",
+    "test": "tsx --test packages/assets/test/*.test.ts packages/core/test/*.test.ts packages/server/test/*.test.ts packages/web/test/*.test.ts",
     "lint": "oxlint --deny-warnings packages",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
@@ -21,6 +22,7 @@
   "devDependencies": {
     "oxfmt": "^0.71.0",
     "oxlint": "^1.86.0",
+    "tsx": "^4.23.0",
     "typescript": "^6.0.3"
   },
   "packageManager": "pnpm@12"

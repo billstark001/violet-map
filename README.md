@@ -33,6 +33,7 @@ pnpm dev:full
 pnpm typecheck
 pnpm lint
 pnpm format:check
+pnpm test
 pnpm build
 ```
 
@@ -124,7 +125,7 @@ The server exposes its shared storage adapter under protected `/api/admin/storag
 
 ## CI/CD
 
-`.github/workflows/ci.yml` installs immutable dependencies, runs the workspace typecheck, and builds all packages on pushes and pull requests.
+`.github/workflows/ci.yml` installs immutable dependencies, runs lint, formatting, type checks, and focused Node tests, then builds all packages on pushes and pull requests. The tests cover storage consistency, region records, top-map mesh edges, and bounded server reads without launching a browser.
 
 `.github/workflows/world-sync.yml` is manually dispatched. Configure repository secrets for either destination:
 
@@ -136,24 +137,26 @@ The workflow accepts the checked-in archive directory, target world name, destin
 ## Configuration
 
 Non-sensitive values can be set as environment variables or in `violet-map.yaml` / `violet-map.yml`; use `VIOLET_MAP_CONFIG` to select another file.
+The file supports standard nested YAML maps and lists. A malformed file stops startup with its path in the error; environment variables take precedence.
+Relative paths in YAML resolve from the YAML file's directory; paths in environment variables resolve from the process working directory.
 
-| Variable                                             | Default                 | Description                                                         |
-| ---------------------------------------------------- | ----------------------- | ------------------------------------------------------------------- |
-| `PORT`                                               | `3300`                  | API port.                                                           |
-| `WORLDS_DIR`                                         | `data/worlds`           | Local world directory.                                              |
-| `DATA_DIR`                                           | `data`                  | Runtime data directory, including default PGlite data.              |
-| `DATABASE_URL`                                       | unset                   | PostgreSQL connection string; enables PostgreSQL instead of PGlite. |
-| `DATABASE_DIR`                                       | `DATA_DIR/users.pglite` | PGlite data directory override.                                     |
-| `ROOT_USERNAME`, `ROOT_PASSWORD`                     | unset                   | Define the optional virtual root account; both are required.        |
-| `WORLD_STORAGE`                                      | `local`                 | `local` or `s3`.                                                    |
-| `S3_BUCKET`, `S3_ENDPOINT`, `S3_REGION`, `S3_PREFIX` | —                       | World-storage S3 configuration.                                     |
-| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`           | —                       | S3 credentials.                                                     |
-| `S3_FORCE_PATH_STYLE`                                | `true`                  | Set false for virtual-hosted-style S3.                              |
-| `ASSETS_DIRS`                                        | `data/assets`           | Comma-separated resource pack directories.                          |
-| `MC_VERSION`                                         | `1.21.4`                | Default version for generated data/minimal `level.dat`.             |
-| `MC_DATA_VERSION`                                    | `MC_VERSION`            | `minecraft-data` version override.                                  |
-| `REGION_CACHE_BYTES`                                 | `268435456`             | Full region cache cap.                                              |
-| `CHUNK_NBT_CACHE_BYTES`                              | `134217728`             | NBT cache cap.                                                      |
+| Variable                                             | Default                         | Description                                                                         |
+| ---------------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------- |
+| `PORT`                                               | `3300`                          | API port.                                                                           |
+| `WORLDS_DIR`                                         | `data/worlds`                   | Local world directory.                                                              |
+| `DATA_DIR`                                           | `data`                          | Runtime data directory, including default PGlite data.                              |
+| `DATABASE_URL`                                       | unset                           | PostgreSQL connection string; enables PostgreSQL instead of PGlite.                 |
+| `DATABASE_DIR`                                       | `DATA_DIR/users.pglite`         | PGlite data directory override.                                                     |
+| `ROOT_USERNAME`, `ROOT_PASSWORD`                     | unset                           | Define the optional virtual root account; both are required.                        |
+| `WORLD_STORAGE`                                      | `local`                         | `local` or `s3`.                                                                    |
+| `S3_BUCKET`, `S3_ENDPOINT`, `S3_REGION`, `S3_PREFIX` | —                               | World-storage S3 configuration.                                                     |
+| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`           | —                               | S3 credentials.                                                                     |
+| `S3_FORCE_PATH_STYLE`                                | `true`                          | Set false for virtual-hosted-style S3.                                              |
+| `ASSETS_DIRS`                                        | bundled defaults, `data/assets` | Comma-separated resource pack directories; later directories override earlier ones. |
+| `MC_VERSION`                                         | `1.21.4`                        | Default version for generated data/minimal `level.dat`.                             |
+| `MC_DATA_VERSION`                                    | `MC_VERSION`                    | `minecraft-data` version override.                                                  |
+| `REGION_CACHE_BYTES`                                 | `268435456`                     | Full region cache cap.                                                              |
+| `CHUNK_NBT_CACHE_BYTES`                              | `134217728`                     | NBT cache cap.                                                                      |
 
 Example:
 
