@@ -17,6 +17,8 @@ import {
   meshSection,
   parseChunkColumn,
   resolveBiomeColors,
+  isDimensionId,
+  forEachConcurrent,
   type AssetBundle,
   type BiomeMap,
   type BlockModelJson,
@@ -82,9 +84,15 @@ export const fakeAtlas = new Proxy(Object.create(null), {
 }) as AtlasIndex;
 
 const REGION_RE = /^r\.(-?\d+)\.(-?\d+)\.mca$/;
+const MAX_PARALLEL_ASSET_READS = 16;
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const REPO_ROOT = path.resolve(PACKAGE_ROOT, '../..');
 type BiomeColorMap = Record<string, ResolvedBiomeColors>;
+
+function isMissingPath(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
 
 export function argsReader(args: string[]): ArgReader {
   return {
@@ -123,7 +131,9 @@ export function numberArg(value: string | undefined, fallback: number, min = -In
 }
 
 export function parseDim(value = 'minecraft:overworld'): string {
-  return value.includes(':') ? value : `minecraft:${value}`;
+  const id = value.includes(':') ? value : `minecraft:${value}`;
+  if (!isDimensionId(id)) throw new Error(`invalid dimension id: ${value}`);
+  return id;
 }
 
 export function encodeBytes(bytes: Uint8Array): string {
@@ -269,8 +279,9 @@ async function readTextureAverageColors(assetDirs: string[]): Promise<Map<string
     let namespaces: string[] = [];
     try {
       namespaces = (await fs.readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
-    } catch {
-      continue;
+    } catch (error) {
+      if (isMissingPath(error)) continue;
+      throw error;
     }
     for (const ns of namespaces) {
       await readPngTree(path.join(dir, ns, 'textures'), async (rel, file) => {
@@ -282,24 +293,39 @@ async function readTextureAverageColors(assetDirs: string[]): Promise<Map<string
   return colors;
 }
 
-async function readPngTree(dir: string, onFile: (rel: string, file: string) => Promise<void>, rel = ''): Promise<void> {
+interface AssetFile {
+  rel: string;
+  file: string;
+}
+
+async function collectMatchingFiles(dir: string, suffix: string, out: AssetFile[], rel = ''): Promise<void> {
   let entries;
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
+  } catch (error) {
+    if (isMissingPath(error)) return;
+    throw error;
   }
-  await Promise.all(
-    entries.map(async (entry) => {
-      const childRel = rel ? `${rel}/${entry.name}` : entry.name;
-      const file = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await readPngTree(file, onFile, childRel);
-      } else if (entry.isFile() && entry.name.endsWith('.png')) {
-        await onFile(childRel, file);
-      }
-    }),
-  );
+  for (const entry of entries) {
+    const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+    const file = path.join(dir, entry.name);
+    if (entry.isDirectory()) await collectMatchingFiles(file, suffix, out, childRel);
+    else if (entry.isFile() && entry.name.endsWith(suffix)) out.push({ rel: childRel, file });
+  }
+}
+
+async function visitMatchingFiles(
+  dir: string,
+  suffix: string,
+  onFile: (rel: string, file: string) => Promise<void>,
+): Promise<void> {
+  const files: AssetFile[] = [];
+  await collectMatchingFiles(dir, suffix, files);
+  await forEachConcurrent(files, MAX_PARALLEL_ASSET_READS, (item) => onFile(item.rel, item.file));
+}
+
+async function readPngTree(dir: string, onFile: (rel: string, file: string) => Promise<void>): Promise<void> {
+  await visitMatchingFiles(dir, '.png', onFile);
 }
 
 function dataFileCandidates(name: string, explicit?: string): string[] {
@@ -316,10 +342,17 @@ function dataFileCandidates(name: string, explicit?: string): string[] {
 
 async function readJsonFirst<T>(candidates: string[]): Promise<T | null> {
   for (const file of candidates) {
+    let text: string;
     try {
-      return JSON.parse(await fs.readFile(file, 'utf8')) as T;
-    } catch {
-      // Try the next candidate.
+      text = await fs.readFile(file, 'utf8');
+    } catch (error) {
+      if (isMissingPath(error)) continue;
+      throw error;
+    }
+    try {
+      return JSON.parse(text) as T;
+    } catch (error) {
+      throw new Error(`invalid JSON in ${file}`, { cause: error });
     }
   }
   return null;
@@ -328,12 +361,19 @@ async function readJsonFirst<T>(candidates: string[]): Promise<T | null> {
 async function readColormapFromAssets(assetDirs: string[], name: string): Promise<Uint8Array | null> {
   for (const dir of assetDirs.map((d) => resolvePath(d))) {
     const file = path.join(dir, 'minecraft/textures/colormap', `${name}.png`);
+    let bytes: Buffer;
     try {
-      const png = PNG.sync.read(await fs.readFile(file));
+      bytes = await fs.readFile(file);
+    } catch (error) {
+      if (isMissingPath(error)) continue;
+      throw error;
+    }
+    try {
+      const png = PNG.sync.read(bytes);
       if (png.width !== 256 || png.height !== 256) continue;
       return Uint8Array.from(png.data);
     } catch {
-      // Try the next asset directory.
+      // A malformed optional colormap does not block the next asset directory.
     }
   }
   return null;
@@ -513,8 +553,9 @@ export async function loadAssetBundleFromDirs(dirs: string[]): Promise<AssetBund
     let namespaces: string[] = [];
     try {
       namespaces = (await fs.readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
-    } catch {
-      continue;
+    } catch (error) {
+      if (isMissingPath(error)) continue;
+      throw error;
     }
     for (const ns of namespaces) {
       await readJsonTree(path.join(dir, ns, 'blockstates'), (rel, value) => {
@@ -528,32 +569,25 @@ export async function loadAssetBundleFromDirs(dirs: string[]): Promise<AssetBund
   return bundle;
 }
 
-async function readJsonTree(dir: string, onFile: (rel: string, value: unknown) => void, rel = ''): Promise<void> {
-  let entries;
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  await Promise.all(
-    entries.map(async (entry) => {
-      const childRel = rel ? `${rel}/${entry.name}` : entry.name;
-      const file = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await readJsonTree(file, onFile, childRel);
-      } else if (entry.isFile() && entry.name.endsWith('.json')) {
-        try {
-          onFile(childRel, JSON.parse(await fs.readFile(file, 'utf8')));
-        } catch {
-          // Skip malformed resource files so one bad model does not block profiling.
-        }
-      }
-    }),
-  );
+async function readJsonTree(dir: string, onFile: (rel: string, value: unknown) => void): Promise<void> {
+  await visitMatchingFiles(dir, '.json', async (rel, file) => {
+    let text: string;
+    try {
+      text = await fs.readFile(file, 'utf8');
+    } catch (error) {
+      if (isMissingPath(error)) return;
+      throw error;
+    }
+    try {
+      onFile(rel, JSON.parse(text));
+    } catch {
+      // Skip malformed resource files so one bad model does not block profiling.
+    }
+  });
 }
 
-export async function loadRegionColumns(file: string): Promise<Map<string, ColumnEntry>> {
-  const bytes = new Uint8Array(await fs.readFile(resolvePath(file)));
+export async function loadRegionColumns(file: string, sourceBytes?: Uint8Array): Promise<Map<string, ColumnEntry>> {
+  const bytes = sourceBytes ?? new Uint8Array(await fs.readFile(resolvePath(file)));
   const entries = new Map<string, ColumnEntry>();
   for (const chunk of iterateRegionChunks(bytes)) {
     const col = parseChunkColumn(parseNbt(chunk.data));
@@ -703,8 +737,9 @@ export async function findRegionFiles(worldDir: string, dim: string): Promise<Re
     let entries;
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      continue;
+    } catch (error) {
+      if (isMissingPath(error)) continue;
+      throw error;
     }
     for (const entry of entries) {
       if (!entry.isFile()) continue;
@@ -740,7 +775,8 @@ export async function pathExists(file: string): Promise<boolean> {
   try {
     await fs.access(file);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (isMissingPath(error)) return false;
+    throw error;
   }
 }

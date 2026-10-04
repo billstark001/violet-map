@@ -82,7 +82,7 @@ function parseOptions(args: string[]): BakeOptions {
   const world = args.find((arg) => !arg.startsWith('-'));
   if (!world) throw new Error(`missing world path\n${usage()}`);
   const resolvedWorld = resolvePath(world);
-  return {
+  const options: BakeOptions = {
     world: resolvedWorld,
     dim: parseDim(reader.get('--dim', 'minecraft:overworld')),
     out: resolvePath(reader.get('--out') ?? defaultTopMapOut(resolvedWorld)),
@@ -99,6 +99,15 @@ function parseOptions(args: string[]): BakeOptions {
     approach: parseApproach(reader.get('--approach')),
     lightMode: parseLightMode(reader.get('--light-mode')),
   };
+  for (const [label, stride] of [
+    ['sample', options.sampleStride],
+    ['color', options.colorStride],
+    ['light', options.lightStride],
+  ] as const) {
+    if (TOP_MAP_TILE_BLOCKS % stride !== 0)
+      throw new Error(`${label} stride must evenly divide ${TOP_MAP_TILE_BLOCKS}: ${stride}`);
+  }
+  return options;
 }
 
 function dimOutDir(out: string, dim: string): string {
@@ -111,19 +120,35 @@ function tileFile(out: string, dim: string, rx: number, rz: number): string {
 
 async function readManifest(out: string, world: string): Promise<TopMapManifest> {
   const file = path.join(out, 'manifest.json');
+  let text: string;
   try {
-    const manifest = JSON.parse(await fs.readFile(file, 'utf8')) as TopMapManifest;
-    if (manifest.schema === TOP_MAP_SCHEMA && manifest.dimensions && typeof manifest.dimensions === 'object')
-      return manifest;
-  } catch {
-    // Create a fresh manifest below.
+    text = await fs.readFile(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+    return {
+      schema: TOP_MAP_SCHEMA,
+      generatedAt: new Date().toISOString(),
+      world: path.basename(world),
+      dimensions: {},
+    };
   }
-  return {
-    schema: TOP_MAP_SCHEMA,
-    generatedAt: new Date().toISOString(),
-    world: path.basename(world),
-    dimensions: {},
-  };
+  let manifest: TopMapManifest;
+  try {
+    manifest = JSON.parse(text) as TopMapManifest;
+  } catch (error) {
+    throw new Error(`invalid top-map manifest: ${file}`, { cause: error });
+  }
+  if (
+    !manifest ||
+    typeof manifest !== 'object' ||
+    manifest.schema !== TOP_MAP_SCHEMA ||
+    !manifest.dimensions ||
+    typeof manifest.dimensions !== 'object' ||
+    Array.isArray(manifest.dimensions)
+  )
+    throw new Error(`unsupported top-map manifest: ${file}`);
+  if (manifest.world !== path.basename(world)) throw new Error(`top-map manifest belongs to another world: ${file}`);
+  return manifest;
 }
 
 async function writeManifest(out: string, manifest: TopMapManifest) {
@@ -206,15 +231,6 @@ async function bakeTopMapRegion(
   previousSource: RegionSourceEntry | undefined,
   force: boolean,
 ): Promise<BakeRegionResult> {
-  if (TOP_MAP_TILE_BLOCKS % opts.sampleStride !== 0) {
-    throw new Error(`sample stride must evenly divide ${TOP_MAP_TILE_BLOCKS}: ${opts.sampleStride}`);
-  }
-  if (TOP_MAP_TILE_BLOCKS % opts.colorStride !== 0) {
-    throw new Error(`color stride must evenly divide ${TOP_MAP_TILE_BLOCKS}: ${opts.colorStride}`);
-  }
-  if (TOP_MAP_TILE_BLOCKS % opts.lightStride !== 0) {
-    throw new Error(`light stride must evenly divide ${TOP_MAP_TILE_BLOCKS}: ${opts.lightStride}`);
-  }
   const sourceBytes = new Uint8Array(await fs.readFile(region.file));
   const hash = sha1Bytes(sourceBytes);
   const outFile = tileFile(opts.out, opts.dim, region.rx, region.rz);
@@ -246,7 +262,7 @@ async function bakeTopMapRegion(
       // Missing tile is rebuilt below even if the source hash is unchanged.
     }
   }
-  const entries = await loadRegionColumns(region.file);
+  const entries = await loadRegionColumns(region.file, sourceBytes);
   if (!entries.size) {
     await fs.rm(outFile, { force: true });
     return {

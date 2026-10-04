@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
-import { createWriteStream, existsSync } from 'node:fs';
-import { cp as copy, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream, createWriteStream, existsSync } from 'node:fs';
+import { cp as copy, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import * as childProcess from 'node:child_process';
@@ -14,7 +14,7 @@ const CACHE_DIR = resolve(process.env.HOME || process.env.USERPROFILE || '/tmp',
 
 interface VersionManifest {
   latest: { release: string; snapshot: string };
-  versions: { id: string; type: string; url: string; time: string }[];
+  versions: { id: string; type: string; url: string; time: string; releaseTime?: string }[];
 }
 
 interface VersionInfo {
@@ -30,8 +30,24 @@ async function fetchJson<T>(url: string): Promise<T> {
 
 async function sha1File(file: string): Promise<string> {
   const hash = createHash('sha1');
-  hash.update(await readFile(file));
+  for await (const chunk of createReadStream(file)) hash.update(chunk);
   return hash.digest('hex');
+}
+
+async function readCachedJson<T>(file: string): Promise<T | null> {
+  let contents: string;
+  try {
+    contents = await readFile(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  try {
+    return JSON.parse(contents) as T;
+  } catch (error) {
+    if (error instanceof SyntaxError) return null;
+    throw error;
+  }
 }
 
 async function downloadFile(url: string, dest: string, expectedSha1?: string, dryRun = false): Promise<void> {
@@ -42,7 +58,6 @@ async function downloadFile(url: string, dest: string, expectedSha1?: string, dr
       return;
     }
     console.warn(`  Cache sha1 mismatch; redownloading: ${dest}`);
-    if (!dryRun) await rm(dest, { force: true });
   }
   if (dryRun) {
     console.log(`  dry-run download: ${url} -> ${dest}`);
@@ -52,25 +67,29 @@ async function downloadFile(url: string, dest: string, expectedSha1?: string, dr
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`);
   if (!res.body) throw new Error(`empty response body: ${url}`);
-  await pipeline(Readable.fromWeb(res.body as never), createWriteStream(dest));
-  if (expectedSha1) {
-    const actual = await sha1File(dest);
-    if (actual !== expectedSha1)
-      throw new Error(`sha1 verification failed: ${dest} expected=${expectedSha1} actual=${actual}`);
+  const temporary = `${dest}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await pipeline(Readable.fromWeb(res.body as never), createWriteStream(temporary));
+    if (expectedSha1) {
+      const actual = await sha1File(temporary);
+      if (actual !== expectedSha1)
+        throw new Error(`sha1 verification failed: ${dest} expected=${expectedSha1} actual=${actual}`);
+    }
+    await rename(temporary, dest);
+  } finally {
+    await rm(temporary, { force: true });
   }
 }
 
 async function getManifest(): Promise<VersionManifest> {
   const cacheFile = join(CACHE_DIR, 'version_manifest_v2.json');
-  try {
-    return JSON.parse(await readFile(cacheFile, 'utf8')) as VersionManifest;
-  } catch {
-    console.log('Fetching version manifest...');
-    const manifest = await fetchJson<VersionManifest>(MANIFEST_URL);
-    await mkdir(CACHE_DIR, { recursive: true });
-    await writeFile(cacheFile, JSON.stringify(manifest));
-    return manifest;
-  }
+  const cached = await readCachedJson<VersionManifest>(cacheFile);
+  if (cached) return cached;
+  console.log('Fetching version manifest...');
+  const manifest = await fetchJson<VersionManifest>(MANIFEST_URL);
+  await mkdir(CACHE_DIR, { recursive: true });
+  await writeFile(cacheFile, JSON.stringify(manifest));
+  return manifest;
 }
 
 async function getVersionInfo(versionId: string): Promise<VersionInfo> {
@@ -78,20 +97,18 @@ async function getVersionInfo(versionId: string): Promise<VersionInfo> {
   const entry = manifest.versions.find((v) => v.id === versionId);
   if (!entry) throw new Error(`unknown version: ${versionId}`);
   const cacheFile = join(CACHE_DIR, `${versionId}.json`);
-  try {
-    return JSON.parse(await readFile(cacheFile, 'utf8')) as VersionInfo;
-  } catch {
-    console.log(`Fetching version metadata: ${versionId}`);
-    const info = await fetchJson<VersionInfo>(entry.url);
-    await writeFile(cacheFile, JSON.stringify(info));
-    return info;
-  }
+  const cached = await readCachedJson<VersionInfo>(cacheFile);
+  if (cached) return cached;
+  console.log(`Fetching version metadata: ${versionId}`);
+  const info = await fetchJson<VersionInfo>(entry.url);
+  await writeFile(cacheFile, JSON.stringify(info));
+  return info;
 }
 
 async function listVersions(includeSnapshots: boolean) {
   const manifest = await getManifest();
   const versions = includeSnapshots ? manifest.versions : manifest.versions.filter((v) => v.type === 'release');
-  for (const v of versions) console.log(`${v.id}\t${v.type}\t${v.time.substring(0, 10)}`);
+  for (const v of versions) console.log(`${v.id}\t${v.type}\t${(v.releaseTime ?? v.time).substring(0, 10)}`);
   console.log(`\n${versions.length} versions`);
 }
 
@@ -111,26 +128,34 @@ async function extractAssets(versionId: string, outputDir: string, dryRun = fals
   await mkdir(assetsOutput, { recursive: true });
   await rm(tmpOutput, { recursive: true, force: true });
   await mkdir(tmpOutput, { recursive: true });
-
   try {
-    await execFile('unzip', ['-oq', jarPath, 'assets/minecraft/*', '-d', tmpOutput], { maxBuffer: 50 * 1024 * 1024 });
-  } catch (e) {
-    throw new Error(`unzip failed: ${(e as Error).message}`);
-  }
+    try {
+      await execFile('unzip', ['-oq', jarPath, 'assets/minecraft/*', '-d', tmpOutput], { maxBuffer: 50 * 1024 * 1024 });
+    } catch (e) {
+      throw new Error(`unzip failed: ${(e as Error).message}`);
+    }
 
-  const srcDir = join(tmpOutput, 'assets', 'minecraft');
-  if (!existsSync(srcDir)) throw new Error(`assets/minecraft was not found in jar: ${jarPath}`);
-  await rm(join(assetsOutput, 'minecraft'), { recursive: true, force: true });
-  await copy(srcDir, join(assetsOutput, 'minecraft'), { recursive: true, force: true });
-  await rm(tmpOutput, { recursive: true, force: true });
+    const srcDir = join(tmpOutput, 'assets', 'minecraft');
+    if (!existsSync(srcDir)) throw new Error(`assets/minecraft was not found in jar: ${jarPath}`);
+    await rm(join(assetsOutput, 'minecraft'), { recursive: true, force: true });
+    await copy(srcDir, join(assetsOutput, 'minecraft'), { recursive: true, force: true });
+  } finally {
+    await rm(tmpOutput, { recursive: true, force: true });
+  }
 
   console.log(`Assets extracted to: ${assetsOutput}`);
 }
 
 async function extractAllAssets(minVersion: string, outputDir: string, includeSnapshots: boolean, dryRun = false) {
   const manifest = await getManifest();
+  const minimum = manifest.versions.find((version) => version.id === minVersion);
+  if (!minimum) throw new Error(`unknown version: ${minVersion}`);
+  const minimumTime = Date.parse(minimum.releaseTime ?? minimum.time);
+  if (!Number.isFinite(minimumTime)) throw new Error(`invalid version time: ${minVersion}`);
   const versions = manifest.versions.filter(
-    (v) => (includeSnapshots || v.type === 'release') && compareVersions(v.id, minVersion) >= 0,
+    (version) =>
+      (includeSnapshots || version.type === 'release') &&
+      Date.parse(version.releaseTime ?? version.time) >= minimumTime,
   );
   console.log(`Extracting ${versions.length} versions >= ${minVersion}`);
   for (const v of versions) {
@@ -141,17 +166,6 @@ async function extractAllAssets(minVersion: string, outputDir: string, includeSn
       console.error(`  Failed: ${(e as Error).message}`);
     }
   }
-}
-
-function compareVersions(a: string, b: string): number {
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const na = pa[i] ?? 0,
-      nb = pb[i] ?? 0;
-    if (na !== nb) return na - nb;
-  }
-  return 0;
 }
 
 async function generateBiomes(versionId: string, outputFile: string) {
