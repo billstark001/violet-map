@@ -1,6 +1,7 @@
 {
   "name": "violet-map",
   "private": true,
+  "packageManager": "pnpm@12",
   "workspaces": ["packages/*"],
   "scripts": {
     "dev": "pnpm run dev:light",
