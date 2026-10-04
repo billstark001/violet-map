@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { candidateRegionCoords, type RegionCoordinate } from './tileCandidates';
 import {
   buildTopMapMesh,
   prepareTopMapTile,
@@ -22,6 +23,7 @@ const LOD2_ZOOM_THRESHOLD = 2.25;
 const FREE_VIEW_LOD2_DISTANCE_BLOCKS = 32 * 16;
 const FREE_VIEW_LOD4_DISTANCE_BLOCKS = 128 * 16;
 const FAILED_TILE_RETRY_MS = 12000;
+const FAILED_MANIFEST_RETRY_MS = 5000;
 const UPDATE_INTERVAL_MS = 100;
 const FULL_COVERAGE_KEY = '*';
 const TILE_HALF_DIAGONAL_BLOCKS = (TOP_MAP_TILE_BLOCKS * Math.SQRT2) / 2;
@@ -196,7 +198,8 @@ export class TopMapManager {
   private topMapEnabled = false;
   private manifestLoaded = false;
   private manifestSeq = 0;
-  private regionKeys = new Set<string>();
+  private manifestRetryAt = 0;
+  private regions = new Map<string, RegionCoordinate>();
   private failedTiles = new Map<string, number>();
   private wantedTiles = new Set<string>();
   private latestMode: TopMapUpdateOptions['mode'] = 'top';
@@ -225,9 +228,10 @@ export class TopMapManager {
     this.dimension = dimension;
     this.topMapEnabled = topMapEnabled;
     this.manifestLoaded = !topMapEnabled;
+    this.manifestRetryAt = 0;
     this.manifestSeq++;
     this.abortPendingLoads();
-    this.regionKeys.clear();
+    this.regions.clear();
     this.group.visible = topMapEnabled;
     this.pendingTiles.clear();
     this.failedTiles.clear();
@@ -241,13 +245,16 @@ export class TopMapManager {
   }
 
   update(camera: THREE.Camera, now: number, options: TopMapUpdateOptions) {
-    const topMapAllowed = this.topMapEnabled && (!this.manifestLoaded || this.regionKeys.size > 0);
+    if (this.disposed) return;
+    const topMapAllowed = this.topMapEnabled && (!this.manifestLoaded || this.regions.size > 0);
     if (!topMapAllowed || !this.world) {
       this.group.visible = false;
       return;
     }
     if (!this.manifestLoaded) {
       this.group.visible = false;
+      if (!this.manifestAbort && now >= this.manifestRetryAt)
+        void this.loadManifest(this.world, this.dimension, this.manifestSeq);
       return;
     }
     if (now - this.lastUpdateAt < UPDATE_INTERVAL_MS) return;
@@ -275,23 +282,19 @@ export class TopMapManager {
         ? Math.max(0, options.maxDistanceBlocks)
         : Infinity;
 
-    for (let rz = minRz; rz <= maxRz; rz++) {
-      for (let rx = minRx; rx <= maxRx; rx++) {
-        const key = `${rx},${rz}`;
-        if (!this.regionKeys.has(key)) continue;
-        const centerX = rx * TOP_MAP_TILE_BLOCKS + TOP_MAP_TILE_BLOCKS / 2;
-        const centerZ = rz * TOP_MAP_TILE_BLOCKS + TOP_MAP_TILE_BLOCKS / 2;
-        const distance = Math.hypot(centerX - camera.position.x, centerZ - camera.position.z);
-        // Keep the complete tile inside the cutoff. This avoids a coarse tile
-        // leaking geometry beyond the requested chunk-distance clamp.
-        if (distance + TILE_HALF_DIAGONAL_BLOCKS > maxDistance) continue;
-        candidates.push({
-          rx,
-          rz,
-          key,
-          distance,
-        });
-      }
+    for (const { rx, rz, key } of candidateRegionCoords(this.regions, { minRx, maxRx, minRz, maxRz })) {
+      const centerX = rx * TOP_MAP_TILE_BLOCKS + TOP_MAP_TILE_BLOCKS / 2;
+      const centerZ = rz * TOP_MAP_TILE_BLOCKS + TOP_MAP_TILE_BLOCKS / 2;
+      const distance = Math.hypot(centerX - camera.position.x, centerZ - camera.position.z);
+      // Keep the complete tile inside the cutoff. This avoids a coarse tile
+      // leaking geometry beyond the requested chunk-distance clamp.
+      if (distance + TILE_HALF_DIAGONAL_BLOCKS > maxDistance) continue;
+      candidates.push({
+        rx,
+        rz,
+        key,
+        distance,
+      });
     }
     candidates.sort((a, b) => a.distance - b.distance);
     if (candidates.length > Math.min(MAX_WANTED_TILES, this.residentLimit)) {
@@ -377,7 +380,7 @@ export class TopMapManager {
       dimension: this.dimension,
       enabled: this.topMapEnabled,
       manifestLoaded: this.manifestLoaded,
-      availableTiles: this.regionKeys.size,
+      availableTiles: this.regions.size,
       pendingTiles: [...this.pendingTiles].sort(),
       wantedTiles: [...this.wantedTiles].sort(),
       residentTiles: [...this.tiles.values()]
@@ -400,20 +403,27 @@ export class TopMapManager {
     try {
       const manifest = await fetchTopMapManifest(world, dimension, abort.signal);
       if (this.disposed || seq !== this.manifestSeq || world !== this.world || dimension !== this.dimension) return;
-      this.regionKeys = new Set(
-        (manifest.hasTopMap ? (manifest.topMap?.regions ?? []) : []).map((region) => `${region.x},${region.z}`),
+      this.regions = new Map(
+        (manifest.hasTopMap ? (manifest.topMap?.regions ?? []) : [])
+          .filter((region) => Number.isSafeInteger(region.x) && Number.isSafeInteger(region.z))
+          .map((region) => {
+            const key = `${region.x},${region.z}`;
+            return [key, { rx: region.x, rz: region.z, key }] as const;
+          }),
       );
       this.manifestLoaded = true;
+      this.manifestRetryAt = 0;
       debugLog('top-map', 'manifest-loaded', {
         world,
         dimension,
-        tiles: this.regionKeys.size,
-        topMapEnabled: this.topMapEnabled && this.regionKeys.size > 0,
+        tiles: this.regions.size,
+        topMapEnabled: this.topMapEnabled && this.regions.size > 0,
       });
     } catch (error) {
       if (isAbortError(error)) return;
       if (this.disposed || seq !== this.manifestSeq || world !== this.world || dimension !== this.dimension) return;
-      this.manifestLoaded = true;
+      this.manifestLoaded = false;
+      this.manifestRetryAt = performance.now() + FAILED_MANIFEST_RETRY_MS;
       debugLog('top-map', 'manifest-error', {
         world,
         dimension,
@@ -430,7 +440,7 @@ export class TopMapManager {
       this.pendingTiles.has(key) ||
       this.tiles.has(key) ||
       !this.topMapEnabled ||
-      !this.regionKeys.has(key)
+      !this.regions.has(key)
     )
       return;
     this.pendingTiles.add(key);
@@ -440,7 +450,14 @@ export class TopMapManager {
     const dimension = this.dimension;
     try {
       const payload = await fetchTopMapTile(world, dimension, rx, rz, abort.signal);
-      if (this.disposed || world !== this.world || dimension !== this.dimension || !this.topMapEnabled) return;
+      if (
+        abort.signal.aborted ||
+        this.disposed ||
+        world !== this.world ||
+        dimension !== this.dimension ||
+        !this.topMapEnabled
+      )
+        return;
       const data = prepareTopMap(payload);
       const tile: TopMapTile = {
         key,

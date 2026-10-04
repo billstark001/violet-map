@@ -72,7 +72,7 @@ function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 export async function fetchChunk(world: string, dim: string, cx: number, cz: number): Promise<ArrayBuffer | null> {
-  const res = await fetch(`/api/worlds/${world}/${dim}/chunk/${cx}/${cz}`);
+  const res = await fetch(`/api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/chunk/${cx}/${cz}`);
   if (res.status === 204 || res.status === 404) return null;
   if (!res.ok) throw new Error(`chunk fetch failed: ${res.status}`);
   const payload = decode(new Uint8Array(await res.arrayBuffer())) as ChunkPayload;
@@ -86,7 +86,7 @@ export async function fetchChunkHashes(
 ): Promise<ChunkHashPayload[]> {
   if (!chunks.length) return [];
   const body = encode({ chunks });
-  const res = await fetch(`/api/worlds/${world}/${dim}/chunk-hashes`, {
+  const res = await fetch(`/api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/chunk-hashes`, {
     method: 'POST',
     headers: { 'content-type': 'application/msgpack', accept: 'application/msgpack' },
     body,
@@ -103,7 +103,7 @@ export async function fetchChunks(
 ): Promise<ChunkPayload[]> {
   if (!chunks.length) return [];
   const body = encode({ chunks });
-  const res = await fetch(`/api/worlds/${world}/${dim}/chunks`, {
+  const res = await fetch(`/api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/chunks`, {
     method: 'POST',
     headers: { 'content-type': 'application/msgpack', accept: 'application/msgpack' },
     body,

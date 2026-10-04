@@ -56,9 +56,8 @@ export class FlyControls {
   };
   private onKey = (e: KeyboardEvent) => {
     if (!this.enabled) return;
-    if (isEditableTarget(e.target)) return;
-    if (e.type === 'keydown') this.keys.add(e.code);
-    else this.keys.delete(e.code);
+    if (e.type === 'keyup') this.keys.delete(e.code);
+    else if (!isEditableTarget(e.target)) this.keys.add(e.code);
   };
   private onClick = () => {
     if (this.enabled) this.dom.requestPointerLock();
@@ -173,12 +172,12 @@ export class TopDownControls {
   private baseSpeed = 96;
   private fastMultiplier = 4;
   private dragging = false;
+  private capturedPointerId: number | null = null;
   private readonly move = new THREE.Vector3();
   private readonly onKey = (e: KeyboardEvent) => {
     if (!this.enabled) return;
-    if (isEditableTarget(e.target)) return;
-    if (e.type === 'keydown') this.keys.add(e.code);
-    else this.keys.delete(e.code);
+    if (e.type === 'keyup') this.keys.delete(e.code);
+    else if (!isEditableTarget(e.target)) this.keys.add(e.code);
   };
   private readonly onWheel = (e: WheelEvent) => {
     if (!this.enabled) return;
@@ -196,21 +195,20 @@ export class TopDownControls {
     if (isEditableTarget(e.target) || e.button !== 0) return;
     this.dragging = true;
     this.dom.setPointerCapture(e.pointerId);
+    this.capturedPointerId = e.pointerId;
   };
   private readonly onPointerMove = (e: PointerEvent) => {
-    if (!this.enabled || !this.dragging) return;
+    if (!this.enabled || !this.dragging || e.pointerId !== this.capturedPointerId) return;
     const worldPerPixel = this.worldPerPixel();
     this.camera.position.x -= e.movementX * worldPerPixel;
     this.camera.position.z -= e.movementY * worldPerPixel;
   };
   private readonly onPointerUp = (e: PointerEvent) => {
-    if (!this.dragging) return;
-    this.dragging = false;
-    if (this.dom.hasPointerCapture(e.pointerId)) this.dom.releasePointerCapture(e.pointerId);
+    if (e.pointerId === this.capturedPointerId) this.releasePointer();
   };
   private readonly onBlur = () => {
     this.keys.clear();
-    this.dragging = false;
+    this.releasePointer();
   };
 
   constructor(
@@ -286,7 +284,7 @@ export class TopDownControls {
     if (this.enabled === value) return;
     this.enabled = value;
     this.keys.clear();
-    this.dragging = false;
+    this.releasePointer();
   }
 
   syncFromCamera() {
@@ -304,6 +302,7 @@ export class TopDownControls {
   }
 
   dispose() {
+    this.releasePointer();
     document.removeEventListener('keydown', this.onKey);
     document.removeEventListener('keyup', this.onKey);
     this.dom.removeEventListener('wheel', this.onWheel);
@@ -316,6 +315,13 @@ export class TopDownControls {
 
   private lockTopDown() {
     this.camera.rotation.set(-Math.PI / 2, 0, 0);
+  }
+
+  private releasePointer() {
+    this.dragging = false;
+    const pointerId = this.capturedPointerId;
+    this.capturedPointerId = null;
+    if (pointerId !== null && this.dom.hasPointerCapture(pointerId)) this.dom.releasePointerCapture(pointerId);
   }
 
   private worldPerPixel(): number {

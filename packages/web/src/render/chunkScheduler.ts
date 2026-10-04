@@ -426,7 +426,9 @@ function clampFinite(value: number | undefined, fallback: number, min: number, m
 }
 
 function presetRadius(viewDistance: number, lodDistance: number, min: number, max: number, scale: number): number {
-  const requested = Math.max(2, Math.ceil(Math.max(0, viewDistance) + Math.max(0, lodDistance)));
+  const view = Number.isFinite(viewDistance) ? Math.max(0, viewDistance) : 0;
+  const lod = Number.isFinite(lodDistance) ? Math.max(0, lodDistance) : 0;
+  const requested = Math.max(2, Math.ceil(view + lod));
   return Math.max(min, Math.min(max, Math.ceil(requested * scale)));
 }
 

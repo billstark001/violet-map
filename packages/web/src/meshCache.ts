@@ -52,10 +52,11 @@ export interface MeshCacheKeyParts {
 
 let dbPromise: Promise<IDBPDatabase<MeshCacheDb>> | undefined;
 let cacheEnabled = true;
+let cacheGeneration = 0;
 
 function database() {
   if (!dbPromise) {
-    dbPromise = openDB<MeshCacheDb>(DB_NAME, DB_VERSION, {
+    const pending = openDB<MeshCacheDb>(DB_NAME, DB_VERSION, {
       upgrade(db, _oldVersion, _newVersion, tx) {
         const store = db.objectStoreNames.contains(STORE)
           ? tx.objectStore(STORE)
@@ -67,12 +68,17 @@ function database() {
           store.createIndex('accessedAtBytes', ['accessedAt', 'bytes']);
       },
     });
+    dbPromise = pending;
+    void pending.catch(() => {
+      if (dbPromise === pending) dbPromise = undefined;
+    });
   }
   return dbPromise!;
 }
 
 /** Disabling this bypasses all mesh reads and writes without deleting existing cache data. */
 export function setMeshCacheEnabled(enabled: boolean): void {
+  if (!enabled && cacheEnabled) cacheGeneration++;
   cacheEnabled = enabled;
 }
 export function isMeshCacheEnabled(): boolean {
@@ -122,42 +128,52 @@ async function pruneCache() {
   const started = Date.now();
   if (started - lastPrune < PRUNE_INTERVAL_MS) return;
   lastPrune = started;
-  const db = await database();
-  const entries: { key: string; accessedAt: number; bytes: number }[] = [];
-  const tx = db.transaction(STORE, 'readwrite');
-  let cursor = await tx.store.index('accessedAtBytes').openKeyCursor();
-  while (cursor) {
-    const [accessedAt, bytes] = cursor.key as [number, number];
-    const key = String(cursor.primaryKey);
-    if (started - accessedAt > TTL_MS) await tx.store.delete(key);
-    else entries.push({ key, accessedAt, bytes });
-    cursor = await cursor.continue();
+  try {
+    const db = await database();
+    const entries: { key: string; accessedAt: number; bytes: number }[] = [];
+    const tx = db.transaction(STORE, 'readwrite');
+    let cursor = await tx.store.index('accessedAtBytes').openKeyCursor();
+    while (cursor) {
+      const [accessedAt, bytes] = cursor.key as [number, number];
+      const key = String(cursor.primaryKey);
+      if (started - accessedAt > TTL_MS) await tx.store.delete(key);
+      else entries.push({ key, accessedAt, bytes });
+      cursor = await cursor.continue();
+    }
+    let totalBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0);
+    while (entries.length > MAX_ENTRIES || totalBytes > MAX_BYTES) {
+      const oldest = entries.shift();
+      if (!oldest) break;
+      await tx.store.delete(oldest.key);
+      totalBytes -= oldest.bytes;
+    }
+    await tx.done;
+  } catch (error) {
+    lastPrune = 0;
+    throw error;
   }
-  let totalBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0);
-  while (entries.length > MAX_ENTRIES || totalBytes > MAX_BYTES) {
-    const oldest = entries.shift();
-    if (!oldest) break;
-    await tx.store.delete(oldest.key);
-    totalBytes -= oldest.bytes;
-  }
-  await tx.done;
 }
 
 async function touch<T extends MeshCacheRecord>(record: T): Promise<T> {
   if (Date.now() - record.accessedAt < TOUCH_INTERVAL_MS) return record;
+  const generation = cacheGeneration;
   record.accessedAt = Date.now();
-  await (await database()).put(STORE, record);
+  const db = await database();
+  if (cacheEnabled && generation === cacheGeneration) await db.put(STORE, record);
   return record;
 }
 
 async function putRecord(record: MeshCacheRecord): Promise<void> {
   if (!cacheEnabled) return;
+  const generation = cacheGeneration;
   const bytes = Math.max(0, record.bytes);
   if (bytes > MAX_PENDING_WRITE_BYTES) return;
   if (pendingWriteBytes + bytes > MAX_PENDING_WRITE_BYTES) return;
   pendingWriteBytes += bytes;
   try {
-    await (await database()).put(STORE, record);
+    const db = await database();
+    if (!cacheEnabled || generation !== cacheGeneration) return;
+    await db.put(STORE, record);
     await pruneCache();
   } finally {
     pendingWriteBytes = Math.max(0, pendingWriteBytes - bytes);
@@ -166,9 +182,12 @@ async function putRecord(record: MeshCacheRecord): Promise<void> {
 
 export async function getCachedFull(parts: Omit<MeshCacheKeyParts, 'mode' | 'step'>): Promise<SectionMeshMsg[] | null> {
   if (!cacheEnabled) return null;
+  const generation = cacheGeneration;
   const record = await (await database()).get(STORE, cacheKey({ ...parts, mode: 'full', step: 0 }));
-  if (!record || !record.full || Date.now() - record.accessedAt > TTL_MS) return null;
-  return (await touch(record)).full ?? null;
+  if (!cacheEnabled || generation !== cacheGeneration || !record?.full || Date.now() - record.accessedAt > TTL_MS)
+    return null;
+  const touched = await touch(record);
+  return cacheEnabled && generation === cacheGeneration ? (touched.full ?? null) : null;
 }
 
 export async function putCachedFull(
@@ -192,9 +211,12 @@ export async function getCachedLod(
   parts: Omit<MeshCacheKeyParts, 'mode'> & { step: number },
 ): Promise<MeshBuffers | null | undefined> {
   if (!cacheEnabled) return undefined;
+  const generation = cacheGeneration;
   const record = await (await database()).get(STORE, cacheKey({ ...parts, mode: 'lod' }));
-  if (!record || Date.now() - record.accessedAt > TTL_MS) return undefined;
-  return (await touch(record)).lod;
+  if (!cacheEnabled || generation !== cacheGeneration || !record || Date.now() - record.accessedAt > TTL_MS)
+    return undefined;
+  const touched = await touch(record);
+  return cacheEnabled && generation === cacheGeneration ? touched.lod : undefined;
 }
 
 export async function putCachedLod(
@@ -234,6 +256,7 @@ export async function getMeshCacheStats(): Promise<MeshCacheStats> {
 }
 
 export async function clearMeshCache(): Promise<void> {
+  cacheGeneration++;
   await (await database()).clear(STORE);
   lastPrune = 0;
 }
