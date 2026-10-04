@@ -6,6 +6,8 @@ import { getDatabase } from './db/index.js';
 import { credentials, users } from './db/schema.js';
 
 const scrypt = promisify(scryptCallback);
+const PASSWORD_SALT_BYTES = 16;
+const PASSWORD_HASH_BYTES = 64;
 
 export const ALL_ROLES = ['guest', 'viewer', 'ci', 'admin', 'root'] as const;
 export const CREATABLE_ROLES = ['viewer', 'ci', 'admin'] as const;
@@ -93,16 +95,20 @@ function passwordError(password: string): void {
 }
 async function hashPassword(password: string): Promise<string> {
   passwordError(password);
-  const salt = randomBytes(16).toString('base64url');
-  const derived = (await scrypt(password, salt, 64)) as Buffer;
+  const salt = randomBytes(PASSWORD_SALT_BYTES).toString('base64url');
+  const derived = (await scrypt(password, salt, PASSWORD_HASH_BYTES)) as Buffer;
   return `scrypt$${salt}$${derived.toString('base64url')}`;
 }
 async function verifyPassword(password: string, encoded: string): Promise<boolean> {
-  const [algorithm, salt, value] = encoded.split('$');
-  if (algorithm !== 'scrypt' || !salt || !value) return false;
+  const parts = encoded.split('$');
+  if (parts.length !== 3) return false;
+  const [algorithm, salt, value] = parts;
+  if (algorithm !== 'scrypt' || !salt || !value || Buffer.from(salt, 'base64url').length !== PASSWORD_SALT_BYTES)
+    return false;
   const expected = Buffer.from(value, 'base64url');
-  const actual = (await scrypt(password, salt, expected.length)) as Buffer;
-  return expected.length === actual.length && timingSafeEqual(expected, actual);
+  if (expected.length !== PASSWORD_HASH_BYTES) return false;
+  const actual = (await scrypt(password, salt, PASSWORD_HASH_BYTES)) as Buffer;
+  return timingSafeEqual(expected, actual);
 }
 function sameText(left: string, right: string): boolean {
   const a = Buffer.from(left),
@@ -171,21 +177,25 @@ export async function updateUser(
   if (input.role !== undefined) values.role = input.role;
   if (input.enabled !== undefined) values.enabled = input.enabled;
   const { db } = await getDatabase();
-  const changed = await db.update(users).set(values).where(eq(users.username, normalized)).returning();
-  if (!changed[0]) throw new Error('user not found');
-  if (input.password !== undefined || input.enabled === false)
-    await db.delete(credentials).where(eq(credentials.userId, changed[0].id));
-  return publicUser(changed[0]);
+  return db.transaction(async (tx) => {
+    const changed = await tx.update(users).set(values).where(eq(users.username, normalized)).returning();
+    if (!changed[0]) throw new Error('user not found');
+    if (input.password !== undefined || input.enabled === false)
+      await tx.delete(credentials).where(eq(credentials.userId, changed[0].id));
+    return publicUser(changed[0]);
+  });
 }
 
 export async function deleteUser(username: string): Promise<void> {
   const normalized = normalizeUsername(username);
   if (rootUser()?.username === normalized) throw new Error('the environment-managed root user cannot be deleted');
   const { db } = await getDatabase();
-  const found = await db.select({ id: users.id }).from(users).where(eq(users.username, normalized)).limit(1);
-  if (!found[0]) throw new Error('user not found');
-  await db.delete(credentials).where(eq(credentials.userId, found[0].id));
-  await db.delete(users).where(eq(users.id, found[0].id));
+  await db.transaction(async (tx) => {
+    const found = await tx.select({ id: users.id }).from(users).where(eq(users.username, normalized)).limit(1);
+    if (!found[0]) throw new Error('user not found');
+    await tx.delete(credentials).where(eq(credentials.userId, found[0].id));
+    await tx.delete(users).where(eq(users.id, found[0].id));
+  });
 }
 
 async function credentialFor(principal: Principal, expiresAt: Date, issuedBy: string): Promise<IssuedCredential> {

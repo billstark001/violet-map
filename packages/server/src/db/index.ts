@@ -40,14 +40,25 @@ export interface DatabaseContext {
 let databasePromise: Promise<DatabaseContext> | undefined;
 
 export function getDatabase(): Promise<DatabaseContext> {
-  if (!databasePromise) databasePromise = createDatabase();
+  if (!databasePromise) {
+    const pending = createDatabase();
+    databasePromise = pending;
+    void pending.catch(() => {
+      if (databasePromise === pending) databasePromise = undefined;
+    });
+  }
   return databasePromise;
 }
 
 async function createDatabase(): Promise<DatabaseContext> {
   if (config.databaseUrl) {
     const pool = new Pool({ connectionString: config.databaseUrl });
-    await pool.query(schemaSql);
+    try {
+      await pool.query(schemaSql);
+    } catch (error) {
+      await pool.end().catch(() => {});
+      throw error;
+    }
     return {
       db: drizzlePg({ client: pool, schema }),
       driver: 'postgres',
@@ -55,7 +66,12 @@ async function createDatabase(): Promise<DatabaseContext> {
     };
   }
   const client = await PGlite.create(config.databaseDir);
-  await client.exec(schemaSql);
+  try {
+    await client.exec(schemaSql);
+  } catch (error) {
+    await client.close().catch(() => {});
+    throw error;
+  }
   return {
     db: drizzlePglite({ client, schema }),
     driver: 'pglite',
@@ -66,8 +82,9 @@ async function createDatabase(): Promise<DatabaseContext> {
 }
 
 export async function closeDatabase(): Promise<void> {
-  if (!databasePromise) return;
-  const database = await databasePromise;
+  const pending = databasePromise;
   databasePromise = undefined;
+  if (!pending) return;
+  const database = await pending;
   await database.close();
 }
