@@ -726,9 +726,11 @@ function addLodSideSegment(
 }
 
 /**
- * 低 LOD：天空光维度的 step 2+ 走高度图表面快路径，避免远处洞穴/地下 section 拖慢调度。
- * no-sky 或 step 1 保留详细路径，用于需要保留桥底、树冠侧面、水面/半砖高度的场景。
- * y 为绝对坐标，x/z 相对区块原点。
+ * Mesh a whole chunk column at the requested sampling step.
+ * Sky-lit dimensions at step 2+ use the surface fast path, avoiding interior
+ * cave sections. Step 1 and dimensions without sky light keep detailed shapes.
+ * Vertex Y is absolute; X/Z are relative to the chunk origin. Returns null
+ * when the column has no visible faces or step is not finite.
  */
 export function meshLodChunk(
   col: ChunkColumn,

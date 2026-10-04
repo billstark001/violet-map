@@ -23,13 +23,29 @@ export class BitArray {
     readonly bits: number,
     readonly data: BigUint64Array,
   ) {
+    if (!Number.isSafeInteger(bits) || bits < 1 || bits > 64)
+      throw new RangeError(`bits must be an integer from 1 to 64, got ${bits}`);
     this.valuesPerLong = Math.floor(64 / bits);
     this.mask = (1n << BigInt(bits)) - 1n;
   }
   get(index: number): number {
     const l = Math.floor(index / this.valuesPerLong);
     const shift = BigInt((index - l * this.valuesPerLong) * this.bits);
-    return Number((this.data[l] >> shift) & this.mask);
+    return Number(((this.data[l] ?? 0n) >> shift) & this.mask);
+  }
+
+  /** Decode non-spanning packed values into an existing zero-initialized array. */
+  copyTo(out: Uint8Array | Uint16Array): void {
+    const shift = BigInt(this.bits);
+    let index = 0;
+    for (const packed of this.data) {
+      let remaining = packed;
+      for (let n = 0; n < this.valuesPerLong && index < out.length; n++) {
+        out[index++] = Number(remaining & this.mask);
+        remaining >>= shift;
+      }
+      if (index === out.length) break;
+    }
   }
 }
 
@@ -61,7 +77,7 @@ export class ChunkSection {
     if (!this.states) return 0;
     if (!this.blockIndices) {
       const out = this.palette.length <= 256 ? new Uint8Array(4096) : new Uint16Array(4096);
-      for (let i = 0; i < 4096; i++) out[i] = this.states.get(i);
+      this.states.copyTo(out);
       this.blockIndices = out;
       this.states = null;
     }
@@ -76,7 +92,7 @@ export class ChunkSection {
     if (!this.biomeStates) return 0;
     if (!this.biomeIndices) {
       const out = this.biomePalette.length <= 256 ? new Uint8Array(64) : new Uint16Array(64);
-      for (let i = 0; i < 64; i++) out[i] = this.biomeStates.get(i);
+      this.biomeStates.copyTo(out);
       this.biomeIndices = out;
       this.biomeStates = null;
     }
@@ -87,6 +103,7 @@ export class ChunkSection {
   }
 }
 
+/** Parsed chunk data with sparse section storage and lazy palette decoding. */
 export class ChunkColumn {
   readonly sections = new Map<number, ChunkSection>();
   private readonly scannedHeights = new Int32Array(16 * 16);
@@ -259,7 +276,9 @@ export function parseChunkColumn(root: any): ChunkColumn {
   const col = new ChunkColumn(r.xPos ?? 0, r.zPos ?? 0);
   let first = true;
   for (const s of r.sections) {
+    if (!s || typeof s !== 'object') throw new Error('Invalid chunk section');
     const sy: number = s.Y;
+    if (!Number.isInteger(sy)) throw new Error(`Invalid chunk section Y: ${String(sy)}`);
     const bs = s.block_states;
     const palette: BlockStateRef[] = bs?.palette
       ? bs.palette.map((p: any) => ({ name: normalizeId(p.Name), properties: parseProps(p.Properties) }))

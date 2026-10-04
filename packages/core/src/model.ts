@@ -152,16 +152,20 @@ function rotateElementVertex(v: Vec3, rot: NonNullable<ModelElementJson['rotatio
     ny = x * s + y * c;
   }
   if (rot.rescale) {
-    const f = 1 / Math.abs(c);
-    if (rot.axis === 'x') {
-      ny *= f;
-      nz *= f;
-    } else if (rot.axis === 'y') {
-      nx *= f;
-      nz *= f;
-    } else {
-      nx *= f;
-      ny *= f;
+    // A perpendicular rotation has no finite rescale factor. Resource packs
+    // may request it even though vanilla element rotations do not.
+    if (Math.abs(c) > 1e-6) {
+      const f = 1 / Math.abs(c);
+      if (rot.axis === 'x') {
+        ny *= f;
+        nz *= f;
+      } else if (rot.axis === 'y') {
+        nx *= f;
+        nz *= f;
+      } else {
+        nx *= f;
+        ny *= f;
+      }
     }
   }
   return [nx + ox, ny + oy, nz + oz];
@@ -192,9 +196,20 @@ function matchVariantKey(key: string, props: Record<string, string>): boolean {
   });
 }
 function matchCondition(cond: any, props: Record<string, string>): boolean {
-  if (cond.OR) return (cond.OR as any[]).some((c) => matchCondition(c, props));
-  if (cond.AND) return (cond.AND as any[]).every((c) => matchCondition(c, props));
+  if (!cond || typeof cond !== 'object' || Array.isArray(cond)) return false;
+  if (Object.hasOwn(cond, 'OR'))
+    return Array.isArray(cond.OR) && cond.OR.some((c: unknown) => matchCondition(c, props));
+  if (Object.hasOwn(cond, 'AND'))
+    return Array.isArray(cond.AND) && cond.AND.every((c: unknown) => matchCondition(c, props));
   return Object.entries(cond).every(([k, v]) => String(v).split('|').includes(props[k]));
+}
+
+function isModelVariant(value: unknown): value is BlockStateVariantJson {
+  return !!value && typeof value === 'object' && typeof (value as { model?: unknown }).model === 'string';
+}
+
+function variantWeight(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 1;
 }
 
 function textureRef(value: unknown): string | null {
@@ -240,6 +255,7 @@ export class ModelBaker {
       }
       this.byRef.set(state, variants);
     }
+    if (variants.length === 0) return [];
     if (variants.length === 1) return variants[0].quads;
     let total = 0;
     for (const v of variants) total += v.weight;
@@ -264,17 +280,20 @@ export class ModelBaker {
       for (const [key, value] of Object.entries<any>(bs.variants)) {
         if (matchVariantKey(key, state.properties)) {
           const list = Array.isArray(value) ? value : [value];
-          return list.map((v: any) => ({ weight: v.weight ?? 1, quads: this.bakeVariant(v) }));
+          return list
+            .filter(isModelVariant)
+            .map((v) => ({ weight: variantWeight(v.weight), quads: this.bakeVariant(v) }));
         }
       }
       return [{ weight: 1, quads: [] }];
     }
-    if (bs.multipart) {
+    if (Array.isArray(bs.multipart)) {
       const quads: BakedQuad[] = [];
       for (const part of bs.multipart as any[]) {
+        if (!part || typeof part !== 'object') continue;
         if (!part.when || matchCondition(part.when, state.properties)) {
           const list = Array.isArray(part.apply) ? part.apply : [part.apply];
-          for (const v of list) quads.push(...this.bakeVariant(v));
+          for (const v of list) if (isModelVariant(v)) quads.push(...this.bakeVariant(v));
         }
       }
       return [{ weight: 1, quads }];
@@ -347,7 +366,7 @@ export class ModelBaker {
       const f = el.from,
         t = el.to;
       for (const [dirStr, face] of Object.entries(el.faces ?? {})) {
-        if (!face) continue;
+        if (!face || !Object.hasOwn(FACE_CORNERS, dirStr)) continue;
         const dir = dirStr as Direction;
         let verts = FACE_CORNERS[dir](f, t);
         let uv = face.uv ?? DEFAULT_UV[dir](f, t);

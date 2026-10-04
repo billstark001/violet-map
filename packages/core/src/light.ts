@@ -9,9 +9,15 @@ export interface ComputeLightOptions {
   writeBlock?: boolean;
 }
 
+function lightLevel(value: number): number {
+  return Number.isFinite(value) ? Math.min(15, Math.max(0, Math.floor(value))) : 0;
+}
+
 /**
- * 单列烘焙光照（天光 + 方块光 BFS）。存档缺失光照数据时的回退方案。
- * 注：不跨区块传播，区块边界处洞穴内可能出现轻微接缝。
+ * Recompute missing sky and/or block light in a single chunk column.
+ * Each selected channel overwrites section light arrays in place. This is a
+ * fallback for missing saved light; propagation stops at chunk boundaries,
+ * so enclosed spaces can show minor seams between columns.
  */
 export function computeColumnLight(
   col: ChunkColumn,
@@ -23,10 +29,12 @@ export function computeColumnLight(
   if (H <= 0) return;
   const writeSky = opts.writeSky ?? true;
   const writeBlock = opts.writeBlock ?? true;
+  const bakeSky = writeSky && hasSkyLight;
+  if (!bakeSky && !writeBlock) return;
   const size = 256 * H;
   const filter = new Uint8Array(size);
-  const sky = new Uint8Array(size);
-  const block = new Uint8Array(size);
+  const sky = bakeSky ? new Uint8Array(size) : null;
+  const block = writeBlock ? new Uint8Array(size) : null;
   const emitters: number[] = [];
 
   const idxOf = (x: number, y: number, z: number) => (y * 16 + z) * 16 + x;
@@ -36,17 +44,18 @@ export function computeColumnLight(
     const s = col.sections.get(sy);
     if (!s || s.isEmpty) continue;
     const infos = s.palette.map((p) => infoOf(p.name));
+    const filters = Uint8Array.from(infos, (info) => lightLevel(info.filter));
+    const emissions = block ? Uint8Array.from(infos, (info) => lightLevel(info.emit)) : null;
     for (let ly = 0; ly < 16; ly++) {
       const y = sy * 16 + ly - col.minY;
       for (let lz = 0; lz < 16; lz++) {
         for (let lx = 0; lx < 16; lx++) {
           const pi = s.blockIndex(lx, ly, lz);
-          const info = infos[pi];
-          if (!info) continue;
+          if (pi >= infos.length) continue;
           const i = idxOf(lx, y, lz);
-          filter[i] = info.filter;
-          if (writeBlock && info.emit > 0) {
-            block[i] = info.emit;
+          filter[i] = filters[pi];
+          if (block && emissions && emissions[pi] > 0) {
+            block[i] = emissions[pi];
             emitters.push(i);
           }
         }
@@ -92,7 +101,7 @@ export function computeColumnLight(
     queue.length = 0;
   };
 
-  if (writeSky && hasSkyLight) {
+  if (sky) {
     for (let z = 0; z < 16; z++) {
       for (let x = 0; x < 16; x++) {
         for (let y = H - 1; y >= 0; y--) {
@@ -106,7 +115,7 @@ export function computeColumnLight(
     propagate(sky, true);
   }
 
-  if (writeBlock) {
+  if (block) {
     for (const i of emitters) push(i);
     propagate(block, false);
   }
@@ -114,23 +123,23 @@ export function computeColumnLight(
   // 写回各 section（缺失的补空气 section）
   for (let sy = col.minSectionY; sy <= col.maxSectionY; sy++) {
     const s = col.ensureSection(sy);
-    const bl = new Uint8Array(4096);
-    const sl = new Uint8Array(4096);
+    const bl = block ? new Uint8Array(4096) : null;
+    const sl = sky ? new Uint8Array(4096) : null;
     for (let ly = 0; ly < 16; ly++) {
       const y = sy * 16 + ly - col.minY;
       for (let lz = 0; lz < 16; lz++) {
         for (let lx = 0; lx < 16; lx++) {
           const src = idxOf(lx, y, lz);
           const dst = (ly << 8) | (lz << 4) | lx;
-          bl[dst] = block[src];
-          sl[dst] = sky[src];
+          if (bl && block) bl[dst] = block[src];
+          if (sl && sky) sl[dst] = sky[src];
         }
       }
     }
-    if (writeBlock) s.blockLight = bl;
-    if (writeSky && hasSkyLight) s.skyLight = sl;
+    if (bl) s.blockLight = bl;
+    if (sl) s.skyLight = sl;
   }
   if (writeBlock) col.hasStoredBlockLight = true;
-  if (writeSky && hasSkyLight) col.hasStoredSkyLight = true;
-  if (writeBlock || (writeSky && hasSkyLight)) col.hasStoredLight = true;
+  if (bakeSky) col.hasStoredSkyLight = true;
+  col.hasStoredLight = true;
 }

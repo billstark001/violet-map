@@ -108,7 +108,7 @@ export interface TrackerConfig {
   /** Satisfaction clamp upper bound. */
   maxSatisfaction?: number;
 
-  /** Guardrail against accidentally enumerating an enormous disk. */
+  /** Guardrail against enumerating an enormous disk. Omit for no limit. */
   maxActiveCells?: number;
 
   /** Initial cell height, or a function of grid coordinate. */
@@ -333,6 +333,7 @@ class ActiveSet {
 
   clear(): void {
     this.length = 0;
+    this.chunks.length = 0;
   }
 
   ensureCapacity(required: number): void {
@@ -501,13 +502,11 @@ export class CameraGridTracker {
       throw new RangeError(`camera time must be non-decreasing: got ${t}, previous ${this.lastT}`);
     }
 
+    this.buildDisk(this.scratch, pose.p.x, pose.p.z, t);
+
     if (this.lastPose !== null && t > this.lastT) {
       this.applyCameraInterval(this.active, this.lastT, t, this.lastPose);
     }
-
-    this.buildDisk(this.scratch, pose.p.x, pose.p.z, t);
-
-    const result = this.queryActiveSet(this.scratch, t, n);
 
     const oldActive = this.active;
     this.active = this.scratch;
@@ -517,7 +516,7 @@ export class CameraGridTracker {
     this.lastPose = clonePose(pose);
     this.lastT = t;
 
-    return result;
+    return this.queryActiveSet(this.active, t, n);
   }
 
   /**
@@ -627,11 +626,15 @@ export class CameraGridTracker {
     };
   }
 
-  /** Optional memory maintenance. Deletes chunks for which every cell passes predicate. */
+  /**
+   * Release inactive chunks selected by predicate. Active chunks are retained so
+   * camera updates and cell reads continue to use the same stored state.
+   */
   deleteChunksWhere(predicate: (chunk: unknown) => boolean): number {
+    const activeChunks = new Set(this.active.chunks);
     let removed = 0;
     for (const [key, chunk] of this.grid.chunks) {
-      if (predicate(chunk)) {
+      if (!activeChunks.has(chunk) && predicate(chunk)) {
         this.grid.chunks.delete(key);
         removed++;
       }
@@ -917,7 +920,7 @@ function resolveConfig(config: TrackerConfig): ResolvedConfig {
   assertFiniteNumber(overshootEta, 'overshootEta');
   assertFiniteNumber(minSatisfaction, 'minSatisfaction');
   assertFiniteNumber(maxSatisfaction, 'maxSatisfaction');
-  assertFiniteNumber(maxActiveCells, 'maxActiveCells');
+  if (config.maxActiveCells !== undefined) assertNonNegativeInteger(maxActiveCells, 'maxActiveCells');
   assertFiniteNumber(neighborPrecisionEpsilon, 'neighborPrecisionEpsilon');
   assertFiniteNumber(epsilon, 'epsilon');
 
@@ -1064,8 +1067,8 @@ function assertPositiveInteger(x: number, name: string): void {
 }
 
 function assertNonNegativeInteger(x: number, name: string): void {
-  if (!Number.isInteger(x) || x < 0) {
-    throw new RangeError(`${name} must be a non-negative integer, got ${x}`);
+  if (!Number.isSafeInteger(x) || x < 0) {
+    throw new RangeError(`${name} must be a non-negative safe integer, got ${x}`);
   }
 }
 

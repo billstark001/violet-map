@@ -123,6 +123,7 @@ const FULL_TILE_CHUNKS = 32 * 32;
 const TOP_MAP_CHUNK_MASK_BYTES = FULL_TILE_CHUNKS / 8;
 const FULL_COVERAGE_KEY = '*';
 const EPS = 1e-4;
+const OVERLAY_ALPHA = { water: 0.58, ice: 0.28, glass: 0.42, translucent: 0.45 } as const;
 const PLATFORM_LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
 function clamp(value: number, min: number, max: number): number {
@@ -138,22 +139,17 @@ function clampLight(value: number): number {
 }
 
 function localName(name: string): string {
-  return name.includes(':') ? name.split(':')[1] : name;
+  const separator = name.indexOf(':');
+  return separator < 0 ? name : name.slice(separator + 1);
 }
 
-function isTransparentOverlay(state: BlockStateRef, info: BlockInfo): boolean {
-  if (info.fluid || info.layer === 'translucent') return true;
+function overlayAlpha(state: BlockStateRef, info: BlockInfo): number | null {
   const local = localName(state.name);
-  return local.includes('glass') || local.includes('ice') || local.includes('water');
-}
-
-function transparentAlpha(state: BlockStateRef, info: BlockInfo): number {
-  const local = localName(state.name);
-  if (info.fluid || local.includes('water')) return 0.58;
-  if (local.includes('ice')) return 0.28;
-  if (local.includes('glass')) return 0.42;
-  if (info.layer === 'translucent') return 0.45;
-  return 0.35;
+  if (info.fluid || local.includes('water')) return OVERLAY_ALPHA.water;
+  if (local.includes('ice')) return OVERLAY_ALPHA.ice;
+  if (local.includes('glass')) return OVERLAY_ALPHA.glass;
+  if (info.layer === 'translucent') return OVERLAY_ALPHA.translucent;
+  return null;
 }
 
 function mixColor(base: Rgb, over: Rgb, alpha: number): Rgb {
@@ -167,6 +163,7 @@ function applyTransparentLayers(base: Rgb, layers: { color: Rgb; alpha: number }
   return color;
 }
 
+/** Sample the first visible surface from above or below, compositing transparent blocks. */
 export function sampleTopMapSurface(
   col: ChunkColumn,
   x: number,
@@ -193,8 +190,9 @@ export function sampleTopMapSurface(
       surfaceState = state;
       surfaceBiome = biome;
     }
-    if (isTransparentOverlay(state, info)) {
-      layers.push({ color: opts.colorOf(state, biome), alpha: transparentAlpha(state, info) });
+    const alpha = overlayAlpha(state, info);
+    if (alpha !== null) {
+      layers.push({ color: opts.colorOf(state, biome), alpha });
       continue;
     }
     baseColor = opts.colorOf(state, biome);
@@ -231,7 +229,36 @@ function decodeInt16Le(bytes: Uint8Array, count: number): Int16Array {
   return out;
 }
 
+/** Validate a decoded tile and prepare typed views for repeated mesh rebuilds. */
 export function prepareTopMapTile(payload: TopMapTilePayload): PreparedTopMapTile {
+  const blocks = TOP_MAP_TILE_BLOCKS;
+  const validStride = (value: number) => Number.isSafeInteger(value) && value >= 1 && value <= blocks;
+  if (
+    !payload ||
+    !payload.size ||
+    !payload.region ||
+    !payload.origin ||
+    !Number.isSafeInteger(payload.region.x) ||
+    !Number.isSafeInteger(payload.region.z) ||
+    !Number.isSafeInteger(payload.origin.x) ||
+    !Number.isSafeInteger(payload.origin.z) ||
+    payload.origin.x !== payload.region.x * blocks ||
+    payload.origin.z !== payload.region.z * blocks ||
+    !(payload.heights instanceof Uint8Array) ||
+    !(payload.colors instanceof Uint8Array) ||
+    !(payload.lights instanceof Uint8Array) ||
+    !validStride(payload.sampleStride) ||
+    !validStride(payload.colorStride) ||
+    !validStride(payload.lightStride) ||
+    !Number.isSafeInteger(payload.size.samples) ||
+    !Number.isSafeInteger(payload.size.colorSamples) ||
+    !Number.isSafeInteger(payload.size.lightSamples) ||
+    !Number.isFinite(payload.minY) ||
+    !Number.isFinite(payload.maxY) ||
+    payload.minY > payload.maxY
+  ) {
+    throw new Error('bad top-map tile payload');
+  }
   const heightPixels = payload.size.samples * payload.size.samples;
   const colorPixels = payload.size.colorSamples * payload.size.colorSamples;
   const lightPixels = payload.size.lightSamples * payload.size.lightSamples;
@@ -243,9 +270,6 @@ export function prepareTopMapTile(payload: TopMapTilePayload): PreparedTopMapTil
     payload.colorEncoding !== 'rgba8888' ||
     payload.lightEncoding !== 'sky-block-u4' ||
     payload.size.blocks !== TOP_MAP_TILE_BLOCKS ||
-    payload.sampleStride < 1 ||
-    payload.colorStride < 1 ||
-    payload.lightStride < 1 ||
     payload.size.samples !== Math.floor(payload.size.blocks / payload.sampleStride) ||
     payload.size.colorSamples !== Math.floor(payload.size.blocks / payload.colorStride) ||
     payload.size.lightSamples !== Math.floor(payload.size.blocks / payload.lightStride) ||
@@ -496,7 +520,7 @@ function buildCells(
   onlineChunkMask: Uint8Array | undefined,
 ): CellBuildResult {
   const size = data.payload.size.blocks;
-  const cellCount = Math.floor(size / step);
+  const cellCount = Math.ceil(size / step);
   const cellHeights = new Int16Array(cellCount * cellCount);
   const cellStatus = new Uint8Array(cellCount * cellCount);
   const cellLights = new Float32Array(cellCount * cellCount * 2);
@@ -585,6 +609,10 @@ function cellLight(cellLights: Float32Array, cellCount: number, cx: number, cz: 
   return [cellLights[i], cellLights[i + 1]];
 }
 
+/**
+ * Build a stepped terrain tile, omitting online chunks except seam cells.
+ * The returned geometry is tile-local and null when no offline surface remains.
+ */
 export function buildTopMapMesh(data: PreparedTopMapTile, opts: BuildTopMapMeshOptions): MeshBuffers | null {
   const step = Math.max(1, Math.floor(opts.step));
   if (!Number.isFinite(step)) return null;

@@ -3,10 +3,18 @@ import * as pako from 'pako';
 import * as nbt from 'prismarine-nbt';
 export { toLongs, toBytes } from './binary.js';
 
-/** 自动识别 gzip / zlib / 未压缩。 */
+/** Detect an RFC 1950 DEFLATE header without assuming a 32 KiB window. */
+function hasZlibHeader(data: Uint8Array): boolean {
+  if (data.length < 2) return false;
+  const cmf = data[0];
+  const flg = data[1];
+  return (cmf & 0x0f) === 8 && cmf >> 4 <= 7 && ((cmf << 8) | flg) % 31 === 0;
+}
+
+/** Decode gzip or zlib wrapped NBT, leaving raw NBT unchanged. */
 export function decompress(data: Uint8Array): Uint8Array {
   if (data.length > 1 && data[0] === 0x1f && data[1] === 0x8b) return pako.ungzip(data);
-  if (data.length > 0 && data[0] === 0x78) return pako.inflate(data);
+  if (hasZlibHeader(data)) return pako.inflate(data);
   return data;
 }
 

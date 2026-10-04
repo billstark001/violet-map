@@ -1320,7 +1320,12 @@ function emitFluid(
   );
 }
 
-/** 网格化一个 16³ section。坐标相对 section 原点。 */
+/**
+ * Mesh one 16³ section at world chunk (cx, cz) and section Y sy.
+ * The view must provide neighboring blocks for face culling and lighting.
+ * Returned vertex positions are relative to this section's origin; visibility
+ * encodes which outer faces connect through passable cells.
+ */
 export function meshSection(
   res: MesherResources,
   view: WorldView,

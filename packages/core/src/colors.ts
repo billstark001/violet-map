@@ -1,6 +1,8 @@
 import { BiomeDef, BiomeMap } from './types.js';
 
 export type Rgb = readonly [number, number, number];
+const COLORMAP_SIZE = 256;
+const COLORMAP_FALLBACK_COLOR = 0x48b518;
 export interface ResolvedBiomeColors {
   grass: Rgb;
   foliage: Rgb;
@@ -15,13 +17,19 @@ export function hexToRgb(hex: number): Rgb {
 
 /** 原版 colormap 采样：256x256 RGBA 像素。 */
 function sampleColormap(map: Uint8Array | null, temperature: number, downfall: number): number {
-  if (!map) return 0x48b518;
+  if (
+    !map ||
+    map.length < COLORMAP_SIZE * COLORMAP_SIZE * 4 ||
+    !Number.isFinite(temperature) ||
+    !Number.isFinite(downfall)
+  )
+    return COLORMAP_FALLBACK_COLOR;
   const t = Math.min(Math.max(temperature, 0), 1);
   const d = Math.min(Math.max(downfall, 0), 1) * t;
-  const x = Math.min(255, Math.floor((1 - t) * 255));
-  const y = Math.min(255, Math.floor((1 - d) * 255));
-  const i = (y * 256 + x) * 4;
-  if (map[i + 3] === 0) return 0x48b518;
+  const x = Math.min(COLORMAP_SIZE - 1, Math.floor((1 - t) * (COLORMAP_SIZE - 1)));
+  const y = Math.min(COLORMAP_SIZE - 1, Math.floor((1 - d) * (COLORMAP_SIZE - 1)));
+  const i = (y * COLORMAP_SIZE + x) * 4;
+  if (map[i + 3] === 0) return COLORMAP_FALLBACK_COLOR;
   return (map[i] << 16) | (map[i + 1] << 8) | map[i + 2];
 }
 
