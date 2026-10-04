@@ -45,6 +45,7 @@ let rendererDefinitions: RendererDefinitions | undefined;
 
 const columns = new Map<string, { col: ChunkColumn; hasSkyLight: boolean; litSky: boolean; litBlock: boolean }>();
 const topColorCache = new Map<string, Rgb>();
+const topColorStateKeyCache = new WeakMap<BlockStateRef, string>();
 
 function infoOf(name: string): BlockInfo {
   return blockInfo[name] ?? DEFAULT_INFO;
@@ -135,11 +136,16 @@ function fallbackColorOf(state: BlockStateRef, biome: string): Rgb | null {
 
 /** LOD 顶面颜色：取实际方块状态模型朝上面的贴图平均色 × 群系着色。 */
 function topColorOf(state: BlockStateRef, biome: string): Rgb {
-  const props = Object.keys(state.properties)
-    .sort()
-    .map((k) => `${k}=${state.properties[k]}`)
-    .join(',');
-  const key = `${state.name}[${props}]|${biome}`;
+  let stateKey = topColorStateKeyCache.get(state);
+  if (stateKey === undefined) {
+    const props = Object.keys(state.properties)
+      .sort()
+      .map((k) => `${k}=${state.properties[k]}`)
+      .join(',');
+    stateKey = `${state.name}[${props}]`;
+    topColorStateKeyCache.set(state, stateKey);
+  }
+  const key = `${stateKey}|${biome}`;
   const hit = topColorCache.get(key);
   if (hit) {
     topColorCache.delete(key);
@@ -250,6 +256,7 @@ function matchesVariant(key: string, values: Record<string, unknown>): boolean {
   if (!key) return true;
   return key.split(',').every((pair) => {
     const [name, expected] = pair.split('=');
+    if (!name || expected === undefined) return false;
     return expected.split('|').includes(String(values[name] ?? ''));
   });
 }
@@ -326,6 +333,7 @@ function modelInstances(col: ChunkColumn): RenderModelInstance[] {
 
 const post = (msg: WorkerResponse, transfer: Transferable[] = []) =>
   (self as unknown as DedicatedWorkerGlobalScope).postMessage(msg, transfer);
+const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
   const msg = ev.data;
@@ -370,93 +378,110 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
           },
         });
       } catch (e) {
-        post({ type: 'chunkError', key: msg.key, error: (e as Error).message });
+        post({ type: 'chunkError', key: msg.key, error: errorMessage(e) });
       }
       break;
     }
     case 'mesh': {
-      if (!res) break;
-      const started = performance.now();
-      const entry = columns.get(msg.key);
-      const hood = neighborhoodOf(msg.key);
-      if (!entry || !hood) {
-        post({
-          type: 'meshResult',
-          key: msg.key,
-          version: msg.version,
-          sections: [],
-          profile: {
-            meshBytes: 0,
-            meshMs: performance.now() - started,
-            storedColumns: columns.size,
-            sectionCount: 0,
-            missingInput: true,
+      try {
+        if (!res) throw new Error('mesh worker not initialized');
+        const started = performance.now();
+        const entry = columns.get(msg.key);
+        const hood = neighborhoodOf(msg.key);
+        if (!entry || !hood) {
+          post({
+            type: 'meshResult',
+            key: msg.key,
+            version: msg.version,
+            sections: [],
+            profile: {
+              meshBytes: 0,
+              meshMs: performance.now() - started,
+              storedColumns: columns.size,
+              sectionCount: 0,
+              missingInput: true,
+            },
+          });
+          break;
+        }
+        const { col } = entry;
+        const instances = modelInstances(col);
+        const instancesBySection = new Map<number, RenderModelInstance[]>();
+        for (const instance of instances) {
+          const sy = Math.floor(instance.y / 16);
+          const sectionInstances = instancesBySection.get(sy);
+          if (sectionInstances) sectionInstances.push(instance);
+          else instancesBySection.set(sy, [instance]);
+        }
+        const sectionYs = new Set<number>(instancesBySection.keys());
+        for (let sy = col.minSectionY; sy <= col.maxSectionY; sy++) sectionYs.add(sy);
+        const sections: SectionMeshMsg[] = [];
+        for (const sy of [...sectionYs].sort((a, b) => a - b)) {
+          const s = col.sections.get(sy);
+          const sectionInstances = instancesBySection.get(sy) ?? [];
+          const shouldMesh = (s !== undefined && !s.isEmpty) || sectionInstances.length > 0;
+          const result = shouldMesh ? meshSection(res, hood, col.x, sy, col.z, true, sectionInstances) : null;
+          const layers = result?.layers ?? {};
+          const visibility = result?.visibility ?? SECTION_VISIBILITY_ALL;
+          if (Object.keys(layers).length || visibility > 0) sections.push({ sy, layers, visibility });
+        }
+        const bytes = sectionBytes(sections);
+        post(
+          {
+            type: 'meshResult',
+            key: msg.key,
+            version: msg.version,
+            sections,
+            profile: {
+              meshBytes: bytes,
+              meshMs: performance.now() - started,
+              storedColumns: columns.size,
+              sectionCount: sections.length,
+            },
           },
-        });
-        break;
+          transfersOf(sections.flatMap((s) => Object.values(s.layers))),
+        );
+      } catch (error) {
+        post({ type: 'meshError', key: msg.key, version: msg.version, kind: 'full', error: errorMessage(error) });
       }
-      const { col } = entry;
-      const instances = modelInstances(col);
-      const sections: SectionMeshMsg[] = [];
-      for (let sy = col.minSectionY; sy <= col.maxSectionY; sy++) {
-        const s = col.sections.get(sy);
-        const hasInstances = instances.some((instance) => Math.floor(instance.y / 16) === sy);
-        const result =
-          s && (!s.isEmpty || hasInstances) ? meshSection(res, hood, col.x, sy, col.z, true, instances) : null;
-        const layers = result?.layers ?? {};
-        const visibility = result?.visibility ?? SECTION_VISIBILITY_ALL;
-        if (Object.keys(layers).length || visibility > 0) sections.push({ sy, layers, visibility });
-      }
-      const bytes = sectionBytes(sections);
-      post(
-        {
-          type: 'meshResult',
-          key: msg.key,
-          version: msg.version,
-          sections,
-          profile: {
-            meshBytes: bytes,
-            meshMs: performance.now() - started,
-            storedColumns: columns.size,
-            sectionCount: sections.length,
-          },
-        },
-        transfersOf(sections.flatMap((s) => Object.values(s.layers))),
-      );
       break;
     }
     case 'lod': {
-      const started = performance.now();
-      const entry = columns.get(msg.key);
-      if (!entry) {
-        post({
-          type: 'lodResult',
-          key: msg.key,
-          version: msg.version,
-          step: msg.step,
-          mesh: null,
-          profile: {
-            meshBytes: 0,
-            meshMs: performance.now() - started,
-            storedColumns: columns.size,
-            missingInput: true,
+      try {
+        const started = performance.now();
+        const entry = columns.get(msg.key);
+        if (!entry) {
+          post({
+            type: 'lodResult',
+            key: msg.key,
+            version: msg.version,
+            step: msg.step,
+            mesh: null,
+            profile: {
+              meshBytes: 0,
+              meshMs: performance.now() - started,
+              storedColumns: columns.size,
+              missingInput: true,
+            },
+          });
+          break;
+        }
+        const hood = neighborhoodOf(msg.key);
+        const mesh = hood ? meshLodChunk(entry.col, msg.step, topColorOf, entry.hasSkyLight, hood, infoOf) : null;
+        post(
+          {
+            type: 'lodResult',
+            key: msg.key,
+            version: msg.version,
+            step: msg.step,
+            mesh,
+            profile: { meshBytes: meshBytes(mesh), meshMs: performance.now() - started, storedColumns: columns.size },
           },
-        });
-        break;
+          transfersOf([mesh]),
+        );
+      } catch (error) {
+        post({ type: 'meshError', key: msg.key, version: msg.version, kind: 'lod', error: errorMessage(error) });
       }
-      const hood = neighborhoodOf(msg.key);
-      const mesh = hood ? meshLodChunk(entry.col, msg.step, topColorOf, entry.hasSkyLight, hood, infoOf) : null;
-      post(
-        {
-          type: 'lodResult',
-          key: msg.key,
-          version: msg.version,
-          step: msg.step,
-          mesh,
-          profile: { meshBytes: meshBytes(mesh), meshMs: performance.now() - started, storedColumns: columns.size },
-        },
-        transfersOf([mesh]),
-      );
       break;
     }
     case 'drop':

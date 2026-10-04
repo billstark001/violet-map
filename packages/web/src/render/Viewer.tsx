@@ -415,7 +415,10 @@ async function loadViewerResources(): Promise<ViewerResources> {
     loadColormap('minecraft:colormap/grass'),
     loadColormap('minecraft:colormap/foliage'),
   ]);
-  const atlas = await buildAtlas(collectTextureIds(bundle, blockInfo));
+  const atlas = await buildAtlas(
+    collectTextureIds(bundle, blockInfo),
+    new Set(Object.keys(bundle.textureAnimations ?? {})),
+  );
   return {
     bundle,
     blockInfo,

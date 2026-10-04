@@ -1,4 +1,11 @@
-import type { AssetBundle, AtlasIndex, BlockInfoMap, BlockModelJson, TextureAlphaMap } from '@violet-map/core';
+import {
+  mapWithConcurrency,
+  type AssetBundle,
+  type AtlasIndex,
+  type BlockInfoMap,
+  type BlockModelJson,
+  type TextureAlphaMap,
+} from '@violet-map/core';
 import { fetchTextureAtlas, textureUrl } from './api';
 
 export interface BuiltAtlas {
@@ -26,18 +33,28 @@ function encode16(target: Uint8Array, offset: number, value: number) {
   target[offset + 1] = n & 0xff;
 }
 
-function textureAnimationData(index: AtlasIndex): TextureAnimationData {
+const MAX_ANIMATION_TABLE_ENTRIES = 65535;
+const MAX_ANIMATION_FRAME_TICKS = 255;
+const MAX_PARALLEL_FALLBACK_TEXTURE_LOADS = 16;
+
+/** Encode animation sequences within the 16-bit start and length fields used by shaders. */
+export function textureAnimationData(index: AtlasIndex): TextureAnimationData {
   const ids: Record<string, number> = {};
   const sequences: { id: string; frames: { u0: number; v0: number; u1: number; v1: number }[] }[] = [];
+  let remainingFrames = MAX_ANIMATION_TABLE_ENTRIES;
   for (const [id, rect] of Object.entries(index).sort(([a], [b]) => a.localeCompare(b))) {
     const animation = rect.animation;
     if (!animation || animation.frames.length < 2) continue;
     const expanded: { u0: number; v0: number; u1: number; v1: number }[] = [];
-    for (let i = 0; i < animation.frames.length && expanded.length < 65535; i++) {
-      const time = Math.max(1, Math.min(255, Math.floor(animation.times[i] ?? 1)));
-      for (let tick = 0; tick < time && expanded.length < 65535; tick++) expanded.push(animation.frames[i]);
+    for (let i = 0; i < animation.frames.length && expanded.length < remainingFrames; i++) {
+      const time = Math.max(1, Math.min(MAX_ANIMATION_FRAME_TICKS, Math.floor(animation.times[i] ?? 1)));
+      for (let tick = 0; tick < time && expanded.length < remainingFrames; tick++) expanded.push(animation.frames[i]);
     }
-    if (expanded.length > 1 && sequences.length < 65535) sequences.push({ id, frames: expanded });
+    if (expanded.length > 1 && sequences.length < MAX_ANIMATION_TABLE_ENTRIES) {
+      sequences.push({ id, frames: expanded });
+      remainingFrames -= expanded.length;
+    }
+    if (remainingFrames < 2) break;
   }
   const infoWidth = 256;
   const infoHeight = Math.max(1, Math.ceil((sequences.length + 1) / infoWidth));
@@ -92,7 +109,7 @@ export function collectTextureIds(bundle: AssetBundle, blockInfo: BlockInfoMap):
         else addModel(value);
       }
     }
-    if (bs?.multipart) {
+    if (Array.isArray(bs?.multipart)) {
       for (const part of bs.multipart as any[]) {
         const apply = part?.apply;
         if (Array.isArray(apply)) apply.forEach(addModel);
@@ -125,7 +142,7 @@ export function collectTextureIds(bundle: AssetBundle, blockInfo: BlockInfoMap):
     const model = bundle.models[id] as BlockModelJson | undefined;
     if (!model) return;
     if (model.textures) for (const v of Object.values(model.textures)) add(v);
-    if (model.parent) visitModel(normalize(model.parent));
+    if (typeof model.parent === 'string') visitModel(normalize(model.parent));
   };
   for (const id of models) {
     visitModel(id);
@@ -156,8 +173,13 @@ function simpleHash(input: string): string {
   return (h >>> 0).toString(36);
 }
 
+/** The fallback atlas freezes declared vertical sprite sheets at their first square frame. */
+export function fallbackTextureSize(width: number, height: number, animated: boolean): [number, number] {
+  return [width, animated && height > width ? width : height];
+}
+
 /** 构建纹理图集。动画贴图（竖长条）只取第一帧。 */
-export async function buildAtlas(ids: string[]): Promise<BuiltAtlas> {
+export async function buildAtlas(ids: string[], animatedIds: ReadonlySet<string> = new Set()): Promise<BuiltAtlas> {
   try {
     const manifest = await fetchTextureAtlas(ids);
     const img = await loadImage(manifest.image);
@@ -180,7 +202,13 @@ export async function buildAtlas(ids: string[]): Promise<BuiltAtlas> {
   }
 
   const PAD = 8;
-  const results = await Promise.allSettled(ids.map((id) => loadImage(textureUrl(id))));
+  const results = await mapWithConcurrency(ids, MAX_PARALLEL_FALLBACK_TEXTURE_LOADS, async (id) => {
+    try {
+      return await loadImage(textureUrl(id));
+    } catch {
+      return null;
+    }
+  });
   const entries: {
     id: string;
     img: HTMLImageElement | null;
@@ -189,13 +217,14 @@ export async function buildAtlas(ids: string[]): Promise<BuiltAtlas> {
     width: number;
     height: number;
   }[] = [{ id: '__missing__', img: null, sourceWidth: 16, sourceHeight: 16, width: 16, height: 16 }];
-  results.forEach((result, i) => {
-    const img = result.status === 'fulfilled' ? result.value : null;
-    // Vanilla animated sprites are vertical strips of square frames. Static
-    // entity textures (signs, chests, shelves, …) keep their native aspect and
-    // resolution so their model UVs remain pixel-accurate.
-    const sourceWidth = img?.width ?? 16;
-    const sourceHeight = img && img.height > img.width ? img.width : (img?.height ?? 16);
+  results.forEach((img, i) => {
+    // Declared animated sprites use the first square frame. Static textures
+    // keep their native aspect and resolution for pixel-accurate model UVs.
+    const [sourceWidth, sourceHeight] = fallbackTextureSize(
+      img?.width ?? 16,
+      img?.height ?? 16,
+      animatedIds.has(ids[i]),
+    );
     const scale = Math.min(1, 256 / Math.max(sourceWidth, sourceHeight));
     entries.push({
       id: ids[i],

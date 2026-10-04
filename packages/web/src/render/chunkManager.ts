@@ -1698,6 +1698,17 @@ export class ChunkManager {
         console.warn('chunk parse error', msg.key, msg.error);
         break;
       }
+      case 'meshError': {
+        this.finishMeshDiagnostic(msg.version, undefined);
+        this.finishActiveMesh(msg.version);
+        const e = this.chunks.get(msg.key);
+        if (e && (msg.kind === 'full' ? e.pendingFullVersion : e.pendingLodVersion) === msg.version) {
+          this.markUnavailable(e, 'error');
+          this.reportStats();
+        }
+        console.warn('chunk mesh error', msg.key, msg.kind, msg.error);
+        break;
+      }
       case 'meshResult': {
         this.finishMeshDiagnostic(msg.version, msg.profile?.meshMs);
         this.finishActiveMesh(msg.version);

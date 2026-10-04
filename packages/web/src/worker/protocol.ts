@@ -59,6 +59,7 @@ export interface WorkerMeshProfile {
 export type WorkerResponse =
   | { type: 'chunkReady'; key: string; biome: string; surfaceY: number; profile?: WorkerChunkProfile }
   | { type: 'chunkError'; key: string; error: string }
+  | { type: 'meshError'; key: string; version: number; kind: 'full' | 'lod'; error: string }
   | { type: 'meshResult'; key: string; version: number; sections: SectionMeshMsg[]; profile?: WorkerMeshProfile }
   | {
       type: 'lodResult';
