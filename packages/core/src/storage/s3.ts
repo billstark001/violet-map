@@ -7,7 +7,16 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { cleanStoragePath } from './paths.js';
+import { validateReadRange } from './range.js';
+import { forEachConcurrent } from '../async.js';
 import type { S3StorageOptions, StoredFileInfo, WorldStorage } from './types.js';
+
+function isMissingObject(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const failure = error as { name?: string; $metadata?: { httpStatusCode?: number } };
+  if (failure.name === 'NoSuchBucket') return false;
+  return failure.name === 'NoSuchKey' || failure.name === 'NotFound' || failure.$metadata?.httpStatusCode === 404;
+}
 
 async function bodyToBytes(body: unknown): Promise<Uint8Array> {
   if (!body) return new Uint8Array();
@@ -62,23 +71,32 @@ export class S3WorldStorage implements WorldStorage {
       return bodyToBytes(
         (await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: this.key(filePath) }))).Body,
       );
-    } catch {
+    } catch (error) {
+      if (!isMissingObject(error)) throw error;
       return null;
     }
   }
 
   async readRange(filePath: string, start: number, length: number): Promise<Uint8Array | null> {
+    validateReadRange(start, length);
+    if (length === 0) return (await this.stat(filePath)) ? new Uint8Array() : null;
     try {
-      const begin = Math.max(0, start),
-        end = Math.max(begin, begin + Math.max(0, length) - 1);
       return bodyToBytes(
         (
           await this.client.send(
-            new GetObjectCommand({ Bucket: this.bucket, Key: this.key(filePath), Range: `bytes=${begin}-${end}` }),
+            new GetObjectCommand({
+              Bucket: this.bucket,
+              Key: this.key(filePath),
+              Range: `bytes=${start}-${start + length - 1}`,
+            }),
           )
         ).Body,
       );
-    } catch {
+    } catch (error) {
+      const failure = error as { name?: string; $metadata?: { httpStatusCode?: number } };
+      if (failure.name === 'InvalidRange' || failure.$metadata?.httpStatusCode === 416)
+        return (await this.stat(filePath)) ? new Uint8Array() : null;
+      if (!isMissingObject(error)) throw error;
       return null;
     }
   }
@@ -93,7 +111,7 @@ export class S3WorldStorage implements WorldStorage {
   }
   async deletePrefix(prefix: string): Promise<number> {
     const files = await this.list(prefix);
-    await Promise.all(files.map((file) => this.delete(file.path)));
+    await forEachConcurrent(files, 16, (file) => this.delete(file.path));
     return files.length;
   }
 
@@ -106,7 +124,8 @@ export class S3WorldStorage implements WorldStorage {
         modifiedAt: result.LastModified?.getTime(),
         etag: result.ETag?.replace(/^"|"$/g, ''),
       };
-    } catch {
+    } catch (error) {
+      if (!isMissingObject(error)) throw error;
       return null;
     }
   }

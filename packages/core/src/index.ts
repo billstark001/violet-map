@@ -1,4 +1,6 @@
 export * from './types.js';
+export * from './dimensionId.js';
+export * from './async.js';
 export * from './region.js';
 export * from './world.js';
 export * from './light.js';

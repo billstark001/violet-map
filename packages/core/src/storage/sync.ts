@@ -93,16 +93,19 @@ async function sha256(bytes: Uint8Array): Promise<string> {
   );
   return Array.from(new Uint8Array(hash), (value) => value.toString(16).padStart(2, '0')).join('');
 }
-async function sameContent(
+async function compareContent(
   source: WorldStorage,
   target: WorldStorage,
   path: string,
   sourceSize: number,
-): Promise<boolean> {
+): Promise<{ same: boolean; sourceBytes: Uint8Array | null }> {
   const targetInfo = await target.stat(path);
-  if (!targetInfo || targetInfo.size !== sourceSize) return false;
+  if (!targetInfo || targetInfo.size !== sourceSize) return { same: false, sourceBytes: null };
   const [from, to] = await Promise.all([source.read(path), target.read(path)]);
-  return !!from && !!to && (await sha256(from)) === (await sha256(to));
+  if (!from) throw new Error(`source file disappeared during sync: ${path}`);
+  if (!to) return { same: false, sourceBytes: from };
+  const [sourceHash, targetHash] = await Promise.all([sha256(from), sha256(to)]);
+  return { same: sourceHash === targetHash, sourceBytes: from };
 }
 
 /** Copy changed files from source to target. Call checkWorldIdentity first to enforce policy. */
@@ -116,13 +119,14 @@ export async function syncWorld(
   const result: SyncResult = { copied: [], skipped: [], deleted: [] };
   for (const file of sourceFiles) {
     const path = cleanStoragePath(file.path);
-    if (await sameContent(source, target, path, file.size)) {
+    const comparison = await compareContent(source, target, path, file.size);
+    if (comparison.same) {
       result.skipped.push(path);
       options.onProgress?.({ type: 'skip', path });
       continue;
     }
     if (!options.dryRun) {
-      const bytes = await source.read(path);
+      const bytes = comparison.sourceBytes ?? (await source.read(path));
       if (!bytes) throw new Error(`source file disappeared during sync: ${path}`);
       await target.write(path, bytes);
     }

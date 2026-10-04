@@ -1,4 +1,6 @@
 import { cleanStoragePath } from './paths.js';
+import { validateReadRange } from './range.js';
+import { forEachConcurrent } from '../async.js';
 import type { ServerStorageOptions, StoredFileInfo, WorldStorage } from './types.js';
 
 /** WorldStorage adapter for a remote Violet Map server's protected storage API. */
@@ -34,10 +36,13 @@ export class ServerWorldStorage implements WorldStorage {
     return new Uint8Array(await (await this.required(response)).arrayBuffer());
   }
   async readRange(filePath: string, start: number, length: number): Promise<Uint8Array | null> {
+    validateReadRange(start, length);
+    if (length === 0) return (await this.stat(filePath)) ? new Uint8Array() : null;
     const response = await fetch(this.url(`files/${encodeURIComponent(cleanStoragePath(filePath))}`), {
-      headers: this.headers({ range: `bytes=${Math.max(0, start)}-${Math.max(0, start + Math.max(0, length) - 1)}` }),
+      headers: this.headers({ range: `bytes=${start}-${start + length - 1}` }),
     });
     if (response.status === 404) return null;
+    if (response.status === 416) return (await this.stat(filePath)) ? new Uint8Array() : null;
     return new Uint8Array(await (await this.required(response)).arrayBuffer());
   }
   async write(filePath: string, bytes: Uint8Array, contentType = 'application/octet-stream'): Promise<void> {
@@ -59,7 +64,7 @@ export class ServerWorldStorage implements WorldStorage {
   }
   async deletePrefix(prefix: string): Promise<number> {
     const files = await this.list(prefix);
-    await Promise.all(files.map((file) => this.delete(file.path)));
+    await forEachConcurrent(files, 16, (file) => this.delete(file.path));
     return files.length;
   }
   async stat(filePath: string): Promise<StoredFileInfo | null> {

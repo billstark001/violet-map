@@ -24,6 +24,7 @@ export class CachedWorldStorage implements WorldStorage {
   private readonly lists = new Map<string, CacheEntry<StoredFileInfo[]>>();
   private readonly directories = new Map<string, CacheEntry<string[]>>();
   private readonly inflight = new Map<string, Promise<unknown>>();
+  private generation = 0;
 
   constructor(
     private readonly storage: WorldStorage,
@@ -35,9 +36,12 @@ export class CachedWorldStorage implements WorldStorage {
   }
 
   private clearMetadata(): void {
+    // A request started before a write must not repopulate the cache afterward.
+    this.generation++;
     this.stats.clear();
     this.lists.clear();
     this.directories.clear();
+    this.inflight.clear();
   }
 
   private async cached<T>(
@@ -52,11 +56,14 @@ export class CachedWorldStorage implements WorldStorage {
     const pendingKey = `${cache === this.stats ? 's' : cache === this.lists ? 'l' : 'd'}:${key}`;
     const pending = this.inflight.get(pendingKey) as Promise<T> | undefined;
     if (pending) return pending;
+    const generation = this.generation;
     const request = load();
     this.inflight.set(pendingKey, request);
     try {
       const value = await request;
-      cache.set(key, { value, expiresAt: Date.now() + ttlMs });
+      if (generation === this.generation && ttlMs > 0) {
+        cache.set(key, { value, expiresAt: Date.now() + ttlMs });
+      }
       return value;
     } finally {
       if (this.inflight.get(pendingKey) === request) this.inflight.delete(pendingKey);

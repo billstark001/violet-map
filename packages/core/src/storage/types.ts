@@ -6,16 +6,23 @@ export interface StoredFileInfo {
   etag?: string;
 }
 
-/** A flat, path-safe object store used to hold Minecraft world files. */
+/**
+ * A flat, path-safe object store used to hold Minecraft world files.
+ * Paths are relative to the configured root and use `/` separators.
+ * Missing files return null; backend failures reject instead.
+ */
 export interface WorldStorage {
   readonly kind: 'local' | 's3' | 'server';
   read(filePath: string): Promise<Uint8Array | null>;
+  /** Read at most length bytes from start; an offset at or beyond EOF returns an empty array. */
   readRange(filePath: string, start: number, length: number): Promise<Uint8Array | null>;
   write(filePath: string, bytes: Uint8Array, contentType?: string): Promise<void>;
   delete(filePath: string): Promise<void>;
   deletePrefix(prefix: string): Promise<number>;
   stat(filePath: string): Promise<StoredFileInfo | null>;
+  /** Recursively list files below a path prefix, sorted by their relative paths. */
   list(prefix?: string): Promise<StoredFileInfo[]>;
+  /** List immediate child directory names below a path prefix. */
   listDirectories(prefix?: string): Promise<string[]>;
 }
 
