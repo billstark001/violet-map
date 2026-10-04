@@ -866,14 +866,6 @@ function isSameFluid(res: MesherResources, texture: string, state: BlockStateRef
   return (state.properties.waterlogged === 'true' || !!bi.waterlogged) && texture.includes('water');
 }
 
-function fullyOccluded(res: MesherResources, view: WorldView, wx: number, wy: number, wz: number): boolean {
-  for (const dir of OCCLUSION_DIRECTIONS) {
-    const d = DIR_VEC[dir];
-    if (!blockOccludes(res, view, wx + d[0], wy + d[1], wz + d[2])) return false;
-  }
-  return true;
-}
-
 function emitFluid(
   res: MesherResources, view: WorldView, builders: MeshBuilderStore,
   fluid: NonNullable<BlockInfo['fluid']>, state: BlockStateRef,
@@ -1039,7 +1031,7 @@ function emitFluid(
     const emitSide = (
       topA: [number, number, number], topB: [number, number, number],
       bottomB: [number, number, number], bottomA: [number, number, number],
-    ) => face(dir, [inset(topA), inset(topB), inset(bottomB), inset(bottomA)], sideUvs(topA, topB, bottomB, bottomA));
+    ) => face(dir, [inset(topA), inset(topB), inset(bottomB), inset(bottomA)], sideUvs(topA, topB));
     const n = neighbor(dir);
     if (isSameFluid(res, fluid.texture, n)) {
       const bottom = neighborBottom();
@@ -1054,7 +1046,6 @@ function emitFluid(
 
   const sideUvs = (
     topA: [number, number, number], topB: [number, number, number],
-    bottomB: [number, number, number], bottomA: [number, number, number],
   ): [number, number][] => {
     // FluidRenderer maps every exposed side to the lower-left 8×8 region of
     // the flowing sprite: U 0..8 and V (1-height)*8..8. The winding comes

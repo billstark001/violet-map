@@ -2,7 +2,9 @@
   "name": "violet-map",
   "private": true,
   "packageManager": "pnpm@12",
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "pnpm run dev:light",
     "dev:light": "pnpm --filter=@violet-map/server --filter=@violet-map/web --parallel -r run dev",
@@ -12,9 +14,14 @@
     "start:light": "pnpm --filter=@violet-map/server --filter=@violet-map/web --parallel -r run start",
     "start:full": "pnpm --filter=@violet-map/server --filter=@violet-map/web --filter=@violet-map/admin --parallel -r run start",
     "typecheck": "pnpm -r run typecheck",
+    "lint": "oxlint --deny-warnings packages",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
     "admin": "pnpm --filter @violet-map/server admin"
   },
   "devDependencies": {
+    "oxfmt": "^0.71.0",
+    "oxlint": "^1.86.0",
     "typescript": "^6.0.3"
   }
 }

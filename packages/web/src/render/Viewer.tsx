@@ -1112,7 +1112,6 @@ function updateManagerAfterCameraTarget(
   engine: Engine,
   manager: ChunkManager | null,
   props: ViewerProps,
-  capabilities: WorldCapabilities | null,
 ) {
   const topView = isTopViewMode(props.viewMode);
   manager?.update(
@@ -1271,7 +1270,7 @@ export function Viewer(props: ViewerProps) {
     moveCameraToTarget(engine, target, props.viewMode);
     persistView(getPersistableView(engine, engine.activeCamera, props.viewMode), true);
     propsRef.current.onStats?.(statsForCamera(latestStatsRef.current, engine.activeCamera, props.viewMode));
-    updateManagerAfterCameraTarget(engine, managerRef.current, props, capabilitiesRef.current);
+    updateManagerAfterCameraTarget(engine, managerRef.current, props);
   }, [ready, props.cameraTarget?.seq]);
 
   return (

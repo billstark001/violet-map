@@ -435,11 +435,6 @@ interface SectionLodCache {
   exterior: Uint8Array;
 }
 
-interface SurfaceCell {
-  y: number;
-  color: Rgb | null;
-}
-
 function createSectionLodCacheScratch(): SectionLodCache {
   return { shapes: new Array<LodShape | null>(LOD_CACHE_CELLS), exterior: new Uint8Array(LOD_CACHE_CELLS) };
 }
