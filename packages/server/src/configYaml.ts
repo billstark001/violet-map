@@ -17,11 +17,14 @@ export function parseConfigYaml(text: string): YamlObject {
 }
 
 /** Find the configured YAML file; malformed files fail startup with their path. */
-export function findYamlConfig(): { file: string; data: YamlObject } | null {
-  const explicit = process.env.VIOLET_MAP_CONFIG;
+export function findYamlConfig(
+  options: { env?: NodeJS.ProcessEnv; cwd?: string; file?: string } = {},
+): { file: string; data: YamlObject } | null {
+  const cwd = options.cwd ?? process.cwd();
+  const explicit = options.file ?? (options.env ?? process.env).VIOLET_MAP_CONFIG;
   const candidates = explicit
-    ? [path.resolve(explicit)]
-    : [path.resolve('violet-map.yaml'), path.resolve('violet-map.yml')];
+    ? [path.resolve(cwd, explicit)]
+    : [path.resolve(cwd, 'violet-map.yaml'), path.resolve(cwd, 'violet-map.yml')];
   for (const file of candidates) {
     try {
       if (!fs.statSync(file).isFile()) throw new Error('not a file');

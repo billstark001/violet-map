@@ -9,7 +9,8 @@ import { closeDatabase, getDatabase } from '../src/db/index.js';
 import { connectDatabase } from '../src/db/connection.js';
 import { migrateDatabase } from '../src/db/migrations.js';
 import { users } from '../src/db/schema.js';
-import { authenticateCredential, createUser, deleteUser, login, updateUser } from '../src/users.js';
+import { createUserService } from '../src/users.js';
+const { authenticateCredential, createUser, deleteUser, login, updateUser } = createUserService(getDatabase, config);
 
 test('database initialization retries and password changes revoke existing credentials', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-users-'));

@@ -8,18 +8,29 @@
     "migrations"
   ],
   "type": "module",
+  "exports": {
+    "./admin": {
+      "types": "./src/admin.ts",
+      "development": "./src/admin.ts",
+      "default": "./dist/src/admin.js"
+    },
+    "./contracts": {
+      "types": "./src/contracts.ts",
+      "development": "./src/contracts.ts",
+      "default": "./dist/src/contracts.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.db.json && node scripts/build-db.mjs",
-    "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
+    "dev": "tsx watch --conditions=development src/index.ts",
+    "start": "tsx --conditions=development src/index.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "admin": "tsx src/cli.ts",
     "db:generate": "drizzle-kit generate",
     "db:check": "drizzle-kit check && tsx src/db/check.ts",
     "db:status": "node dist/src/db/maintenance.js status",
     "db:migrate": "node dist/src/db/maintenance.js migrate",
     "db:baseline": "node dist/src/db/maintenance.js baseline",
-    "test:db": "tsx --test test/migrations.test.ts",
+    "test:db": "tsx --conditions=development --test test/migrations.test.ts",
     "test:db:artifact": "node --test test/maintenance-artifact.test.mjs"
   },
   "dependencies": {

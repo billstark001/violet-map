@@ -12,9 +12,10 @@ import { ChunkReadLimiter, ChunkServiceBusyError } from './chunkReadLimiter.js';
 import { isChunkCoordinate, parseChunkCoordinates } from './chunkCoordinates.js';
 import { readLimitedBody } from './limitedBody.js';
 import { isDimensionId } from '@violet-map/core';
-import { principalFor, requireRole } from './auth.js';
+import { createAuthorization, REQUIRED_ROLE } from './auth.js';
+import { userService } from './runtimeUsers.js';
+import { createManagementApi } from './managementApi.js';
 import { cleanStoragePath, worldStorage } from './storage.js';
-import { createUser, deleteUser, issueCredential, listUsers, login, updateUser, asCreatableRole } from './users.js';
 import {
   buildAssetBundle,
   buildTextureAtlas,
@@ -46,8 +47,9 @@ import {
 } from './worldStore.js';
 
 const app = new Hono();
+const { requireRole } = createAuthorization(userService);
 app.use('*', cors());
-app.use('/api/admin/*', requireRole('ci'));
+app.use('/api/admin/*', requireRole(REQUIRED_ROLE.worlds));
 app.use('/api/worlds/:world/:dim/*', async (c, next) => {
   if (!isDimensionId(c.req.param('dim'))) return c.json({ error: 'invalid dimension id' }, 400);
   await next();
@@ -58,7 +60,6 @@ app.use('/api/admin/worlds/:world/:dim/*', async (c, next) => {
 });
 
 const MAX_DIAGNOSTIC_BYTES = 2 * 1024 * 1024;
-const MAX_LOGIN_REQUEST_BYTES = 16 * 1024;
 const MAX_CHUNK_REQUEST_BYTES = 64 * 1024;
 const MAX_ATLAS_REQUEST_BYTES = 128 * 1024;
 const MAX_CONCURRENT_CHUNK_READS = 8;
@@ -102,35 +103,9 @@ function adminStoragePath(c: { req: { path: string } }, segment: 'files' | 'stat
   return cleanStoragePath(decodeURIComponent(c.req.path.slice(prefix.length)));
 }
 
-app.post('/api/auth/login', async (c) => {
-  const bytes = await readLimitedBody(c.req.raw, MAX_LOGIN_REQUEST_BYTES);
-  if (!bytes) return c.json({ error: 'request body too large' }, 413);
-  let body: unknown;
-  try {
-    body = JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    return c.json({ error: 'invalid JSON' }, 400);
-  }
-  if (
-    !body ||
-    typeof body !== 'object' ||
-    typeof (body as { username?: unknown }).username !== 'string' ||
-    typeof (body as { password?: unknown }).password !== 'string'
-  )
-    return c.json({ error: 'username and password are required' }, 400);
-  const credential = await login((body as { username: string }).username, (body as { password: string }).password);
-  return credential ? c.json(credential) : c.json({ error: 'invalid credentials' }, 401);
-});
+app.route('/', createManagementApi(userService));
 
-app.get('/api/auth/me', requireRole('viewer'), async (c) => {
-  const principal = await principalFor(c);
-  return c.json(
-    principal ? { id: principal.id, username: principal.username, role: principal.role } : { error: 'unauthorized' },
-    principal ? 200 : 401,
-  );
-});
-
-app.post('/api/diagnostics', requireRole('viewer'), async (c) => {
+app.post('/api/diagnostics', requireRole(REQUIRED_ROLE.diagnostics), async (c) => {
   const bytes = await readLimitedBody(c.req.raw, MAX_DIAGNOSTIC_BYTES);
   if (!bytes) {
     return c.json({ error: 'diagnostic payload too large' }, 413);
@@ -274,7 +249,7 @@ app.post('/api/worlds/:world/:dim/chunks', async (c) => {
 app.get('/api/assets/bundle', async (c) =>
   jsonPayload(c, await getAssetBundlePayload(), 'public, max-age=300, must-revalidate'),
 );
-app.post('/api/assets/reload', requireRole('admin'), async (c) => {
+app.post('/api/assets/reload', requireRole(REQUIRED_ROLE.data), async (c) => {
   await buildAssetBundle(true);
   clearTextureAtlasCache();
   clearGameDataCaches();
@@ -352,68 +327,13 @@ app.get('/api/data/blocks', async (c) =>
 app.get('/api/data/biomes', async (c) =>
   jsonPayload(c, cachedObjectPayload(await readBiomes()), 'public, max-age=60, must-revalidate'),
 );
-app.put('/api/data/biomes', requireRole('admin'), async (c) => {
+app.put('/api/data/biomes', requireRole(REQUIRED_ROLE.data), async (c) => {
   await writeDataFile('biomes.json', await c.req.json());
   return c.json({ ok: true });
 });
 app.get('/api/data/dimensions', async (c) =>
   jsonPayload(c, cachedObjectPayload(await readDimensions()), 'public, max-age=60, must-revalidate'),
 );
-
-app.get('/api/admin/users', requireRole('admin'), async (c) => c.json(await listUsers()));
-
-app.post('/api/admin/users', requireRole('admin'), async (c) => {
-  const body = await c.req
-    .json<{ username?: string; password?: string; role?: string }>()
-    .catch(() => ({}) as { username?: string; password?: string; role?: string });
-  const role = asCreatableRole(body.role);
-  if (!role || typeof body.username !== 'string' || typeof body.password !== 'string') {
-    return c.json({ error: 'username, password, and a non-special role are required' }, 400);
-  }
-  try {
-    return c.json(await createUser({ username: body.username, password: body.password, role }), 201);
-  } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
-  }
-});
-
-app.patch('/api/admin/users/:username', requireRole('admin'), async (c) => {
-  const body = await c.req
-    .json<{ password?: string; role?: string; enabled?: boolean }>()
-    .catch(() => ({}) as { password?: string; role?: string; enabled?: boolean });
-  const role = body.role === undefined ? undefined : asCreatableRole(body.role);
-  if (body.role !== undefined && !role)
-    return c.json({ error: 'root and guest are reserved roles and cannot be assigned' }, 400);
-  if (body.password !== undefined && typeof body.password !== 'string')
-    return c.json({ error: 'password must be a string' }, 400);
-  if (body.enabled !== undefined && typeof body.enabled !== 'boolean')
-    return c.json({ error: 'enabled must be a boolean' }, 400);
-  try {
-    return c.json(await updateUser(c.req.param('username'), { password: body.password, role, enabled: body.enabled }));
-  } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
-  }
-});
-
-app.delete('/api/admin/users/:username', requireRole('admin'), async (c) => {
-  try {
-    await deleteUser(c.req.param('username'));
-    return c.json({ ok: true });
-  } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
-  }
-});
-
-app.post('/api/admin/users/:username/credentials', requireRole('admin'), async (c) => {
-  const body = await c.req.json<{ expiresInSeconds?: number }>().catch(() => ({}) as { expiresInSeconds?: number });
-  const principal = await principalFor(c);
-  if (!principal) return c.json({ error: 'unauthorized' }, 401);
-  try {
-    return c.json(await issueCredential(c.req.param('username'), Number(body.expiresInSeconds), principal), 201);
-  } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
-  }
-});
 
 // These protected primitive endpoints are the server side of ServerWorldStorage.
 app.get('/api/admin/storage/list', async (c) => c.json(await worldStorage.list(c.req.query('prefix') ?? '')));

@@ -1,29 +1,18 @@
 import { config } from '../config.js';
-import { connectDatabase, type DatabaseContext } from './connection.js';
-import { assertDatabaseCurrent } from './migrations.js';
+import type { DatabaseContext } from './connection.js';
+import { openApplicationDatabase } from './application.js';
 
 let databasePromise: Promise<DatabaseContext> | undefined;
 
 export function getDatabase(): Promise<DatabaseContext> {
   if (!databasePromise) {
-    const pending = createDatabase();
+    const pending = openApplicationDatabase(config);
     databasePromise = pending;
     void pending.catch(() => {
       if (databasePromise === pending) databasePromise = undefined;
     });
   }
   return databasePromise;
-}
-
-async function createDatabase(): Promise<DatabaseContext> {
-  const database = await connectDatabase(config);
-  try {
-    await assertDatabaseCurrent(database);
-    return database;
-  } catch (error) {
-    await database.close();
-    throw error;
-  }
 }
 
 export async function closeDatabase(): Promise<void> {
