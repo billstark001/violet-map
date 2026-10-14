@@ -1,11 +1,14 @@
 {
   "name": "@violet-map/workspace",
+  "version": "0.1.0",
   "private": true,
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
     "brand:export": "node scripts/export-branding.mjs",
+    "version:check": "node scripts/version.mjs",
+    "version:set": "node scripts/version.mjs --set",
     "dev": "pnpm run dev:light",
     "dev:light": "pnpm --filter=@violet-map/server --filter=@violet-map/web --parallel -r run dev",
     "dev:full": "pnpm --filter=@violet-map/server --filter=@violet-map/web --filter=@violet-map/admin --parallel -r run dev",
@@ -14,7 +17,7 @@
     "start:light": "pnpm --filter=@violet-map/server --filter=@violet-map/web --parallel -r run start",
     "start:full": "pnpm --filter=@violet-map/server --filter=@violet-map/web --filter=@violet-map/admin --parallel -r run start",
     "typecheck": "pnpm -r run typecheck",
-    "test": "tsx --test packages/cli/test/*.test.ts packages/core/test/*.test.ts packages/server/test/*.test.ts packages/web/test/*.test.ts",
+    "test": "tsx --test scripts/test/*.test.mjs packages/cli/test/*.test.ts packages/core/test/*.test.ts packages/server/test/*.test.ts packages/web/test/*.test.ts",
     "lint": "oxlint --deny-warnings packages",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",

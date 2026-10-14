@@ -31,6 +31,7 @@ pnpm dev:full
 
 ```bash
 pnpm typecheck
+pnpm version:check
 pnpm lint
 pnpm format:check
 pnpm test
@@ -38,6 +39,14 @@ pnpm build
 ```
 
 Docker equivalents are `docker compose --profile light up` and `docker compose --profile full up`.
+
+## Versions and changelog
+
+The root workspace and all five packages start at `0.1.0`. Each package's `package.json` is the source of truth for its version; executable versions are read from that metadata. Run `pnpm --filter @violet-map/cli dev --version` or `pnpm admin --version` to inspect the corresponding CLI version.
+
+[CHANGELOG.md](CHANGELOG.md) records releases and the version policy. `pnpm version:check` validates every package's semantic version and enforces a shared MAJOR, plus a shared MINOR while MAJOR is `0`. Package PATCH versions may differ; after `1.0.0`, MINOR versions may also differ. CI runs this check.
+
+For a coordinated release, run `pnpm version:set <version>` (for example, `pnpm version:set 0.2.0-rc.1`) to update the root and all workspace manifests. To update one package, use its exact metadata name: `pnpm version:set 0.1.1 --package @violet-map/cli`. The `--package` option may also precede the version. Both modes validate the entire proposed workspace against the version policy before writing any files; a targeted update leaves all other manifests unchanged. Add the corresponding changelog entry and run the production checks before publishing; these commands only update or validate local metadata and do not create commits, tags, or publications. Minecraft, cache, and file-format versions advance independently of package versions.
 
 ## Assets and local worlds
 

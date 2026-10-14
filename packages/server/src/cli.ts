@@ -1,6 +1,11 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
 import { closeDatabase, getDatabase } from './db/index.js';
 import { CREATABLE_ROLES, createUser, deleteUser, listUsers, updateUser } from './users.js';
+
+const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+  version: string;
+};
 
 function value(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
@@ -15,9 +20,10 @@ function required(args: string[], name: string): string {
   return result;
 }
 function usage(): string {
-  return `Violet Map admin CLI
+  return `Violet Map admin CLI ${version}
 
 Usage:
+  vm-admin --version
   vm-admin users list
   vm-admin users create --username <name> --password <password> --role <viewer|ci|admin>
   vm-admin users update --username <name> [--password <password>] [--role <viewer|ci|admin>] [--enable|--disable]
@@ -29,6 +35,7 @@ root and guest are virtual/reserved roles and cannot be created.`;
 
 async function main(): Promise<void> {
   const [area, command, ...args] = process.argv.slice(2);
+  if (area === '--version' || area === '-V') return void console.log(version);
   if (!area || area === 'help' || area === '--help' || area === '-h') return void console.log(usage());
   if (area !== 'users' || !command) throw new Error(usage());
   await getDatabase();
