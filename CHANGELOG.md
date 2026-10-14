@@ -24,6 +24,22 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ## [Unreleased]
 
+### Added
+
+- Named CLI profiles, platform configuration/state/cache paths, `--cli-home` and explicit configuration-file overrides, with setting-source inspection.
+- Shared server login, identity, logout/revocation, and credential references for API administration and remote world synchronization. Secrets use an optional OS credential-store binding or an explicitly selected private file backend; CI can inject environment variables or files.
+- A side-effect-free optional `@violet-map/server/admin` library for direct user/credential operations on already-migrated PGlite or PostgreSQL databases. Database generation/status/migration/baseline remain exclusively in the server deployment tooling.
+- PGlite/PostgreSQL management and authorization integration tests, saved-login/world-sync tests, configuration and credential tests, and relocated CLI artifact checks without server, TypeScript execution, or native credential storage.
+- An explicit real-system credential-store integration test covering write/read/update/delete, application credential replacement, and verified cleanup in an isolated temporary namespace.
+
+### Changed
+
+- The sole CLI executable is `violet-map`, using Commander for every command; user administration now belongs to the CLI package. Former executable names, the server admin CLI, and old command/flag aliases are removed.
+- CLI administration defaults to authenticated HTTP APIs; direct access requires `--via database` and an explicit target. Explicit database-directory selection takes precedence over ambient PostgreSQL connection settings.
+- Remote APIs distinguish unauthenticated requests (401) from authenticated users lacking permission (403). User roles are checked from current account state; logout and per-user revocation invalidate stored server credentials.
+- S3 supports refreshable AWS credential providers and temporary session tokens, while profiles contain only non-secret settings and credential references. Programmatic S3 storage options now take a `credentials` identity/provider instead of separate key fields.
+- Core and the optional server library provide built JavaScript exports; workspace development uses an explicit `development` condition. The CLI requires Node.js 24 or newer.
+
 ## [0.1.0] - 2026-10-14
 
 Initial consolidated development baseline, including work since the first commit on 2026-07-05. All five packages (`@violet-map/core`, `@violet-map/cli`, `@violet-map/server`, `@violet-map/web`, and `@violet-map/admin`) and the root workspace are versioned at `0.1.0`.
