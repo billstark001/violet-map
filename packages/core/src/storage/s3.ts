@@ -51,10 +51,7 @@ export class S3WorldStorage implements WorldStorage {
       endpoint: options.endpoint,
       region: options.region ?? 'auto',
       forcePathStyle: options.forcePathStyle ?? true,
-      credentials:
-        options.accessKeyId && options.secretAccessKey
-          ? { accessKeyId: options.accessKeyId, secretAccessKey: options.secretAccessKey }
-          : undefined,
+      credentials: options.credentials,
     });
   }
 

@@ -1,33 +1,42 @@
 {
   "name": "@violet-map/core",
   "version": "0.1.0",
+  "files": [
+    "dist",
+    "src"
+  ],
   "type": "module",
   "exports": {
     ".": {
       "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
     },
     "./mesher": {
       "types": "./src/mesher/index.ts",
-      "default": "./src/mesher/index.ts"
+      "development": "./src/mesher/index.ts",
+      "default": "./dist/mesher/index.js"
     },
     "./nbt": {
       "types": "./src/nbt.ts",
-      "default": "./src/nbt.ts"
+      "development": "./src/nbt.ts",
+      "default": "./dist/nbt.js"
     },
     "./region": {
       "types": "./src/region.ts",
-      "default": "./src/region.ts"
+      "development": "./src/region.ts",
+      "default": "./dist/region.js"
     },
     "./storage": {
       "types": "./src/storage/index.ts",
-      "default": "./src/storage/index.ts"
+      "development": "./src/storage/index.ts",
+      "default": "./dist/storage/index.js"
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json",
     "start": "node -e \"console.log('@violet-map/core is a library package with no standalone service')\"",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1079.0",

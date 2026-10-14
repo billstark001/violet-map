@@ -26,13 +26,18 @@ export interface WorldStorage {
   listDirectories(prefix?: string): Promise<string[]>;
 }
 
+export interface S3Credentials {
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken?: string;
+}
+
 export interface S3StorageOptions {
   bucket: string;
   prefix?: string;
   endpoint?: string;
   region?: string;
-  accessKeyId?: string;
-  secretAccessKey?: string;
+  credentials?: S3Credentials | (() => Promise<S3Credentials>);
   forcePathStyle?: boolean;
 }
 
