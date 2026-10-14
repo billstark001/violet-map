@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { TOP_MAP_POSITION_OFFSET, TOP_MAP_POSITION_SCALE } from '@violet-map/core';
+import { TOP_MAP_POSITION_OFFSET, TOP_MAP_POSITION_SCALE } from '@violet-map/render/top-map/mesh';
 import type { TextureAnimationData } from '../atlas';
 
 export interface SharedUniforms {

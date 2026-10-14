@@ -1,3 +1,4 @@
+import { apiTokenKey, serviceCapabilities } from './runtime';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge, Box, Button, Card, Flex, Select, Slider, Switch, Tabs, Text, TextField, Theme } from '@radix-ui/themes';
 import { useTranslation } from 'react-i18next';
@@ -23,12 +24,11 @@ interface WorldInfo {
 type Axis = 'x' | 'y' | 'z';
 type AngleAxis = 'yaw' | 'pitch';
 type DiagnosticDetail = 'off' | 'simple' | 'standard' | 'detailed';
-type ViewerStats = ViewerStatsPayload;
 
 const SETTINGS_STORAGE_KEY = 'violet-map:settings';
 const PANEL_STORAGE_KEY = 'violet-map:panel-collapsed';
 const DIAGNOSTIC_PANEL_STORAGE_KEY = 'violet-map:diagnostic-panel-collapsed';
-const DIAGNOSTIC_TOKEN_STORAGE_KEY = 'violet-map:diagnostic-server-token';
+const diagnosticTokenKey = () => apiTokenKey('diagnostic-server-token');
 const TOP_CLIP_MIN_Y = -80;
 const TOP_CLIP_MAX_Y = 384;
 const TOP_CLIP_STEP = 16;
@@ -156,7 +156,7 @@ function topClipRangeSetting(dimension: string): TopClipRange {
   return fallback;
 }
 
-function initialViewerStats(viewMode: ViewMode): ViewerStats {
+function initialViewerStats(viewMode: ViewMode): ViewerStatsPayload {
   return { ...EMPTY_CHUNK_SCHEDULER_STATS, pos: [0, 0, 0], yaw: 0, pitch: 0, viewMode };
 }
 
@@ -183,7 +183,7 @@ function degreesText(value: number): string {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
-function angleDraftFromStats(stats: ViewerStats): Record<AngleAxis, string> {
+function angleDraftFromStats(stats: ViewerStatsPayload): Record<AngleAxis, string> {
   return {
     yaw: degreesText(normalizeYawDegrees((stats.yaw * 180) / Math.PI)),
     pitch: degreesText(clampPitchDegrees((stats.pitch * 180) / Math.PI)),
@@ -242,7 +242,7 @@ export default function App() {
   );
   const [diagnosticServerToken, setDiagnosticServerToken] = useState(() => {
     try {
-      return sessionStorage.getItem(DIAGNOSTIC_TOKEN_STORAGE_KEY) ?? '';
+      return sessionStorage.getItem(diagnosticTokenKey()) ?? '';
     } catch {
       return '';
     }
@@ -252,8 +252,8 @@ export default function App() {
   );
   const [diagnosticUploadMessage, setDiagnosticUploadMessage] = useState('');
   const [diagnosticSnapshotAvailable, setDiagnosticSnapshotAvailable] = useState(false);
-  const [stats, setStats] = useState<ViewerStats>(() => initialViewerStats(viewMode));
-  const latestStatsRef = useRef<ViewerStats>(initialViewerStats(viewMode));
+  const [stats, setStats] = useState<ViewerStatsPayload>(() => initialViewerStats(viewMode));
+  const latestStatsRef = useRef<ViewerStatsPayload>(initialViewerStats(viewMode));
   const diagnosticSnapshotProviderRef = useRef<(() => ViewerDiagnosticSnapshot | null) | null>(null);
   const [panelTab, setPanelTab] = useState('view');
   const [cacheStats, setCacheStats] = useState({ entries: 0, bytes: 0 });
@@ -450,8 +450,8 @@ export default function App() {
   const setDiagnosticToken = (value: string) => {
     setDiagnosticServerToken(value);
     try {
-      if (value) sessionStorage.setItem(DIAGNOSTIC_TOKEN_STORAGE_KEY, value);
-      else sessionStorage.removeItem(DIAGNOSTIC_TOKEN_STORAGE_KEY);
+      if (value) sessionStorage.setItem(diagnosticTokenKey(), value);
+      else sessionStorage.removeItem(diagnosticTokenKey());
     } catch {
       // Session storage may be unavailable in restricted contexts.
     }
@@ -471,7 +471,7 @@ export default function App() {
   };
   const handleUploadDiagnosticSnapshot = () => {
     const snapshot = captureDiagnosticSnapshot();
-    if (!snapshot || !diagnosticServerToken.trim()) return;
+    if (!serviceCapabilities().diagnostics || !snapshot || !diagnosticServerToken.trim()) return;
     setDiagnosticUploadStatus('uploading');
     setDiagnosticUploadMessage('');
     void uploadDiagnosticSnapshot(snapshot, diagnosticServerToken.trim())
@@ -536,7 +536,12 @@ export default function App() {
             <Flex justify="between" align="center">
               {!panelCollapsed && (
                 <Flex align="center" gap="2">
-                  <img src="/brand/violet-map-logo-light.svg" alt="" width="28" height="21" />
+                  <img
+                    src={`${import.meta.env.BASE_URL}brand/violet-map-logo-light.svg`}
+                    alt=""
+                    width="28"
+                    height="21"
+                  />
                   <Text size="2" weight="bold">
                     Violet Map
                   </Text>
@@ -810,38 +815,44 @@ export default function App() {
                           >
                             {t('downloadDiagnosticSnapshot')}
                           </Button>
-                          <Button
-                            size="1"
-                            variant="soft"
-                            onClick={handleUploadDiagnosticSnapshot}
-                            disabled={
-                              !diagnosticSnapshotAvailable ||
-                              !diagnosticServerToken.trim() ||
-                              diagnosticUploadStatus === 'uploading'
-                            }
-                          >
-                            {diagnosticUploadStatus === 'uploading'
-                              ? t('uploadingDiagnosticSnapshot')
-                              : t('uploadDiagnosticSnapshot')}
-                          </Button>
+                          {serviceCapabilities().diagnostics && (
+                            <Button
+                              size="1"
+                              variant="soft"
+                              onClick={handleUploadDiagnosticSnapshot}
+                              disabled={
+                                !diagnosticSnapshotAvailable ||
+                                !diagnosticServerToken.trim() ||
+                                diagnosticUploadStatus === 'uploading'
+                              }
+                            >
+                              {diagnosticUploadStatus === 'uploading'
+                                ? t('uploadingDiagnosticSnapshot')
+                                : t('uploadDiagnosticSnapshot')}
+                            </Button>
+                          )}
                         </Flex>
-                        <Text
-                          as="label"
-                          size="1"
-                          htmlFor="diagnostic-server-token"
-                          style={{ display: 'block', marginTop: 10, marginBottom: 4 }}
-                        >
-                          {t('diagnosticServerToken')}
-                        </Text>
-                        <TextField.Root
-                          id="diagnostic-server-token"
-                          size="1"
-                          type="password"
-                          autoComplete="off"
-                          value={diagnosticServerToken}
-                          placeholder={t('diagnosticServerTokenHint')}
-                          onChange={(event) => setDiagnosticToken(event.currentTarget.value)}
-                        />
+                        {serviceCapabilities().diagnostics && (
+                          <>
+                            <Text
+                              as="label"
+                              size="1"
+                              htmlFor="diagnostic-server-token"
+                              style={{ display: 'block', marginTop: 10, marginBottom: 4 }}
+                            >
+                              {t('diagnosticServerToken')}
+                            </Text>
+                            <TextField.Root
+                              id="diagnostic-server-token"
+                              size="1"
+                              type="password"
+                              autoComplete="off"
+                              value={diagnosticServerToken}
+                              placeholder={t('diagnosticServerTokenHint')}
+                              onChange={(event) => setDiagnosticToken(event.currentTarget.value)}
+                            />
+                          </>
+                        )}
                         {diagnosticUploadStatus !== 'idle' && diagnosticUploadStatus !== 'uploading' && (
                           <Text
                             size="1"

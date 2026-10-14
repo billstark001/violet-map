@@ -3,7 +3,7 @@ import type { CliContext } from '../context.js';
 import {
   editConfig,
   validName,
-  serverOrigin,
+  serverBaseUrl,
   profilePath,
   validateReference,
   type Profile,
@@ -27,7 +27,7 @@ export async function setProfile(context: CliContext, name: string, options: Pro
   validName(name);
   await editConfig(context.paths, (config) => {
     const profile: Profile = config.profiles[name] ?? {};
-    if (options.serverUrl !== undefined) profile.server = { url: serverOrigin(options.serverUrl) };
+    if (options.serverUrl !== undefined) profile.server = { url: serverBaseUrl(options.serverUrl) };
     if (options.databaseDir !== undefined || options.databaseUrlRef !== undefined)
       profile.database = {
         ...profile.database,
@@ -81,7 +81,7 @@ export function showConfig(context: CliContext, sources: boolean) {
   const value: Record<string, unknown> = {
     profile: context.profileName,
     settings: {
-      server: server ? { url: serverOrigin(server) } : undefined,
+      server: server ? { url: serverBaseUrl(server) } : undefined,
       database: {
         dir: databaseDir,
         urlRef: context.env.DATABASE_URL ? 'env:DATABASE_URL' : context.profile.database?.urlRef,

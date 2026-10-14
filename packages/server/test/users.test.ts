@@ -3,27 +3,25 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { config } from '../src/config.js';
+
 import { eq } from 'drizzle-orm';
-import { closeDatabase, getDatabase } from '../src/db/index.js';
+import { createDatabaseService } from '../src/db/index.js';
 import { connectDatabase } from '../src/db/connection.js';
 import { migrateDatabase } from '../src/db/migrations.js';
 import { users } from '../src/db/schema.js';
 import { createUserService } from '../src/users.js';
-const { authenticateCredential, createUser, deleteUser, login, updateUser } = createUserService(getDatabase, config);
 
 test('database initialization retries and password changes revoke existing credentials', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-users-'));
-  const oldDir = config.databaseDir;
-  const oldUrl = config.databaseUrl;
+  const config = { databaseDir: '', databaseUrl: undefined };
+  const { closeDatabase, getDatabase } = createDatabaseService(config);
+  const { authenticateCredential, createUser, deleteUser, login, updateUser } = createUserService(getDatabase);
   const invalidDir = path.join(root, 'file');
   await fs.writeFile(invalidDir, 'not a directory');
   config.databaseUrl = undefined;
   config.databaseDir = invalidDir;
   t.after(async () => {
     await closeDatabase();
-    config.databaseDir = oldDir;
-    config.databaseUrl = oldUrl;
     await fs.rm(root, { recursive: true, force: true });
   });
 

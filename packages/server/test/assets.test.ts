@@ -19,7 +19,9 @@ test('atlas keeps animation frames when interpolation would exceed the pixel bud
       path.join(textureDir, 'sheet.png.mcmeta'),
       JSON.stringify({ animation: { frametime: 255, interpolate: true } }),
     );
-    const { buildTextureAtlas } = await import('../src/assets.js');
+    const { createAssetService } = await import('../src/assets.js');
+    const { loadServerConfig } = await import('../src/configuration.js');
+    const { buildTextureAtlas } = createAssetService(loadServerConfig());
     const { manifest } = await buildTextureAtlas(['test:block/sheet']);
     assert.equal(manifest.index['test:block/sheet'].animation?.frames.length, 4);
     assert.deepEqual(manifest.index['test:block/sheet'].animation?.times, [255, 255, 255, 255]);

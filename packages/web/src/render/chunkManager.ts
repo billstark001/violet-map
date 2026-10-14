@@ -1,13 +1,9 @@
 import * as THREE from 'three';
-import type { DimensionDef, MeshBuffers, RenderLayer } from '@violet-map/core';
-import {
-  fetchChunkHashes,
-  fetchChunks,
-  fetchChunkSourceCoverage,
-  type ChunkHashPayload,
-  type ChunkPayload,
-  type ChunkSourceCoveragePayload,
-} from '../api';
+import type { DimensionDef } from '@violet-map/core/domain';
+import type { MeshBuffers } from '@violet-map/render';
+import type { RenderLayer } from '@violet-map/core/assets';
+import { fetchChunkHashes, fetchChunks, fetchChunkSourceCoverage } from '../api';
+import { type ChunkHashPayload, type ChunkPayload, type ChunkCoverage } from '@violet-map/core/contracts';
 import { debugLog, isDebugLoggingEnabled } from '../logger';
 import { chunkKey, type SectionMeshMsg, WorkerInit, WorkerRequest, WorkerResponse } from '../worker/protocol';
 import { getCachedFull, getCachedLod, putCachedFull, putCachedLod, type MeshCacheKeyParts } from '../meshCache';
@@ -196,7 +192,7 @@ function normalizeTopClipRange(range?: TopClipRange): TopClipRange {
   };
 }
 
-function normalizeChunkSourceCoverage(payload: ChunkSourceCoveragePayload): ChunkSourceCoverage {
+function normalizeChunkSourceCoverage(payload: ChunkCoverage): ChunkSourceCoverage {
   const regions = new Set<string>();
   const regionMasks = new Map<string, Uint8Array>();
   const chunks = new Set<string>();

@@ -1,4 +1,4 @@
-import { config } from '../config.js';
+import { readAdminConfig } from '../configuration.js';
 import { connectDatabase, withMigrationLock } from './connection.js';
 import { baselineDatabase, databaseStatus, migrateDatabase } from './migrations.js';
 
@@ -7,7 +7,7 @@ async function main(): Promise<number> {
   if (process.argv.length !== 3 || !['status', 'migrate', 'baseline'].includes(command)) {
     throw new Error('Usage: node dist/src/db/maintenance.js <status|migrate|baseline>');
   }
-  const database = await connectDatabase(config);
+  const database = await connectDatabase(readAdminConfig());
   try {
     const status =
       command === 'migrate'

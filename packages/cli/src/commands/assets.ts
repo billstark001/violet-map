@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import * as childProcess from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { resolvePath } from './common.js';
+import { resolvePath } from './paths.js';
 
 const execFile = promisify(childProcess.execFile);
 const MANIFEST_URL = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json';

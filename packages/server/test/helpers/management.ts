@@ -4,14 +4,13 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { TestContext } from 'node:test';
 import { Pool } from 'pg';
-import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { connectDatabase } from '../../src/db/connection.js';
 import { migrateDatabase } from '../../src/db/migrations.js';
 import { createUserService } from '../../src/users.js';
-import { createManagementApi } from '../../src/managementApi.js';
-import { createAuthorization, REQUIRED_ROLE } from '../../src/auth.js';
-import { LocalWorldStorage, cleanStoragePath } from '@violet-map/core/storage';
+import { createApp } from '../../src/app.js';
+import { createServices } from '../../src/services.js';
+import { loadServerConfig } from '../../src/configuration.js';
 
 export async function managementFixture(t: TestContext, driver: 'pglite' | 'postgres' = 'pglite') {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-management-'));
@@ -41,35 +40,23 @@ export async function managementFixture(t: TestContext, driver: 'pglite' | 'post
     rootUsername: 'operator',
     rootPassword: 'operator-password',
   });
-  return { root, options, database, service };
+  const config = loadServerConfig({
+    env: {
+      DATA_DIR: root,
+      WORLDS_DIR: path.join(root, 'worlds'),
+      ROOT_USERNAME: 'operator',
+      ROOT_PASSWORD: 'operator-password',
+    },
+    cwd: root,
+  });
+  const services = await createServices(config, {
+    database: () => ({ getDatabase: async () => database, closeDatabase: async () => {} }),
+  });
+  const app = createApp(config, services);
+  return { root, options, database, service, app, storage: services.storage };
 }
 export async function serveManagement(t: TestContext, fixture: Awaited<ReturnType<typeof managementFixture>>) {
-  const app = new Hono();
-  app.route('/', createManagementApi(fixture.service));
-  const { requireRole } = createAuthorization(fixture.service);
-  app.use('/api/admin/storage/*', requireRole(REQUIRED_ROLE.worlds));
-  const storage = new LocalWorldStorage(path.join(fixture.root, 'worlds'));
-  const file = (input: string) => cleanStoragePath(decodeURIComponent(input));
-  app.get('/api/admin/storage/list', async (c) => c.json(await storage.list(c.req.query('prefix') ?? '')));
-  app.get('/api/admin/storage/stat/*', async (c) => {
-    const value = await storage.stat(file(c.req.path.slice('/api/admin/storage/stat/'.length)));
-    return value ? c.json(value) : c.json({}, 404);
-  });
-  app.get('/api/admin/storage/files/*', async (c) => {
-    const bytes = await storage.read(file(c.req.path.slice('/api/admin/storage/files/'.length)));
-    return bytes ? c.body(new Uint8Array(bytes).buffer) : c.json({}, 404);
-  });
-  app.put('/api/admin/storage/files/*', async (c) => {
-    await storage.write(
-      file(c.req.path.slice('/api/admin/storage/files/'.length)),
-      new Uint8Array(await c.req.arrayBuffer()),
-    );
-    return c.json({ ok: true });
-  });
-  app.delete('/api/admin/storage/files/*', async (c) => {
-    await storage.delete(file(c.req.path.slice('/api/admin/storage/files/'.length)));
-    return c.json({ ok: true });
-  });
+  const { app, storage } = fixture;
   const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 });
   await new Promise<void>((resolve) => {
     if (server.listening) resolve();

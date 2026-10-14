@@ -8,7 +8,7 @@ import { createServer } from 'node:http';
 import { test } from 'node:test';
 
 const execute = promisify(execFile);
-test('relocated CLI works without server, TS sources, tsx, or native keyring; direct mode is opt-in', async (t) => {
+test('relocated CLI works without render/storage/server, TS sources, tsx, or native keyring; direct mode is opt-in', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-cli-artifact-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const manifest = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
@@ -23,6 +23,7 @@ test('relocated CLI works without server, TS sources, tsx, or native keyring; di
       const core = new URL('../../core/', import.meta.url);
       await fs.mkdir(destination);
       await fs.cp(new URL('dist/', core), path.join(destination, 'dist'), { recursive: true });
+      await fs.cp(new URL('data-defaults/', core), path.join(destination, 'data-defaults'), { recursive: true });
       const metadata = JSON.parse(await fs.readFile(new URL('package.json', core), 'utf8'));
       await fs.writeFile(path.join(destination, 'package.json'), JSON.stringify(metadata));
       for (const dependency of Object.keys(metadata.dependencies)) {
@@ -65,8 +66,44 @@ test('relocated CLI works without server, TS sources, tsx, or native keyring; di
   assert.equal(records[`retired-${oldId}`].backend, 'keychain');
   assert.doesNotMatch(replaced.stdout + replaced.stderr, /artifact-token-value/);
 
+  const remoteFiles = new Map();
   const server = createServer((request, response) => {
     assert.equal(request.headers.authorization, 'Bearer artifact-token-value');
+    const url = new URL(request.url, 'http://localhost');
+    const prefix = '/violet/api/admin/storage/';
+    if (url.pathname.startsWith(prefix)) {
+      const route = url.pathname.slice(prefix.length);
+      response.setHeader('content-type', 'application/json');
+      if (route === 'list') {
+        const directory = url.searchParams.get('prefix') || '';
+        response.end(
+          JSON.stringify(
+            [...remoteFiles]
+              .filter(([file]) => !directory || file.startsWith(directory + '/'))
+              .map(([file, bytes]) => ({ path: file, size: bytes.length })),
+          ),
+        );
+        return;
+      }
+      const file = decodeURIComponent(route.replace(/^(files|stat)\//, ''));
+      if (request.method === 'PUT') {
+        const chunks = [];
+        request.on('data', (chunk) => chunks.push(chunk));
+        request.on('end', () => {
+          remoteFiles.set(file, Buffer.concat(chunks));
+          response.end('{"ok":true}');
+        });
+        return;
+      }
+      const bytes = remoteFiles.get(file);
+      if (!bytes) {
+        response.writeHead(404).end();
+        return;
+      }
+      if (route.startsWith('stat/')) response.end(JSON.stringify({ path: file, size: bytes.length }));
+      else response.end(bytes);
+      return;
+    }
     response.setHeader('content-type', 'application/json');
     response.end(JSON.stringify([{ username: 'remote_admin', role: 'admin', enabled: true }]));
   });
@@ -88,6 +125,59 @@ test('relocated CLI works without server, TS sources, tsx, or native keyring; di
   const archive = path.join(root, 'archive');
   await fs.mkdir(archive);
   await fs.writeFile(path.join(archive, 'level.dat'), 'archive');
+  for (const command of [
+    ['bake-topmap', '--help'],
+    ['profile-mca', '--help'],
+    ['world', 'sync', '--help'],
+    ['assets', '--help'],
+    ['config', 'show'],
+    ['profile', 'list'],
+  ])
+    await run(command);
+  await assert.rejects(run(['bake-topmap', archive]), /requires @violet-map\/render/);
+  await assert.rejects(
+    run([
+      'world',
+      'sync',
+      '--from',
+      archive,
+      '--world',
+      'survival',
+      '--target',
+      'local',
+      '--target-dir',
+      path.join(root, 'worlds'),
+    ]),
+    /requires @violet-map\/storage/,
+  );
+  await assert.rejects(fs.stat(path.join(archive, '.violet-map')), { code: 'ENOENT' });
+  async function installCapability(name) {
+    const source = new URL(`../../${name}/`, import.meta.url);
+    const destination = path.join(root, 'node_modules/@violet-map', name);
+    await fs.mkdir(destination);
+    await fs.cp(new URL('dist/', source), path.join(destination, 'dist'), { recursive: true });
+    const metadata = JSON.parse(await fs.readFile(new URL('package.json', source), 'utf8'));
+    await fs.writeFile(path.join(destination, 'package.json'), JSON.stringify(metadata));
+    for (const dependency of Object.keys(metadata.dependencies)) {
+      if (dependency.startsWith('@violet-map/')) continue;
+      const nested = path.join(destination, 'node_modules', dependency);
+      await fs.mkdir(path.dirname(nested), { recursive: true });
+      await fs.symlink(await fs.realpath(new URL(`node_modules/${dependency}`, source)), nested, 'dir');
+    }
+    return destination;
+  }
+  await installCapability('render');
+  await run(['bake-topmap', archive, '--out', path.join(root, 'topmap')]);
+  const renderEntry = path.join(root, 'node_modules/@violet-map/render/dist/index.js');
+  const originalRender = await fs.readFile(renderEntry, 'utf8');
+  await fs.appendFile(renderEntry, '\nthrow new Error("installed render implementation failed");\n');
+  await assert.rejects(run(['bake-topmap', archive]), (error) => {
+    assert.match(error.stderr, /installed render implementation failed/);
+    assert.doesNotMatch(error.stderr, /requires @violet-map\/render/);
+    return true;
+  });
+  await fs.writeFile(renderEntry, originalRender);
+  await installCapability('storage');
   await run([
     'world',
     'sync',
@@ -101,9 +191,24 @@ test('relocated CLI works without server, TS sources, tsx, or native keyring; di
     path.join(root, 'worlds'),
   ]);
   assert.equal(await fs.readFile(path.join(root, 'worlds/survival/level.dat'), 'utf8'), 'archive');
+  await assert.rejects(fs.stat(path.join(root, 'node_modules/@violet-map/server')), { code: 'ENOENT' });
+  await run(['world', 'sync', '--from', archive, '--world', 'survival', '--target', 'server'], {
+    VIOLET_SERVER_URL: url + '/violet/',
+    VIOLET_SERVER_TOKEN: 'artifact-token-value',
+  });
+  assert.equal(remoteFiles.get('survival/level.dat').toString(), 'archive');
+  assert.ok(remoteFiles.has('survival/.violet-map/identity.json'));
+  assert.match(
+    (
+      await run(['world', 'sync', '--from', archive, '--world', 'survival', '--target', 'server'], {
+        VIOLET_SERVER_URL: url + '/violet/',
+        VIOLET_SERVER_TOKEN: 'artifact-token-value',
+      })
+    ).stdout,
+    /1 copied, 1 unchanged/,
+  );
 
-  const serverPackage = await fs.realpath(new URL('../../server/', import.meta.url));
-  await fs.symlink(serverPackage, path.join(root, 'node_modules/@violet-map/server'), 'dir');
+  const serverPackage = await installCapability('server');
   const databaseDir = path.join(root, 'database');
   // DDL is exercised through the existing server artifact, never through violet-map.
   await execute(process.execPath, [path.join(serverPackage, 'dist/src/db/maintenance.js'), 'migrate'], {

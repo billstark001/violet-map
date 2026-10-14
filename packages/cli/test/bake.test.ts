@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { runBakeTopMap } from '../src/commands/bake.js';
-import { loadAssetBundleFromDirs, loadBiomeColors } from '../src/commands/common.js';
+import { loadAssetBundleFromDirs } from '../src/commands/assetInput.js';
+import { loadBiomeColors } from '../src/commands/colorInput.js';
 
 test('top-map bake validates strides before scanning regions', async () => {
   await assert.rejects(runBakeTopMap({ world: '/missing/world', sampleStride: 3 }), /sample stride must evenly divide/);

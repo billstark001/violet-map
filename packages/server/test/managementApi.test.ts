@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createManagementApi } from '../src/managementApi.js';
 import { managementFixture } from './helpers/management.js';
 
 for (const driver of ['pglite', 'postgres'] as const) {
@@ -9,7 +8,7 @@ for (const driver of ['pglite', 'postgres'] as const) {
     { skip: driver === 'postgres' && !process.env.TEST_DATABASE_URL },
     async (t) => {
       const fixture = await managementFixture(t, driver);
-      const app = createManagementApi(fixture.service);
+      const app = fixture.app;
       const request = (route: string, token?: string, method = 'GET', data?: unknown) =>
         app.request(route, {
           method,

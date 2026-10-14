@@ -22,8 +22,8 @@ test('chunk endpoints encode dimensions containing path separators', async (t) =
   assert.deepEqual(await fetchChunkHashes(world, dim, [{ cx: 0, cz: 0 }]), []);
   assert.deepEqual(await fetchChunks(world, dim, [{ cx: 0, cz: 0 }]), []);
   assert.deepEqual(urls, [
-    '/api/worlds/example/mod%3Asky%2Fislands/chunk/0/0',
-    '/api/worlds/example/mod%3Asky%2Fislands/chunk-hashes',
-    '/api/worlds/example/mod%3Asky%2Fislands/chunks',
+    'http://localhost/api/worlds/example/mod%3Asky%2Fislands/chunk/0/0',
+    'http://localhost/api/worlds/example/mod%3Asky%2Fislands/chunk-hashes',
+    'http://localhost/api/worlds/example/mod%3Asky%2Fislands/chunks',
   ]);
 });

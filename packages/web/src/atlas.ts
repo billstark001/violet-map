@@ -1,11 +1,12 @@
+import { resolveApiResourceUrl } from './runtime';
+import { mapWithConcurrency } from '@violet-map/core/async';
 import {
-  mapWithConcurrency,
   type AssetBundle,
   type AtlasIndex,
   type BlockInfoMap,
   type BlockModelJson,
   type TextureAlphaMap,
-} from '@violet-map/core';
+} from '@violet-map/core/assets';
 import { fetchTextureAtlas, textureUrl } from './api';
 
 export interface BuiltAtlas {
@@ -158,6 +159,7 @@ export function collectTextureIds(bundle: AssetBundle, blockInfo: BlockInfoMap):
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
+    img.crossOrigin = 'anonymous';
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error(`failed: ${url}`));
     img.src = url;
@@ -182,7 +184,7 @@ export function fallbackTextureSize(width: number, height: number, animated: boo
 export async function buildAtlas(ids: string[], animatedIds: ReadonlySet<string> = new Set()): Promise<BuiltAtlas> {
   try {
     const manifest = await fetchTextureAtlas(ids);
-    const img = await loadImage(manifest.image);
+    const img = await loadImage(resolveApiResourceUrl(manifest.image));
     const canvas = document.createElement('canvas');
     canvas.width = manifest.width;
     canvas.height = manifest.height;

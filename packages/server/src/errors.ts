@@ -1,4 +1,4 @@
-export type AdminErrorCode = 'INVALID_INPUT' | 'USER_NOT_FOUND' | 'USER_EXISTS' | 'FORBIDDEN';
+import type { AdminErrorCode } from '@violet-map/core/contracts';
 
 export class AdminError extends Error {
   constructor(

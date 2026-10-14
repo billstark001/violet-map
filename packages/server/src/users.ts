@@ -1,3 +1,4 @@
+import type { Principal } from './principal.js';
 import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { and, eq, gt } from 'drizzle-orm';
@@ -9,13 +10,12 @@ const PASSWORD_HASH_BYTES = 64;
 
 import {
   ALL_ROLES,
-  CREATABLE_ROLES,
+  asCreatableRole,
   type Role,
   type CreatableRole,
-  type Principal,
   type PublicUser,
   type IssuedCredential,
-} from './contracts.js';
+} from '@violet-map/core/contracts';
 import type { DatabaseContext } from './db/connection.js';
 import { AdminError } from './errors.js';
 
@@ -39,9 +39,7 @@ export function normalizeUsername(value: string): string {
 function asRole(value: unknown): Role | undefined {
   return ALL_ROLES.includes(value as Role) ? (value as Role) : undefined;
 }
-export function asCreatableRole(value: unknown): CreatableRole | undefined {
-  return CREATABLE_ROLES.includes(value as CreatableRole) ? (value as CreatableRole) : undefined;
-}
+
 function asDate(value: Date | string | null | undefined): string | undefined {
   return value ? new Date(value).toISOString() : undefined;
 }

@@ -1,24 +1,33 @@
-import { config } from '../config.js';
-import type { DatabaseContext } from './connection.js';
+import type { DatabaseOptions, DatabaseContext } from './connection.js';
 import { openApplicationDatabase } from './application.js';
-
-let databasePromise: Promise<DatabaseContext> | undefined;
-
-export function getDatabase(): Promise<DatabaseContext> {
-  if (!databasePromise) {
-    const pending = openApplicationDatabase(config);
-    databasePromise = pending;
-    void pending.catch(() => {
-      if (databasePromise === pending) databasePromise = undefined;
-    });
+export function createDatabaseService(options: DatabaseOptions) {
+  let pending: Promise<DatabaseContext> | undefined;
+  let closed = false;
+  function getDatabase(): Promise<DatabaseContext> {
+    if (closed) return Promise.reject(new Error('Database service is closed'));
+    if (!pending) {
+      const opening = openApplicationDatabase(options);
+      pending = opening;
+      void opening.catch(() => {
+        if (pending === opening) pending = undefined;
+      });
+    }
+    return pending;
   }
-  return databasePromise;
-}
-
-export async function closeDatabase(): Promise<void> {
-  const pending = databasePromise;
-  databasePromise = undefined;
-  if (!pending) return;
-  const database = await pending;
-  await database.close();
+  let closing: Promise<void> | undefined;
+  function closeDatabase(): Promise<void> {
+    if (!closing) {
+      closed = true;
+      const opening = pending;
+      pending = undefined;
+      closing = (async () => {
+        if (opening) {
+          const database = await opening.catch(() => undefined);
+          await database?.close();
+        }
+      })();
+    }
+    return closing;
+  }
+  return { getDatabase, closeDatabase };
 }

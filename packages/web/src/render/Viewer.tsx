@@ -1,17 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useTranslation } from 'react-i18next';
-import type { BiomeMap, DimensionMap } from '@violet-map/core';
-import { hexToRgb } from '@violet-map/core';
-import {
-  fetchBiomes,
-  fetchBlockInfo,
-  fetchBundle,
-  fetchDimensions,
-  fetchWorldCapabilities,
-  textureUrl,
-  type WorldCapabilities,
-} from '../api';
+import type { BiomeMap, DimensionMap } from '@violet-map/core/domain';
+import { hexToRgb } from '@violet-map/render';
+import { fetchBiomes, fetchBlockInfo, fetchBundle, fetchDimensions, fetchWorldCapabilities, textureUrl } from '../api';
+import { type WorldCapabilities } from '@violet-map/core/contracts';
 import { buildAtlas, collectTextureIds, loadColormap } from '../atlas';
 import { ChunkManager, type ChunkManagerDiagnosticSnapshot, type TopClipRange } from './chunkManager';
 import {
@@ -485,6 +478,7 @@ function loadCanvasBackedTexture(
     const candidate = candidates[index];
     if (!candidate) return;
     const img = new Image();
+    img.crossOrigin = 'anonymous';
     img.onload = () => {
       if (candidate.cropMoonSheet && img.width > img.height) {
         const frameW = Math.floor(img.width / 4);

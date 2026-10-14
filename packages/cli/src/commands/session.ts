@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { IssuedCredential } from '@violet-map/server/contracts';
+import type { IssuedCredential } from '@violet-map/core/contracts';
 import type { CliContext } from '../context.js';
 import { readSecret } from '../input.js';
 import { apiRequest, ApiError, jsonRequest, remoteOrigin, resolveServerConnection } from '../remote.js';
@@ -16,7 +16,7 @@ export async function login(
   const password = await readSecret({ stdin: options.passwordStdin, file: options.passwordFile }, 'Password');
   const credential = await apiRequest<IssuedCredential>(
     { url },
-    '/api/auth/login',
+    'api/auth/login',
     jsonRequest('POST', { username: options.username, password }),
   );
   if (
@@ -45,7 +45,7 @@ export async function login(
       };
     });
   } catch (error) {
-    await apiRequest({ url, token: credential.token }, '/api/auth/logout', jsonRequest('POST')).catch(() => {});
+    await apiRequest({ url, token: credential.token }, 'api/auth/logout', jsonRequest('POST')).catch(() => {});
     await context.secrets.delete(secret).catch(() => {});
     throw error;
   }
@@ -73,7 +73,7 @@ export async function login(
   );
 }
 export async function whoami(context: CliContext) {
-  console.log(JSON.stringify(await apiRequest(await resolveServerConnection(context), '/api/auth/me'), null, 2));
+  console.log(JSON.stringify(await apiRequest(await resolveServerConnection(context), 'api/auth/me'), null, 2));
 }
 export async function logout(context: CliContext, local = false) {
   const url = remoteOrigin(context);
@@ -85,7 +85,7 @@ export async function logout(context: CliContext, local = false) {
         ? { url, token: await context.secrets.get(session.secret), session: key }
         : await resolveServerConnection(context);
     try {
-      await apiRequest(connection, '/api/auth/logout', jsonRequest('POST'));
+      await apiRequest(connection, 'api/auth/logout', jsonRequest('POST'));
     } catch (error) {
       if (!(error instanceof ApiError && error.status === 401)) throw error;
     }

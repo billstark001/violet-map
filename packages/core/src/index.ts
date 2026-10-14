@@ -1,10 +1,2 @@
-export * from './types.js';
-export * from './dimensionId.js';
-export * from './async.js';
-export * from './region.js';
-export * from './world.js';
-export * from './light.js';
-export * from './model.js';
-export * from './colors.js';
-export * from './mesher/index.js';
-export * from './scheduler/cameraGridTracker.js';
+export { normalizeId } from './domain.js';
+export { assertDimensionId, isDimensionId } from './dimensionId.js';

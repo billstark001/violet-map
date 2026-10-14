@@ -4,14 +4,15 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "start": "vite preview --host 0.0.0.0 --port 3305",
+    "build": "vite build && node ../../scripts/build-static.mjs web",
+    "start": "node dist/serve.mjs 3305 http://localhost:3300/",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.1.3",
     "@radix-ui/themes": "^3.3.0",
     "@violet-map/core": "workspace:*",
+    "@violet-map/render": "workspace:*",
     "i18next": "^26.3.4",
     "idb": "^8.0.3",
     "react": "^19.2.7",

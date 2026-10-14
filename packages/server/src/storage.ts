@@ -1,18 +1,14 @@
-import { CachedWorldStorage, createWorldStorage, type WorldStorage } from '@violet-map/core/storage';
-import { config } from './config.js';
-
-export { cleanStoragePath, type StoredFileInfo, type WorldStorage } from '@violet-map/core/storage';
-
-/** Server-owned storage configuration, implemented by the shared core adapter. */
-function configuredStorage(): WorldStorage {
-  const storage =
-    config.worldStorage !== 's3'
-      ? createWorldStorage({ kind: 'local', root: config.worldsDir })
-      : (() => {
-          if (!config.s3.bucket) throw new Error('S3_BUCKET is required when WORLD_STORAGE=s3');
-          return createWorldStorage({ kind: 's3', ...config.s3, bucket: config.s3.bucket });
-        })();
-  return new CachedWorldStorage(storage, { statTtlMs: 1_000, listTtlMs: 2_000 });
+import { CachedWorldStorage } from '@violet-map/storage';
+import { createWorldStorage } from '@violet-map/storage/factory';
+import type { ServerConfig } from './configuration.js';
+export async function createStorage(config: ServerConfig) {
+  const storage = await createWorldStorage(
+    config.storage.driver === 'local'
+      ? { kind: 'local', root: config.storage.worldsDir }
+      : { kind: 's3', ...config.storage.s3, bucket: config.storage.s3.bucket! },
+  );
+  return new CachedWorldStorage(storage, {
+    statTtlMs: config.cache.storageStatMs,
+    listTtlMs: config.cache.storageListMs,
+  });
 }
-
-export const worldStorage = configuredStorage();

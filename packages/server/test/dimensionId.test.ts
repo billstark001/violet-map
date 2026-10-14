@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isDimensionId } from '@violet-map/core';
+import { isDimensionId } from '@violet-map/core/domain';
 
 test('dimension IDs allow custom paths but reject traversal components', () => {
   assert.equal(isDimensionId('minecraft:overworld'), true);

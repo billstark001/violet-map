@@ -1,25 +1,20 @@
 /// <reference lib="webworker" />
+import { BlockInfo, type RendererDefinitions, type RendererModelDef, type TintType } from '@violet-map/core/assets';
+import { ChunkColumn, appendChunkEntities, parseChunkColumn } from '@violet-map/core/domain';
 import {
-  BlockInfo,
-  ChunkColumn,
   ChunkNeighborhood,
   MeshBuffers,
   MesherResources,
   ModelBaker,
-  appendChunkEntities,
   computeColumnLight,
   hexToRgb,
   meshLodChunk,
   meshSection,
-  parseChunkColumn,
   resolveBiomeColors,
-  type BlockStateRef,
-  type RendererDefinitions,
-  type RendererModelDef,
   type Rgb,
-  type TintType,
-} from '@violet-map/core';
-import type { RenderModelInstance } from '@violet-map/core';
+} from '@violet-map/render';
+import { type BlockStateRef } from '@violet-map/core/domain';
+import type { RenderModelInstance } from '@violet-map/render';
 import { parseNbt } from '@violet-map/core/nbt';
 import type { SectionMeshMsg, WorkerRequest, WorkerResponse } from './protocol';
 

@@ -51,6 +51,7 @@ logger.warnOnce = (message, options) => {
 
 export default defineConfig({
   plugins: [react()],
+  base: process.env.VITE_BASE_PATH ?? '/',
   customLogger: logger,
   build: {
     chunkSizeWarningLimit: 800,

@@ -1,13 +1,7 @@
-import {
-  checkWorldIdentity,
-  createWorldStorage,
-  ensureWorldIdentity,
-  LocalWorldStorage,
-  PrefixedWorldStorage,
-  syncWorld,
-  type StorageOptions,
-  type S3StorageOptions,
-} from '@violet-map/core/storage';
+import { loadCapability } from '../capabilities.js';
+
+import type { StorageOptions, S3StorageOptions } from '@violet-map/storage/types';
+
 import path from 'node:path';
 import type { CliContext } from '../context.js';
 import { resolveServerConnection } from '../remote.js';
@@ -81,8 +75,8 @@ export async function targetStorage(options: WorldSyncOptions, context: CliConte
       sessionToken: value.sessionToken === undefined ? undefined : sensitiveValue(value.sessionToken),
     };
   } else if (awsProfile) {
-    const { fromIni } = await import('@aws-sdk/credential-providers');
-    credentials = fromIni({ profile: awsProfile });
+    const { profileCredentials } = await loadCapability('@violet-map/storage/s3');
+    credentials = () => profileCredentials({ profile: awsProfile });
   } else if (!!context.env.S3_ACCESS_KEY_ID || !!context.env.S3_SECRET_ACCESS_KEY || !!context.env.S3_SESSION_TOKEN) {
     if (!context.env.S3_ACCESS_KEY_ID || !context.env.S3_SECRET_ACCESS_KEY)
       throw new Error('S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be supplied together');
@@ -120,8 +114,13 @@ export async function runWorldSync(options: WorldSyncOptions, context: CliContex
   if (!options.from) throw new Error('--from must not be empty');
   if (!/^[A-Za-z0-9_.-]+$/.test(options.world))
     throw new Error('--world may only contain letters, numbers, dot, dash, and underscore');
+  const storageOptions = await targetStorage(options, context);
+  const { checkWorldIdentity, ensureWorldIdentity, PrefixedWorldStorage, syncWorld } =
+    await loadCapability('@violet-map/storage');
+  const { createWorldStorage } = await loadCapability('@violet-map/storage/factory');
+  const { LocalWorldStorage } = await loadCapability('@violet-map/storage/local');
   const source = new LocalWorldStorage(path.resolve(options.from));
-  const target = new PrefixedWorldStorage(createWorldStorage(await targetStorage(options, context)), options.world);
+  const target = new PrefixedWorldStorage(await createWorldStorage(storageOptions), options.world);
   const sourceIdentity = await ensureWorldIdentity(source, !!options.dryRun);
   const check = await checkWorldIdentity(source, target);
   console.log(`World identity: ${check.status} (${check.message})`);

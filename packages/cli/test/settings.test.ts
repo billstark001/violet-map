@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { cliPaths } from '../src/settings/paths.js';
-import { emptyConfig, editConfig, loadConfig, validateConfig, serverOrigin } from '../src/settings/config.js';
+import { emptyConfig, editConfig, loadConfig, validateConfig, serverBaseUrl } from '../src/settings/config.js';
 import { SecretStore, sessionKey, redact } from '../src/settings/secrets.js';
 import { editState, loadState } from '../src/settings/state.js';
 import { loadContext } from '../src/context.js';
@@ -46,8 +46,8 @@ test('configuration validates profiles and excludes inline secrets', async (t) =
       }),
     /Unknown field/,
   );
-  assert.throws(() => serverOrigin('https://username:secret@example.test'), /without credentials/);
-  assert.throws(() => serverOrigin('https://example.test/api'), /without credentials/);
+  assert.throws(() => serverBaseUrl('https://username:secret@example.test'), /without credentials/);
+  assert.equal(serverBaseUrl('https://example.test/violet/'), 'https://example.test/violet');
   await fs.writeFile(paths.configFile, '{broken');
   await assert.rejects(loadConfig(paths), /Invalid JSON/);
   assert.equal(await fs.readFile(paths.configFile, 'utf8'), '{broken');

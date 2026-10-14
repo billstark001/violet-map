@@ -1,5 +1,6 @@
+import { loadCapability } from './capabilities.js';
 import path from 'node:path';
-import type { PublicUser, CreatableRole, IssuedCredential } from '@violet-map/server/contracts';
+import type { PublicUser, CreatableRole, IssuedCredential } from '@violet-map/core/contracts';
 import type { CliContext } from './context.js';
 import { apiRequest, jsonRequest, resolveServerConnection } from './remote.js';
 import { profilePath } from './settings/config.js';
@@ -36,11 +37,11 @@ export async function managementClient(context: CliContext, options: ManagementO
     if (options.databaseDir || options.databaseUrlRef || options.serverConfig)
       throw new Error('Database options require --via database');
     const remote = await resolveServerConnection(context);
-    const userPath = (username: string) => `/api/admin/users/${encodeURIComponent(username)}`;
+    const userPath = (username: string) => `api/admin/users/${encodeURIComponent(username)}`;
     return {
       users: {
-        list: () => apiRequest(remote, '/api/admin/users'),
-        create: (input) => apiRequest(remote, '/api/admin/users', jsonRequest('POST', input)),
+        list: () => apiRequest(remote, 'api/admin/users'),
+        create: (input) => apiRequest(remote, 'api/admin/users', jsonRequest('POST', input)),
         update: (username, input) => apiRequest(remote, userPath(username), jsonRequest('PATCH', input)),
         delete: (username) => apiRequest(remote, userPath(username), jsonRequest('DELETE')),
       },
@@ -54,14 +55,7 @@ export async function managementClient(context: CliContext, options: ManagementO
   }
   if (context.options.serverUrl || context.options.serverTokenRef)
     throw new Error('Server connection options cannot be used with --via database');
-  // Resolve the package separately: an error inside an installed server must not be mistaken for a missing optional peer.
-  try {
-    import.meta.resolve('@violet-map/server/admin');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ERR_MODULE_NOT_FOUND') throw error;
-    throw new Error('Database mode requires @violet-map/server installed alongside @violet-map/cli');
-  }
-  const { createAdminContext, readAdminConfig } = await import('@violet-map/server/admin');
+  const { createAdminContext, readAdminConfig } = await loadCapability('@violet-map/server/admin');
   const explicitDirectory = options.databaseDir !== undefined;
   const environmentDirectory = context.env.DATABASE_DIR || context.env.DATA_DIR;
   const ref =

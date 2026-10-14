@@ -1,3 +1,5 @@
+import { apiFetch, apiTokenKey, serviceCapabilities } from './runtime';
+import type { WorldInfo, PublicUser } from '@violet-map/core/contracts';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Badge,
@@ -19,19 +21,8 @@ import {
 import { useTranslation } from 'react-i18next';
 import { languageOptions } from './i18n';
 
-interface WorldInfo {
-  id: string;
-  dimensions: string[];
-}
-interface UserInfo {
-  id: string;
-  username: string;
-  role: 'root' | 'admin' | 'ci' | 'viewer' | 'guest';
-  enabled: boolean;
-  virtual?: boolean;
-}
 const DIMS = ['minecraft:overworld', 'minecraft:the_nether', 'minecraft:the_end'];
-const ADMIN_TOKEN_KEY = 'violet-map:admin-token';
+const adminTokenKey = () => apiTokenKey('admin-token');
 
 function authHeaders(token: string, headers: HeadersInit = {}): HeadersInit {
   return token ? { ...headers, authorization: `Bearer ${token}` } : headers;
@@ -46,12 +37,14 @@ function WorldsPanel({ token }: { token: string }) {
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
   const refresh = useCallback(async () => {
-    const ws: WorldInfo[] = await (await fetch('/api/worlds')).json();
+    const ws: WorldInfo[] = await (await apiFetch('api/worlds')).json();
     setWorlds(ws);
     const counts: Record<string, number> = {};
     for (const w of ws) {
       for (const d of w.dimensions) {
-        const rs = await (await fetch(`/api/worlds/${w.id}/${d}/regions`)).json();
+        const rs = await (
+          await apiFetch(`api/worlds/${encodeURIComponent(w.id)}/${encodeURIComponent(d)}/regions`)
+        ).json();
         counts[`${w.id}|${d}`] = rs.length;
       }
     }
@@ -63,7 +56,7 @@ function WorldsPanel({ token }: { token: string }) {
 
   const create = async () => {
     setMessage(null);
-    const res = await fetch('/api/admin/worlds', {
+    const res = await apiFetch('api/admin/worlds', {
       method: 'POST',
       headers: authHeaders(token, { 'content-type': 'application/json' }),
       body: JSON.stringify({ world: newWorld, levelName, dimensions: [DIMS[0]] }),
@@ -76,7 +69,10 @@ function WorldsPanel({ token }: { token: string }) {
   };
 
   const remove = async (id: string) => {
-    const res = await fetch(`/api/admin/worlds/${id}`, { method: 'DELETE', headers: authHeaders(token) });
+    const res = await apiFetch(`api/admin/worlds/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    });
     const data = await res.json();
     setMessage(
       res.ok
@@ -94,23 +90,25 @@ function WorldsPanel({ token }: { token: string }) {
           {t('refresh')}
         </Button>
       </Flex>
-      <Flex gap="2" align="end" mb="4" wrap="wrap">
-        <Box style={{ minWidth: 180 }}>
-          <Text as="label" size="1" htmlFor="new-world">
-            {t('worldName')}
-          </Text>
-          <TextField.Root id="new-world" value={newWorld} onChange={(e) => setNewWorld(e.currentTarget.value)} />
-        </Box>
-        <Box style={{ minWidth: 180 }}>
-          <Text as="label" size="1" htmlFor="level-name">
-            {t('levelName')}
-          </Text>
-          <TextField.Root id="level-name" value={levelName} onChange={(e) => setLevelName(e.currentTarget.value)} />
-        </Box>
-        <Button onClick={create} disabled={!newWorld || !token}>
-          {t('createWorld')}
-        </Button>
-      </Flex>
+      {serviceCapabilities().worldWrites && (
+        <Flex gap="2" align="end" mb="4" wrap="wrap">
+          <Box style={{ minWidth: 180 }}>
+            <Text as="label" size="1" htmlFor="new-world">
+              {t('worldName')}
+            </Text>
+            <TextField.Root id="new-world" value={newWorld} onChange={(e) => setNewWorld(e.currentTarget.value)} />
+          </Box>
+          <Box style={{ minWidth: 180 }}>
+            <Text as="label" size="1" htmlFor="level-name">
+              {t('levelName')}
+            </Text>
+            <TextField.Root id="level-name" value={levelName} onChange={(e) => setLevelName(e.currentTarget.value)} />
+          </Box>
+          <Button onClick={create} disabled={!newWorld || !token}>
+            {t('createWorld')}
+          </Button>
+        </Flex>
+      )}
       <Table.Root>
         <Table.Header>
           <Table.Row>
@@ -130,9 +128,11 @@ function WorldsPanel({ token }: { token: string }) {
                 </Table.Cell>
                 <Table.Cell>{regions[`${w.id}|${d}`] ?? '…'}</Table.Cell>
                 <Table.Cell>
-                  <Button size="1" variant="soft" color="red" disabled={!token} onClick={() => remove(w.id)}>
-                    {t('delete')}
-                  </Button>
+                  {serviceCapabilities().worldWrites && (
+                    <Button size="1" variant="soft" color="red" disabled={!token} onClick={() => remove(w.id)}>
+                      {t('delete')}
+                    </Button>
+                  )}
                 </Table.Cell>
               </Table.Row>
             )),
@@ -174,7 +174,7 @@ function UploadPanel({ token }: { token: string }) {
       const form = new FormData();
       form.set('file', file);
       form.set('dim', dim);
-      const res = await fetch(`/api/admin/worlds/${encodeURIComponent(world)}/upload`, {
+      const res = await apiFetch(`api/admin/worlds/${encodeURIComponent(world)}/upload`, {
         method: 'POST',
         headers: authHeaders(token),
         body: form,
@@ -239,7 +239,7 @@ function BiomesPanel({ token }: { token: string }) {
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
-    fetch('/api/data/biomes')
+    apiFetch('api/data/biomes')
       .then((r) => r.json())
       .then((j) => setText(JSON.stringify(j, null, 2)));
   }, []);
@@ -247,7 +247,7 @@ function BiomesPanel({ token }: { token: string }) {
   const save = async () => {
     try {
       const parsed = JSON.parse(text);
-      const res = await fetch('/api/data/biomes', {
+      const res = await apiFetch('api/data/biomes', {
         method: 'PUT',
         headers: authHeaders(token, { 'content-type': 'application/json' }),
         body: JSON.stringify(parsed),
@@ -278,7 +278,7 @@ function BiomesPanel({ token }: { token: string }) {
 
 function UsersPanel({ token }: { token: string }) {
   const { t } = useTranslation();
-  const [users, setUsers] = useState<UserInfo[]>([]);
+  const [users, setUsers] = useState<PublicUser[]>([]);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<'viewer' | 'ci' | 'admin'>('viewer');
@@ -287,9 +287,9 @@ function UsersPanel({ token }: { token: string }) {
   const [credential, setCredential] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const res = await fetch('/api/admin/users', { headers: authHeaders(token) });
+    const res = await apiFetch('api/admin/users', { headers: authHeaders(token) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    setUsers((await res.json()) as UserInfo[]);
+    setUsers((await res.json()) as PublicUser[]);
   }, [token]);
   useEffect(() => {
     if (token) void refresh().catch((error) => setMessage({ ok: false, text: String(error) }));
@@ -297,7 +297,7 @@ function UsersPanel({ token }: { token: string }) {
 
   const create = async () => {
     setCredential(null);
-    const res = await fetch('/api/admin/users', {
+    const res = await apiFetch('api/admin/users', {
       method: 'POST',
       headers: authHeaders(token, { 'content-type': 'application/json' }),
       body: JSON.stringify({ username, password, role }),
@@ -311,8 +311,8 @@ function UsersPanel({ token }: { token: string }) {
       void refresh();
     }
   };
-  const update = async (user: UserInfo, patch: Partial<Pick<UserInfo, 'role' | 'enabled'>>) => {
-    const res = await fetch(`/api/admin/users/${encodeURIComponent(user.username)}`, {
+  const update = async (user: PublicUser, patch: Partial<Pick<PublicUser, 'role' | 'enabled'>>) => {
+    const res = await apiFetch(`api/admin/users/${encodeURIComponent(user.username)}`, {
       method: 'PATCH',
       headers: authHeaders(token, { 'content-type': 'application/json' }),
       body: JSON.stringify(patch),
@@ -323,8 +323,8 @@ function UsersPanel({ token }: { token: string }) {
     );
     if (res.ok) void refresh();
   };
-  const remove = async (user: UserInfo) => {
-    const res = await fetch(`/api/admin/users/${encodeURIComponent(user.username)}`, {
+  const remove = async (user: PublicUser) => {
+    const res = await apiFetch(`api/admin/users/${encodeURIComponent(user.username)}`, {
       method: 'DELETE',
       headers: authHeaders(token),
     });
@@ -334,9 +334,9 @@ function UsersPanel({ token }: { token: string }) {
     );
     if (res.ok) void refresh();
   };
-  const issue = async (user: UserInfo) => {
+  const issue = async (user: PublicUser) => {
     setCredential(null);
-    const res = await fetch(`/api/admin/users/${encodeURIComponent(user.username)}/credentials`, {
+    const res = await apiFetch(`api/admin/users/${encodeURIComponent(user.username)}/credentials`, {
       method: 'POST',
       headers: authHeaders(token, { 'content-type': 'application/json' }),
       body: JSON.stringify({ expiresInSeconds: Number(lifetime) }),
@@ -428,7 +428,7 @@ function UsersPanel({ token }: { token: string }) {
                 ) : (
                   <Select.Root
                     value={user.role}
-                    onValueChange={(value) => void update(user, { role: value as UserInfo['role'] })}
+                    onValueChange={(value) => void update(user, { role: value as PublicUser['role'] })}
                   >
                     <Select.Trigger />
                     <Select.Content>
@@ -483,14 +483,14 @@ function UsersPanel({ token }: { token: string }) {
 
 export default function App() {
   const { t, i18n } = useTranslation();
-  const [token, setToken] = useState(() => localStorage.getItem(ADMIN_TOKEN_KEY) ?? '');
+  const [token, setToken] = useState(() => localStorage.getItem(adminTokenKey()) ?? '');
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginMessage, setLoginMessage] = useState<string | null>(null);
   const changeToken = (value: string) => {
     setToken(value);
     try {
-      localStorage.setItem(ADMIN_TOKEN_KEY, value);
+      localStorage.setItem(adminTokenKey(), value);
     } catch {
       // Ignore storage failures.
     }
@@ -505,7 +505,7 @@ export default function App() {
   };
   const signIn = async () => {
     setLoginMessage(null);
-    const res = await fetch('/api/auth/login', {
+    const res = await apiFetch('api/auth/login', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ username: loginUsername, password: loginPassword }),
@@ -523,50 +523,56 @@ export default function App() {
       <Container size="3" py="5">
         <Flex justify="between" align="end" gap="3" mb="4" wrap="wrap">
           <Flex align="center" gap="3">
-            <img src="/brand/violet-map-logo-light.svg" alt="" width="44" height="32" />
+            <img src={`${import.meta.env.BASE_URL}brand/violet-map-logo-light.svg`} alt="" width="44" height="32" />
             <Heading>{t('title')}</Heading>
           </Flex>
           <Flex gap="2" align="end" wrap="wrap">
-            <Box style={{ width: 150 }}>
-              <Text as="label" size="1" htmlFor="login-username">
-                {t('username')}
-              </Text>
-              <TextField.Root
-                id="login-username"
-                autoComplete="username"
-                value={loginUsername}
-                onChange={(e) => setLoginUsername(e.currentTarget.value)}
-              />
-            </Box>
-            <Box style={{ width: 150 }}>
-              <Text as="label" size="1" htmlFor="login-password">
-                {t('password')}
-              </Text>
-              <TextField.Root
-                id="login-password"
-                type="password"
-                autoComplete="current-password"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.currentTarget.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void signIn();
-                }}
-              />
-            </Box>
-            <Button variant="soft" onClick={() => void signIn()} disabled={!loginUsername || !loginPassword}>
-              {t('signIn')}
-            </Button>
-            <Box style={{ width: 220 }}>
-              <Text as="label" size="1" htmlFor="admin-token">
-                {t('token')}
-              </Text>
-              <TextField.Root
-                id="admin-token"
-                type="password"
-                value={token}
-                onChange={(e) => changeToken(e.currentTarget.value)}
-              />
-            </Box>
+            {serviceCapabilities().authMode === 'users' && (
+              <>
+                <Box style={{ width: 150 }}>
+                  <Text as="label" size="1" htmlFor="login-username">
+                    {t('username')}
+                  </Text>
+                  <TextField.Root
+                    id="login-username"
+                    autoComplete="username"
+                    value={loginUsername}
+                    onChange={(e) => setLoginUsername(e.currentTarget.value)}
+                  />
+                </Box>
+                <Box style={{ width: 150 }}>
+                  <Text as="label" size="1" htmlFor="login-password">
+                    {t('password')}
+                  </Text>
+                  <TextField.Root
+                    id="login-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void signIn();
+                    }}
+                  />
+                </Box>
+                <Button variant="soft" onClick={() => void signIn()} disabled={!loginUsername || !loginPassword}>
+                  {t('signIn')}
+                </Button>
+              </>
+            )}
+            {serviceCapabilities().authMode !== 'none' && (
+              <Box style={{ width: 220 }}>
+                <Text as="label" size="1" htmlFor="admin-token">
+                  {t('token')}
+                </Text>
+                <TextField.Root
+                  id="admin-token"
+                  type="password"
+                  value={token}
+                  onChange={(e) => changeToken(e.currentTarget.value)}
+                />
+              </Box>
+            )}
             <Box style={{ width: 160 }}>
               <Text as="label" size="1">
                 {t('language')}
@@ -589,28 +595,40 @@ export default function App() {
             <Callout.Text>{loginMessage}</Callout.Text>
           </Callout.Root>
         )}
-        <Tabs.Root defaultValue="worlds">
-          <Tabs.List>
-            <Tabs.Trigger value="worlds">{t('worlds')}</Tabs.Trigger>
-            <Tabs.Trigger value="upload">{t('upload')}</Tabs.Trigger>
-            <Tabs.Trigger value="biomes">{t('biomes')}</Tabs.Trigger>
-            <Tabs.Trigger value="users">{t('users')}</Tabs.Trigger>
-          </Tabs.List>
-          <Box mt="4">
-            <Tabs.Content value="worlds">
-              <WorldsPanel token={token} />
-            </Tabs.Content>
-            <Tabs.Content value="upload">
-              <UploadPanel token={token} />
-            </Tabs.Content>
-            <Tabs.Content value="biomes">
-              <BiomesPanel token={token} />
-            </Tabs.Content>
-            <Tabs.Content value="users">
-              <UsersPanel token={token} />
-            </Tabs.Content>
-          </Box>
-        </Tabs.Root>
+        {!serviceCapabilities().adminApi ? (
+          <Callout.Root>
+            <Callout.Text>This server has not enabled management features.</Callout.Text>
+          </Callout.Root>
+        ) : (
+          <Tabs.Root defaultValue="worlds">
+            <Tabs.List>
+              <Tabs.Trigger value="worlds">{t('worlds')}</Tabs.Trigger>
+              {serviceCapabilities().worldWrites && <Tabs.Trigger value="upload">{t('upload')}</Tabs.Trigger>}
+              {serviceCapabilities().dataWrites && <Tabs.Trigger value="biomes">{t('biomes')}</Tabs.Trigger>}
+              {serviceCapabilities().users && <Tabs.Trigger value="users">{t('users')}</Tabs.Trigger>}
+            </Tabs.List>
+            <Box mt="4">
+              <Tabs.Content value="worlds">
+                <WorldsPanel token={token} />
+              </Tabs.Content>
+              {serviceCapabilities().worldWrites && (
+                <Tabs.Content value="upload">
+                  <UploadPanel token={token} />
+                </Tabs.Content>
+              )}
+              {serviceCapabilities().dataWrites && (
+                <Tabs.Content value="biomes">
+                  <BiomesPanel token={token} />
+                </Tabs.Content>
+              )}
+              {serviceCapabilities().users && (
+                <Tabs.Content value="users">
+                  <UsersPanel token={token} />
+                </Tabs.Content>
+              )}
+            </Box>
+          </Tabs.Root>
+        )}
       </Container>
     </Theme>
   );

@@ -1,4 +1,4 @@
-import { WorkLimiter } from './workLimiter.js';
+import { WorkLimiter } from '@violet-map/core/async';
 
 export class ChunkServiceBusyError extends Error {}
 

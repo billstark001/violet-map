@@ -4,12 +4,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "start": "vite preview --host 0.0.0.0 --port 3310",
+    "build": "vite build && node ../../scripts/build-static.mjs admin",
+    "start": "node dist/serve.mjs 3310 http://localhost:3300/",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@radix-ui/themes": "^3.3.0",
+    "@violet-map/core": "workspace:*",
     "i18next": "^26.3.4",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

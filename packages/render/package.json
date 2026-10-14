@@ -1,0 +1,65 @@
+{
+  "name": "@violet-map/render",
+  "version": "0.1.0",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./model": {
+      "development": "./src/model.ts",
+      "types": "./dist/model.d.ts",
+      "default": "./dist/model.js"
+    },
+    "./colors": {
+      "development": "./src/colors.ts",
+      "types": "./dist/colors.d.ts",
+      "default": "./dist/colors.js"
+    },
+    "./light": {
+      "development": "./src/light.ts",
+      "types": "./dist/light.d.ts",
+      "default": "./dist/light.js"
+    },
+    "./mesher/full": {
+      "development": "./src/mesher/full.ts",
+      "types": "./dist/mesher/full.d.ts",
+      "default": "./dist/mesher/full.js"
+    },
+    "./mesher/lod": {
+      "development": "./src/mesher/lod.ts",
+      "types": "./dist/mesher/lod.d.ts",
+      "default": "./dist/mesher/lod.js"
+    },
+    "./top-map/sample": {
+      "development": "./src/top-map/sample.ts",
+      "types": "./dist/top-map/sample.d.ts",
+      "default": "./dist/top-map/sample.js"
+    },
+    "./top-map/mesh": {
+      "development": "./src/top-map/mesh.ts",
+      "types": "./dist/top-map/mesh.d.ts",
+      "default": "./dist/top-map/mesh.js"
+    },
+    "./scheduler": {
+      "development": "./src/scheduler/cameraGridTracker.ts",
+      "types": "./dist/scheduler/cameraGridTracker.d.ts",
+      "default": "./dist/scheduler/cameraGridTracker.js"
+    }
+  },
+  "scripts": {
+    "build": "node ../../scripts/clean-dist.mjs && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@violet-map/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

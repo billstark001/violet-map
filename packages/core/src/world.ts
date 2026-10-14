@@ -1,12 +1,12 @@
 import { toLongs, toBytes } from './binary.js';
-import { BlockStateRef, normalizeId } from './types.js';
+import { BlockStateRef, normalizeId } from '@violet-map/core/domain';
 
 export const AIR: BlockStateRef = Object.freeze({ name: 'minecraft:air', properties: {} });
 export const AIR_NAMES = new Set(['minecraft:air', 'minecraft:cave_air', 'minecraft:void_air']);
 
 /** The small NBT subset needed by resource-driven renderers. Keeping the
  * original compound lets resource registrations grow without a parser change. */
-export interface WorldRenderObject {
+export interface WorldEntityRecord {
   id: string;
   x: number;
   y: number;
@@ -115,8 +115,8 @@ export class ChunkColumn {
   hasStoredLight = false;
   hasStoredBlockLight = false;
   hasStoredSkyLight = false;
-  readonly blockEntities: WorldRenderObject[] = [];
-  readonly entities: WorldRenderObject[] = [];
+  readonly blockEntities: WorldEntityRecord[] = [];
+  readonly entities: WorldEntityRecord[] = [];
   constructor(
     readonly x: number,
     readonly z: number,
@@ -193,7 +193,7 @@ function listValue(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function parseRenderObject(value: unknown, blockEntity: boolean): WorldRenderObject | null {
+function parseEntityRecord(value: unknown, blockEntity: boolean): WorldEntityRecord | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const data = value as Record<string, unknown>;
   const rawId = data.id ?? data.Id;
@@ -217,9 +217,9 @@ function parseRenderObject(value: unknown, blockEntity: boolean): WorldRenderObj
   };
 }
 
-function appendRenderObjects(target: WorldRenderObject[], value: unknown, blockEntity: boolean) {
+function appendEntityRecords(target: WorldEntityRecord[], value: unknown, blockEntity: boolean) {
   for (const entry of listValue(value)) {
-    const object = parseRenderObject(entry, blockEntity);
+    const object = parseEntityRecord(entry, blockEntity);
     if (object) target.push(object);
   }
 }
@@ -316,13 +316,13 @@ export function parseChunkColumn(root: any): ChunkColumn {
   }
   // Names changed over time; supporting both costs little and lets modern
   // renderer resources work for legacy chunks too.
-  appendRenderObjects(col.blockEntities, r.block_entities ?? r.BlockEntities ?? r.TileEntities, true);
-  appendRenderObjects(col.entities, r.entities ?? r.Entities, false);
+  appendEntityRecords(col.blockEntities, r.block_entities ?? r.BlockEntities ?? r.TileEntities, true);
+  appendEntityRecords(col.entities, r.entities ?? r.Entities, false);
   return col;
 }
 
 /** Add entities from a modern standalone entities-region chunk. */
 export function appendChunkEntities(col: ChunkColumn, root: any): void {
   const r = root.Level ?? root;
-  appendRenderObjects(col.entities, r.entities ?? r.Entities, false);
+  appendEntityRecords(col.entities, r.entities ?? r.Entities, false);
 }

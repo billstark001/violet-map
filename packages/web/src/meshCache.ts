@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { MeshBuffers } from '@violet-map/core';
+import type { MeshBuffers } from '@violet-map/render';
 import type { SectionMeshMsg } from './worker/protocol';
 
 const DB_NAME = 'violet-map-mesh-cache';

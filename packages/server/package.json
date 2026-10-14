@@ -2,28 +2,35 @@
   "name": "@violet-map/server",
   "version": "0.1.0",
   "files": [
-    "dist",
-    "src",
-    "data-defaults",
-    "migrations"
+    "dist"
   ],
   "type": "module",
   "exports": {
     "./admin": {
-      "types": "./src/admin.ts",
       "development": "./src/admin.ts",
+      "types": "./dist/src/admin.d.ts",
       "default": "./dist/src/admin.js"
     },
-    "./contracts": {
-      "types": "./src/contracts.ts",
-      "development": "./src/contracts.ts",
-      "default": "./dist/src/contracts.js"
+    "./app": {
+      "development": "./src/app.ts",
+      "types": "./dist/src/app.d.ts",
+      "default": "./dist/src/app.js"
+    },
+    "./configuration": {
+      "development": "./src/configuration.ts",
+      "types": "./dist/src/configuration.d.ts",
+      "default": "./dist/src/configuration.js"
+    },
+    "./services": {
+      "development": "./src/services.ts",
+      "types": "./dist/src/services.d.ts",
+      "default": "./dist/src/services.js"
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.db.json && node scripts/build-db.mjs",
+    "build": "node ../../scripts/clean-dist.mjs && tsc -p tsconfig.json --noEmit false && node scripts/build-resources.mjs",
     "dev": "tsx watch --conditions=development src/index.ts",
-    "start": "tsx --conditions=development src/index.ts",
+    "start": "node dist/src/index.js",
     "typecheck": "tsc -p tsconfig.json",
     "db:generate": "drizzle-kit generate",
     "db:check": "drizzle-kit check && tsx src/db/check.ts",
@@ -38,6 +45,7 @@
     "@hono/node-server": "^2.0.8",
     "@msgpack/msgpack": "^3.1.3",
     "@violet-map/core": "workspace:*",
+    "@violet-map/storage": "workspace:*",
     "drizzle-orm": "0.45.4",
     "hono": "^4.12.27",
     "minecraft-data": "^3.111.0",

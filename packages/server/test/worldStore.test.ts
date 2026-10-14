@@ -12,20 +12,24 @@ test('a world can discover its first region in a modern dimension directory', as
   process.env.WORLDS_DIR = root;
   process.env.WORLD_STORAGE = 'local';
   try {
-    const [
-      { worldStorage },
-      {
-        deleteChunks,
-        getChunkMetadataBatch,
-        getChunkNbtWithMeta,
-        invalidateStoredFile,
-        listChunkSourceCoverage,
-        listWorlds,
-        saveChunkNbt,
-        saveWorldFile,
-      },
-      { getTopMapManifest, getWorldCapabilities },
-    ] = await Promise.all([import('../src/storage.js'), import('../src/worldStore.js'), import('../src/topMap.js')]);
+    const { loadServerConfig } = await import('../src/configuration.js');
+    const config = loadServerConfig();
+    const { createStorage } = await import('../src/storage.js');
+    const { createWorldStore } = await import('../src/worldStore.js');
+    const { createTopMapService } = await import('../src/topMap.js');
+    const worldStorage = await createStorage(config);
+    const topMap = createTopMapService(worldStorage, config);
+    const { getTopMapManifest, getWorldCapabilities } = topMap;
+    const {
+      deleteChunks,
+      getChunkMetadataBatch,
+      getChunkNbtWithMeta,
+      invalidateStoredFile,
+      listChunkSourceCoverage,
+      listWorlds,
+      saveChunkNbt,
+      saveWorldFile,
+    } = createWorldStore(worldStorage, topMap, config);
     const chunks = [{ cx: 0, cz: 0 }];
     assert.equal((await getChunkMetadataBatch('testworld', 'minecraft:overworld', chunks))[0].missing, true);
     assert.deepEqual(await listWorlds(), []);

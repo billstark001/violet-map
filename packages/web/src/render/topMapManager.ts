@@ -1,16 +1,14 @@
 import * as THREE from 'three';
 import { candidateRegionCoords, type RegionCoordinate } from './tileCandidates';
+import { buildTopMapMesh, topMapCoverageChunkCount, topMapCoverageKeyFromMask } from '@violet-map/render/top-map/mesh';
+import { type MeshBuffers } from '@violet-map/render';
 import {
-  buildTopMapMesh,
   prepareTopMapTile,
-  topMapCoverageChunkCount,
-  topMapCoverageKeyFromMask,
   TOP_MAP_MISSING_HEIGHT,
   TOP_MAP_TILE_BLOCKS,
-  type MeshBuffers,
   type PreparedTopMapTile,
   type TopMapTilePayload,
-} from '@violet-map/core';
+} from '@violet-map/core/formats/top-map';
 import { fetchTopMapManifest, fetchTopMapTile } from '../api';
 import { debugLog } from '../logger';
 import { createTopMapMaterial, type SharedUniforms } from './materials';

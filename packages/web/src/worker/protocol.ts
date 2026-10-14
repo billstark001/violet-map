@@ -1,13 +1,6 @@
-import type {
-  AssetBundle,
-  AtlasIndex,
-  BiomeMap,
-  BlockInfoMap,
-  DimensionDef,
-  MeshBuffers,
-  RenderLayer,
-  TextureAlphaMap,
-} from '@violet-map/core';
+import type { AssetBundle, AtlasIndex, BlockInfoMap, RenderLayer, TextureAlphaMap } from '@violet-map/core/assets';
+import type { BiomeMap, DimensionDef } from '@violet-map/core/domain';
+import type { MeshBuffers } from '@violet-map/render';
 
 export interface WorkerInit {
   type: 'init';

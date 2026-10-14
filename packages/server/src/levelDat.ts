@@ -1,7 +1,6 @@
 import { gzip } from 'pako';
 import * as nbt from 'prismarine-nbt';
 import minecraftData from 'minecraft-data';
-import { config } from './config.js';
 
 type Tag =
   | { type: 'byte'; value: number }
@@ -42,8 +41,8 @@ export interface LevelDatOptions {
   seed?: bigint | number;
 }
 
-export function createMinimalLevelDat(options: LevelDatOptions): Uint8Array {
-  const dv = dataVersion(config.mcVersion);
+export function createMinimalLevelDat(options: LevelDatOptions, mcVersion: string): Uint8Array {
+  const dv = dataVersion(mcVersion);
   const now = Date.now();
   const spawn = options.spawn ?? { x: 0, y: 80, z: 0 };
   const seed = options.seed ?? 0;
@@ -90,7 +89,7 @@ export function createMinimalLevelDat(options: LevelDatOptions): Uint8Array {
       version: int(19133),
       Version: compound({
         Id: int(dv),
-        Name: string(config.mcVersion),
+        Name: string(mcVersion),
         Series: string('main'),
         Snapshot: byte(false),
       }),

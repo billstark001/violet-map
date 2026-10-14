@@ -1,3 +1,4 @@
+import { normalizeApiBaseUrl } from '@violet-map/core/contracts';
 import path from 'node:path';
 import { readJson, updateJson } from './files.js';
 import type { CliPaths } from './paths.js';
@@ -36,23 +37,16 @@ export function validName(name: string): string {
     throw new Error('Names must be 1-64 letters, numbers, dot, dash, or underscore');
   return name;
 }
-export function serverOrigin(input: string): string {
+export function serverBaseUrl(input: string): string {
   let url;
   try {
     url = new URL(input);
   } catch {
     throw new Error('Invalid server URL');
   }
-  if (
-    !['http:', 'https:'].includes(url.protocol) ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash ||
-    (url.pathname !== '/' && url.pathname !== '')
-  )
-    throw new Error('Server URL must be an HTTP(S) origin without credentials, path, query, or fragment');
-  return url.origin;
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash)
+    throw new Error('Server URL must be an HTTP(S) origin without credentials, query, or fragment');
+  return normalizeApiBaseUrl(input, url.origin).replace(/\/$/, '');
 }
 export function validateReference(ref: string): string {
   if (!/^(env:[A-Za-z_][A-Za-z0-9_]*|secret:[A-Za-z0-9][A-Za-z0-9_.-]{0,63}|file:.+)$/.test(ref))
@@ -94,7 +88,7 @@ export function validateConfig(value: unknown): CliConfig {
       }
       if (section === 'server') {
         if (typeof fields.url !== 'string') throw new Error('server.url is required');
-        serverOrigin(fields.url);
+        serverBaseUrl(fields.url);
       }
       if (section === 's3' && fields.endpoint) {
         const endpoint = new URL(fields.endpoint as string);

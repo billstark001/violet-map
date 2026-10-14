@@ -31,8 +31,10 @@ export function findYamlConfig(
       return { file, data: parseConfigYaml(fs.readFileSync(file, 'utf8')) };
     } catch (error) {
       if (!explicit && (error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`failed to load YAML config ${file}: ${message}`, { cause: error });
+      const message =
+        (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'file not found' : 'invalid YAML configuration';
+      // YAML parser diagnostics may contain source lines with secrets.
+      throw new Error(`failed to load YAML config ${file}: ${message}`);
     }
   }
   return null;

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { AtlasIndex } from '@violet-map/core';
+import type { AtlasIndex } from '@violet-map/core/assets';
 import { collectTextureIds, fallbackTextureSize, textureAnimationData } from '../src/atlas.js';
 
 test('animation lookup frames stay within 16-bit shader offsets', () => {

@@ -1,0 +1,53 @@
+{
+  "name": "@violet-map/storage",
+  "version": "0.1.0",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./local": {
+      "development": "./src/local.ts",
+      "types": "./dist/local.d.ts",
+      "default": "./dist/local.js"
+    },
+    "./s3": {
+      "development": "./src/s3.ts",
+      "types": "./dist/s3.d.ts",
+      "default": "./dist/s3.js"
+    },
+    "./server": {
+      "development": "./src/server.ts",
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
+    },
+    "./factory": {
+      "development": "./src/factory.ts",
+      "types": "./dist/factory.d.ts",
+      "default": "./dist/factory.js"
+    },
+    "./types": {
+      "development": "./src/types.ts",
+      "types": "./dist/types.d.ts",
+      "default": "./dist/types.js"
+    }
+  },
+  "scripts": {
+    "build": "node ../../scripts/clean-dist.mjs && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1079.0",
+    "@aws-sdk/credential-providers": "^3.1150.0",
+    "@violet-map/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "typescript": "^6.0.3"
+  }
+}

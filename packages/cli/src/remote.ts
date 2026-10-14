@@ -1,5 +1,6 @@
+import { apiUrl } from '@violet-map/core/contracts';
 import type { CliContext } from './context.js';
-import { serverOrigin } from './settings/config.js';
+import { serverBaseUrl } from './settings/config.js';
 import { loadState } from './settings/state.js';
 import { sessionKey, sensitiveValue } from './settings/secrets.js';
 
@@ -11,7 +12,7 @@ export interface ServerConnection {
 export function remoteOrigin(context: CliContext): string {
   const input = context.options.serverUrl ?? context.env.VIOLET_SERVER_URL ?? context.profile.server?.url;
   if (!input) throw new Error('Provide --server-url, VIOLET_SERVER_URL, or a server profile');
-  return serverOrigin(input);
+  return serverBaseUrl(input);
 }
 export async function resolveServerConnection(context: CliContext): Promise<ServerConnection> {
   const url = remoteOrigin(context);
@@ -19,7 +20,7 @@ export async function resolveServerConnection(context: CliContext): Promise<Serv
     return { url, token: await context.secrets.resolve(context.options.serverTokenRef, process.cwd()) };
   if (context.env.VIOLET_SERVER_TOKEN !== undefined) {
     if (!context.env.VIOLET_SERVER_TOKEN) throw new Error('VIOLET_SERVER_TOKEN must not be empty');
-    if (context.env.VIOLET_SERVER_URL && serverOrigin(context.env.VIOLET_SERVER_URL) !== url)
+    if (context.env.VIOLET_SERVER_URL && serverBaseUrl(context.env.VIOLET_SERVER_URL) !== url)
       throw new Error(
         'The environment credential belongs to a different server URL; supply an explicit credential reference',
       );
@@ -48,10 +49,10 @@ export async function apiRequest<T>(
   pathname: string,
   init: RequestInit = {},
 ): Promise<T> {
-  if (!pathname.startsWith('/api/')) throw new Error('Invalid API path');
+  if (!pathname.startsWith('api/')) throw new Error('Invalid API path');
   const headers = new Headers(init.headers);
   if (connection.token) headers.set('authorization', `Bearer ${connection.token}`);
-  const response = await fetch(new URL(pathname, connection.url), {
+  const response = await fetch(apiUrl(connection.url, pathname), {
     ...init,
     headers,
     redirect: 'error',

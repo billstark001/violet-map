@@ -1,6 +1,9 @@
+import type { Principal } from './principal.js';
 import type { Context, MiddlewareHandler } from 'hono';
-import type { Principal, Role } from './contracts.js';
-import type { UserService } from './users.js';
+import type { Role } from '@violet-map/core/contracts';
+export interface Authentication {
+  authenticateCredential(token: string): Promise<Principal | undefined>;
+}
 
 const ROLE_POWER: Record<Role, number> = { guest: 0, viewer: 1, ci: 2, admin: 3, root: 4 };
 export const REQUIRED_ROLE = {
@@ -20,7 +23,7 @@ export function bearer(c: Context): string | undefined {
   return authorization?.toLowerCase().startsWith('bearer ') ? authorization.slice(7).trim() : undefined;
 }
 
-export function createAuthorization(service: UserService) {
+export function createAuthorization(service: Authentication) {
   async function principalFor(c: Context): Promise<Principal | undefined> {
     const cached = c.get('principal') as Principal | undefined;
     if (cached) return cached;

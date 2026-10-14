@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CameraGridTracker, type Pose, type RankedCell, type RankingResult } from '@violet-map/core';
+import { CameraGridTracker, type Pose, type RankedCell, type RankingResult } from '@violet-map/render';
 import { debugLog, isDebugLoggingEnabled } from '../logger';
 
 export type ChunkState = 'checking' | 'hashed' | 'fetching' | 'decoding' | 'stored' | 'absent' | 'error';

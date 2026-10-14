@@ -5,7 +5,7 @@ import { loadContext, type GlobalOptions } from './context.js';
 import { cliPaths } from './settings/paths.js';
 import { redact } from './settings/secrets.js';
 import type { ManagementOptions } from './management.js';
-import type { CreatableRole } from '@violet-map/server/contracts';
+import type { CreatableRole } from '@violet-map/core/contracts';
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
   version: string;
@@ -311,7 +311,7 @@ export function createProgram(): Command {
     .addOption(new Option('--approach <direction>', 'surface sampling direction').choices(['top', 'bottom']))
     .addOption(new Option('--light-mode <mode>', 'light baking mode').choices(['stored-first', 'rebake']))
     .option('--no-sky', 'disable sky light');
-  action<GlobalOptions & import('./commands/bake.js').BakeInput>(bake, async (options, [world]) => {
+  action<GlobalOptions & import('./commands/bakeInput.js').BakeInput>(bake, async (options, [world]) => {
     const { runBakeTopMap } = await import('./commands/bake.js');
     await runBakeTopMap({ ...options, world });
   });
@@ -324,7 +324,7 @@ export function createProgram(): Command {
     .option('--out <file>', 'output report')
     .option('--assets-dir <dirs>', 'comma-separated asset directories')
     .option('--block-info <file>', 'block information JSON');
-  action<GlobalOptions & import('./commands/profileMca.js').ProfileInput>(profiler, async (options, [region]) => {
+  action<GlobalOptions & import('./commands/profileMcaInput.js').ProfileInput>(profiler, async (options, [region]) => {
     const { runProfileMca } = await import('./commands/profileMca.js');
     await runProfileMca({ ...options, region });
   });
