@@ -12,6 +12,7 @@
     "version:set": "node scripts/version.mjs --set",
     "boundary:check": "node scripts/check-boundaries.mjs",
     "test:production": "node --test scripts/acceptance/production.test.mjs",
+    "test:containers": "docker compose -p violet-acceptance -f compose.production.yaml build && node --test scripts/acceptance/containers.test.mjs",
     "test:frontend": "tsx --conditions=development --test scripts/acceptance/frontend.test.ts",
     "dev": "pnpm run dev:light",
     "dev:light": "pnpm --filter=@violet-map/server --filter=@violet-map/web --parallel -r run dev",

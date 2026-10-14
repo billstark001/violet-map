@@ -1,0 +1,31 @@
+# Independent services: API_BASE_URL is the browser-visible API address.
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    environment:
+      DEPLOYMENT_PROFILE: ${DEPLOYMENT_PROFILE:-public}
+      STATIC_API_TOKEN: ${STATIC_API_TOKEN:-}
+      ROOT_USERNAME: ${ROOT_USERNAME:-}
+      ROOT_PASSWORD: ${ROOT_PASSWORD:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3305,http://localhost:3310}
+      CACHE_PREWARM: 'true'
+    ports: ['3300:3300']
+    volumes: [violet-data:/data]
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    environment:
+      API_BASE_URL: ${API_BASE_URL:-http://localhost:3300/}
+    ports: ['3305:3305']
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.admin
+    environment:
+      API_BASE_URL: ${API_BASE_URL:-http://localhost:3300/}
+    ports: ['3310:3310']
+volumes:
+  violet-data:

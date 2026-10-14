@@ -1,0 +1,8 @@
+.git
+**/node_modules
+**/dist
+**/.DS_Store
+TEMP*
+packages/server/data
+assets
+*.log

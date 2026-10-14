@@ -1,3 +1,4 @@
+# Development only: light/full choose local processes; DEPLOYMENT_PROFILE chooses API capabilities.
 services:
   server:
     image: node:24-bookworm-slim

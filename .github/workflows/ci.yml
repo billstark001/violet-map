@@ -24,13 +24,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v6
         with:
-          version: 12
+          version: 12.11.2
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm version:check
+      - run: pnpm boundary:check
       - run: pnpm lint
       - run: pnpm format:check
       - run: pnpm --filter @violet-map/server db:check
@@ -39,3 +40,9 @@ jobs:
       - run: pnpm build
       - run: pnpm --filter @violet-map/server test:db:artifact
       - run: pnpm --filter @violet-map/cli test:artifact
+      - run: pnpm test:production
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: VITE_BASE_PATH=/map/ pnpm --filter @violet-map/web build
+      - run: VITE_BASE_PATH=/console/ pnpm --filter @violet-map/admin build
+      - run: pnpm test:frontend
+      - run: pnpm test:containers

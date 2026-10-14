@@ -1,0 +1,16 @@
+FROM node:24-bookworm-slim AS build
+RUN corepack enable
+WORKDIR /workspace
+COPY . .
+RUN pnpm install --frozen-lockfile \
+    && pnpm --filter @violet-map/server... build \
+    && pnpm --filter @violet-map/server deploy --legacy --prod /artifact
+
+FROM node:24-bookworm-slim
+ENV NODE_ENV=production DEPLOYMENT_PROFILE=public DATA_DIR=/data WORLDS_DIR=/data/worlds ASSETS_DIRS=/data/assets
+WORKDIR /app
+COPY --from=build --chown=node:node /artifact/ ./
+RUN mkdir -p /data && chown node:node /data
+USER node
+EXPOSE 3300
+CMD ["node", "dist/src/index.js"]
