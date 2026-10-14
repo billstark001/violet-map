@@ -4,13 +4,13 @@ Violet Map is a browser-first Minecraft Java world explorer. It combines a Hono 
 
 ## Packages
 
-| Package              | Purpose                                                                                                 |
-| -------------------- | ------------------------------------------------------------------------------------------------------- |
-| `@violet-map/core`   | NBT, regions, lighting, meshing, top-map code, plus the shared local/S3/server `WorldStorage` adapters. |
-| `@violet-map/assets` | CLI for vanilla assets, top-map baking, profiling, and verified world-file synchronization.             |
-| `@violet-map/server` | Hono API, world service, storage-backed administration, and the Drizzle user database.                  |
-| `@violet-map/web`    | Three.js world viewer with worker meshing and an optional IndexedDB mesh cache.                         |
-| `@violet-map/admin`  | Admin UI for worlds, uploads, biome data, users, and temporary credentials.                             |
+| Package | Purpose |
+| --- | --- |
+| `@violet-map/core` | NBT, regions, lighting, meshing, top-map code, plus the shared local/S3/server `WorldStorage` adapters. |
+| `@violet-map/assets` | CLI for vanilla assets, top-map baking, profiling, and verified world-file synchronization. |
+| `@violet-map/server` | Hono API, world service, storage-backed administration, and the Drizzle user database. |
+| `@violet-map/web` | Three.js world viewer with worker meshing and an optional IndexedDB mesh cache. |
+| `@violet-map/admin` | Admin UI for worlds, uploads, biome data, users, and temporary credentials. |
 
 ## Quick start
 
@@ -136,27 +136,25 @@ The workflow accepts the checked-in archive directory, target world name, destin
 
 ## Configuration
 
-Non-sensitive values can be set as environment variables or in `violet-map.yaml` / `violet-map.yml`; use `VIOLET_MAP_CONFIG` to select another file.
-The file supports standard nested YAML maps and lists. A malformed file stops startup with its path in the error; environment variables take precedence.
-Relative paths in YAML resolve from the YAML file's directory; paths in environment variables resolve from the process working directory.
+Non-sensitive values can be set as environment variables or in `violet-map.yaml` / `violet-map.yml`; use `VIOLET_MAP_CONFIG` to select another file. The file supports standard nested YAML maps and lists. A malformed file stops startup with its path in the error; environment variables take precedence. Relative paths in YAML resolve from the YAML file's directory; paths in environment variables resolve from the process working directory.
 
-| Variable                                             | Default                         | Description                                                                         |
-| ---------------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------- |
-| `PORT`                                               | `3300`                          | API port.                                                                           |
-| `WORLDS_DIR`                                         | `data/worlds`                   | Local world directory.                                                              |
-| `DATA_DIR`                                           | `data`                          | Runtime data directory, including default PGlite data.                              |
-| `DATABASE_URL`                                       | unset                           | PostgreSQL connection string; enables PostgreSQL instead of PGlite.                 |
-| `DATABASE_DIR`                                       | `DATA_DIR/users.pglite`         | PGlite data directory override.                                                     |
-| `ROOT_USERNAME`, `ROOT_PASSWORD`                     | unset                           | Define the optional virtual root account; both are required.                        |
-| `WORLD_STORAGE`                                      | `local`                         | `local` or `s3`.                                                                    |
-| `S3_BUCKET`, `S3_ENDPOINT`, `S3_REGION`, `S3_PREFIX` | —                               | World-storage S3 configuration.                                                     |
-| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`           | —                               | S3 credentials.                                                                     |
-| `S3_FORCE_PATH_STYLE`                                | `true`                          | Set false for virtual-hosted-style S3.                                              |
-| `ASSETS_DIRS`                                        | bundled defaults, `data/assets` | Comma-separated resource pack directories; later directories override earlier ones. |
-| `MC_VERSION`                                         | `1.21.4`                        | Default version for generated data/minimal `level.dat`.                             |
-| `MC_DATA_VERSION`                                    | `MC_VERSION`                    | `minecraft-data` version override.                                                  |
-| `REGION_CACHE_BYTES`                                 | `268435456`                     | Full region cache cap.                                                              |
-| `CHUNK_NBT_CACHE_BYTES`                              | `134217728`                     | NBT cache cap.                                                                      |
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PORT` | `3300` | API port. |
+| `WORLDS_DIR` | `data/worlds` | Local world directory. |
+| `DATA_DIR` | `data` | Runtime data directory, including default PGlite data. |
+| `DATABASE_URL` | unset | PostgreSQL connection string; enables PostgreSQL instead of PGlite. |
+| `DATABASE_DIR` | `DATA_DIR/users.pglite` | PGlite data directory override. |
+| `ROOT_USERNAME`, `ROOT_PASSWORD` | unset | Define the optional virtual root account; both are required. |
+| `WORLD_STORAGE` | `local` | `local` or `s3`. |
+| `S3_BUCKET`, `S3_ENDPOINT`, `S3_REGION`, `S3_PREFIX` | — | World-storage S3 configuration. |
+| `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | — | S3 credentials. |
+| `S3_FORCE_PATH_STYLE` | `true` | Set false for virtual-hosted-style S3. |
+| `ASSETS_DIRS` | bundled defaults, `data/assets` | Comma-separated resource pack directories; later directories override earlier ones. |
+| `MC_VERSION` | `1.21.4` | Default version for generated data/minimal `level.dat`. |
+| `MC_DATA_VERSION` | `MC_VERSION` | `minecraft-data` version override. |
+| `REGION_CACHE_BYTES` | `268435456` | Full region cache cap. |
+| `CHUNK_NBT_CACHE_BYTES` | `134217728` | NBT cache cap. |
 
 Example:
 
@@ -184,26 +182,22 @@ The viewer persists its selected world, camera, scheduler, diagnostics, and sett
 pnpm --filter @violet-map/assets dev --help
 ```
 
-| Command                                                     | Description                                                               |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `assets list`                                               | List available Minecraft releases.                                        |
-| `assets extract --version <id> --dir <dir>`                 | Download a Mojang client jar and extract blockstates/models/textures.     |
-| `assets extract-all --min-version <id> --dir <dir>`         | Extract every selected release.                                           |
-| `assets generate-biomes --version <id> --output <file>`     | Generate biome color data.                                                |
-| `assets generate-dimensions --version <id> --output <file>` | Generate standard dimension data.                                         |
-| `profile-mca <file.mca>`                                    | Profile region parsing and meshing.                                       |
-| `bake-topmap <world>`                                       | Bake top-map tiles and manifest under `.violet-map/top-map`.              |
-| `world sync …`                                              | Sync a local archive to local/S3/server storage with identity protection. |
+| Command | Description |
+| --- | --- |
+| `assets list` | List available Minecraft releases. |
+| `assets extract --version <id> --dir <dir>` | Download a Mojang client jar and extract blockstates/models/textures. |
+| `assets extract-all --min-version <id> --dir <dir>` | Extract every selected release. |
+| `assets generate-biomes --version <id> --output <file>` | Generate biome color data. |
+| `assets generate-dimensions --version <id> --output <file>` | Generate standard dimension data. |
+| `profile-mca <file.mca>` | Profile region parsing and meshing. |
+| `bake-topmap <world>` | Bake top-map tiles and manifest under `.violet-map/top-map`. |
+| `world sync …` | Sync a local archive to local/S3/server storage with identity protection. |
 
 `bake-topmap` supports `--approach top|bottom` and `--light-mode stored-first|rebake`.
 
 ### Resource-driven special renderers
 
-Animated block and fluid textures use their resource-pack `.png.mcmeta` animation
-definitions. Special blocks and entities are declared, rather than named in the
-viewer, in `assets/<namespace>/violet_map/renderers.json`. Each entry points at
-an ordinary Java model JSON under `models/`, so packs can add geometry without a
-code change. The bundled registrations illustrate chest and sign block entities.
+Animated block and fluid textures use their resource-pack `.png.mcmeta` animation definitions. Special blocks and entities are declared, rather than named in the viewer, in `assets/<namespace>/violet_map/renderers.json`. Each entry points at an ordinary Java model JSON under `models/`, so packs can add geometry without a code change. The bundled registrations illustrate chest and sign block entities.
 
 ```json
 {
@@ -224,10 +218,7 @@ code change. The bundled registrations illustrate chest and sign block entities.
 }
 ```
 
-Only registered entities are rendered. There are deliberately no built-in
-legacy-entity meshes; provide a modern Java-model JSON in the resource pack for
-each entity that should appear. Resource models are shown only for full-detail
-chunks in the preset-dependent near radius (potato through extreme).
+Only registered entities are rendered. There are deliberately no built-in legacy-entity meshes; provide a modern Java-model JSON in the resource pack for each entity that should appear. Resource models are shown only for full-detail chunks in the preset-dependent near radius (potato through extreme).
 
 ## Limits
 
