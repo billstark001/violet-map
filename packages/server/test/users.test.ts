@@ -6,6 +6,8 @@ import { test } from 'node:test';
 import { config } from '../src/config.js';
 import { eq } from 'drizzle-orm';
 import { closeDatabase, getDatabase } from '../src/db/index.js';
+import { connectDatabase } from '../src/db/connection.js';
+import { migrateDatabase } from '../src/db/migrations.js';
 import { users } from '../src/db/schema.js';
 import { authenticateCredential, createUser, deleteUser, login, updateUser } from '../src/users.js';
 
@@ -26,6 +28,13 @@ test('database initialization retries and password changes revoke existing crede
 
   await assert.rejects(getDatabase());
   config.databaseDir = path.join(root, 'users.pglite');
+  await assert.rejects(getDatabase(), /db:migrate/);
+  const maintenance = await connectDatabase(config);
+  try {
+    await migrateDatabase(maintenance);
+  } finally {
+    await maintenance.close();
+  }
   await getDatabase();
 
   await createUser({ username: 'test_user', password: 'first-password', role: 'viewer' });

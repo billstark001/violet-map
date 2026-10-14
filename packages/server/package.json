@@ -1,20 +1,33 @@
 {
   "name": "@violet-map/server",
   "version": "0.1.0",
+  "files": [
+    "dist",
+    "src",
+    "data-defaults",
+    "migrations"
+  ],
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.db.json && node scripts/build-db.mjs",
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "admin": "tsx src/cli.ts"
+    "admin": "tsx src/cli.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:check": "drizzle-kit check && tsx src/db/check.ts",
+    "db:status": "node dist/src/db/maintenance.js status",
+    "db:migrate": "node dist/src/db/maintenance.js migrate",
+    "db:baseline": "node dist/src/db/maintenance.js baseline",
+    "test:db": "tsx --test test/migrations.test.ts",
+    "test:db:artifact": "node --test test/maintenance-artifact.test.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.4",
     "@hono/node-server": "^2.0.8",
     "@msgpack/msgpack": "^3.1.3",
     "@violet-map/core": "workspace:*",
-    "drizzle-orm": "^0.45.2",
+    "drizzle-orm": "0.45.4",
     "hono": "^4.12.27",
     "minecraft-data": "^3.111.0",
     "pako": "^3.0.0",
@@ -27,6 +40,7 @@
     "@types/node": "^26.1.0",
     "@types/pg": "^8.20.0",
     "@types/pngjs": "^6.0.5",
+    "drizzle-kit": "0.31.10",
     "tsx": "^4.23.0",
     "typescript": "^6.0.3"
   }

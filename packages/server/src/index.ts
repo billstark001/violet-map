@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { decode, encode } from '@msgpack/msgpack';
 import { config } from './config.js';
+import { closeDatabase, getDatabase } from './db/index.js';
 import { parseByteRange } from './httpRange.js';
 import { ChunkReadLimiter, ChunkServiceBusyError } from './chunkReadLimiter.js';
 import { isChunkCoordinate, parseChunkCoordinates } from './chunkCoordinates.js';
@@ -544,9 +545,33 @@ app.post('/api/admin/worlds/:world/upload', async (c) => {
   }
 });
 
-console.log(
-  `[violet-map] server on :${config.port}\n  worlds: ${config.worldsDir}\n  assets: ${config.assetsDirs.join(', ')}`,
-);
-void buildAssetBundle().catch((error) => console.error('[violet-map] failed to warm asset bundle', error));
-void warmTopMapManifests().catch((error) => console.error('[violet-map] failed to warm top-map manifests', error));
-serve({ fetch: app.fetch, port: config.port });
+let httpServer: ReturnType<typeof serve> | undefined;
+let shuttingDown = false;
+function shutdown(): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  void (async () => {
+    if (httpServer) {
+      await new Promise<void>((resolve, reject) => {
+        httpServer!.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+    await closeDatabase();
+    process.exit(0);
+  })().catch((error) => {
+    console.error('[violet-map] failed to shut down', error);
+    process.exit(1);
+  });
+}
+process.once('SIGINT', shutdown);
+process.once('SIGTERM', shutdown);
+await getDatabase();
+
+if (!shuttingDown) {
+  console.log(
+    `[violet-map] server on :${config.port}\n  worlds: ${config.worldsDir}\n  assets: ${config.assetsDirs.join(', ')}`,
+  );
+  void buildAssetBundle().catch((error) => console.error('[violet-map] failed to warm asset bundle', error));
+  void warmTopMapManifests().catch((error) => console.error('[violet-map] failed to warm top-map manifests', error));
+  httpServer = serve({ fetch: app.fetch, port: config.port });
+}
