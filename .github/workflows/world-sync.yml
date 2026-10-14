@@ -53,11 +53,12 @@ jobs:
           S3_PREFIX: ${{ secrets.S3_PREFIX }}
           S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_SESSION_TOKEN: ${{ secrets.S3_SESSION_TOKEN }}
         run: |
           flags=()
           if [ "${{ inputs.delete }}" = "true" ]; then flags+=(--delete); fi
           if [ "${{ inputs.force }}" = "true" ]; then flags+=(--force); fi
-          pnpm --filter @violet-map/cli dev world sync \
+          pnpm violet-map world sync \
             --from "${{ inputs.source_dir }}" \
             --world "${{ inputs.world }}" \
             --target "${{ inputs.target }}" \

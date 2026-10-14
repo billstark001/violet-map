@@ -7,8 +7,8 @@ import { runBakeTopMap } from '../src/commands/bake.js';
 import { loadAssetBundleFromDirs, loadBiomeColors } from '../src/commands/common.js';
 
 test('top-map bake validates strides before scanning regions', async () => {
-  await assert.rejects(runBakeTopMap(['/missing/world', '--sample-stride', '3']), /sample stride must evenly divide/);
-  await assert.rejects(runBakeTopMap(['/missing/world', '--dim', 'mod:foo/../private']), /invalid dimension id/);
+  await assert.rejects(runBakeTopMap({ world: '/missing/world', sampleStride: 3 }), /sample stride must evenly divide/);
+  await assert.rejects(runBakeTopMap({ world: '/missing/world', dim: 'mod:foo/../private' }), /invalid dimension id/);
 });
 
 test('an explicit malformed biome file reports its path', async (t) => {
@@ -42,9 +42,6 @@ test('top-map bake keeps a malformed existing manifest for repair', async (t) =>
   await fs.writeFile(manifestPath, '{broken');
   t.after(() => fs.rm(root, { recursive: true, force: true }));
 
-  await assert.rejects(
-    runBakeTopMap([world, '--out', out, '--assets-dir', assets]),
-    /invalid top-map manifest: .*manifest\.json/,
-  );
+  await assert.rejects(runBakeTopMap({ world, out, assetsDir: assets }), /invalid top-map manifest: .*manifest\.json/);
   assert.equal(await fs.readFile(manifestPath, 'utf8'), '{broken');
 });

@@ -4,13 +4,12 @@ import { cp as copy, mkdir, readFile, rename, rm, writeFile } from 'node:fs/prom
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import * as childProcess from 'node:child_process';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { argsReader, resolvePath } from './common.js';
+import { resolvePath } from './common.js';
 
 const execFile = promisify(childProcess.execFile);
 const MANIFEST_URL = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json';
-const CACHE_DIR = resolve(process.env.HOME || process.env.USERPROFILE || '/tmp', '.vm-assets-cache');
 
 interface VersionManifest {
   latest: { release: string; snapshot: string };
@@ -81,204 +80,170 @@ async function downloadFile(url: string, dest: string, expectedSha1?: string, dr
   }
 }
 
-async function getManifest(): Promise<VersionManifest> {
-  const cacheFile = join(CACHE_DIR, 'version_manifest_v2.json');
-  const cached = await readCachedJson<VersionManifest>(cacheFile);
-  if (cached) return cached;
-  console.log('Fetching version manifest...');
-  const manifest = await fetchJson<VersionManifest>(MANIFEST_URL);
-  await mkdir(CACHE_DIR, { recursive: true });
-  await writeFile(cacheFile, JSON.stringify(manifest));
-  return manifest;
-}
-
-async function getVersionInfo(versionId: string): Promise<VersionInfo> {
-  const manifest = await getManifest();
-  const entry = manifest.versions.find((v) => v.id === versionId);
-  if (!entry) throw new Error(`unknown version: ${versionId}`);
-  const cacheFile = join(CACHE_DIR, `${versionId}.json`);
-  const cached = await readCachedJson<VersionInfo>(cacheFile);
-  if (cached) return cached;
-  console.log(`Fetching version metadata: ${versionId}`);
-  const info = await fetchJson<VersionInfo>(entry.url);
-  await writeFile(cacheFile, JSON.stringify(info));
-  return info;
-}
-
-async function listVersions(includeSnapshots: boolean) {
-  const manifest = await getManifest();
-  const versions = includeSnapshots ? manifest.versions : manifest.versions.filter((v) => v.type === 'release');
-  for (const v of versions) console.log(`${v.id}\t${v.type}\t${(v.releaseTime ?? v.time).substring(0, 10)}`);
-  console.log(`\n${versions.length} versions`);
-}
-
-async function extractAssets(versionId: string, outputDir: string, dryRun = false) {
-  const info = await getVersionInfo(versionId);
-  const jarPath = join(CACHE_DIR, `${versionId}.jar`);
-  const assetsOutput = resolvePath(outputDir);
-  const tmpOutput = join(CACHE_DIR, `${versionId}-extract`);
-
-  await downloadFile(info.downloads.client.url, jarPath, info.downloads.client.sha1, dryRun);
-  if (dryRun) {
-    console.log(`  dry-run extract assets/minecraft/* -> ${assetsOutput}/minecraft`);
-    return;
+export function assetCommands(cacheDir: string) {
+  async function getManifest(): Promise<VersionManifest> {
+    const cacheFile = join(cacheDir, 'version_manifest_v2.json');
+    const cached = await readCachedJson<VersionManifest>(cacheFile);
+    if (cached) return cached;
+    console.log('Fetching version manifest...');
+    const manifest = await fetchJson<VersionManifest>(MANIFEST_URL);
+    await mkdir(cacheDir, { recursive: true });
+    await writeFile(cacheFile, JSON.stringify(manifest));
+    return manifest;
   }
 
-  console.log(`Extracting assets from ${jarPath}...`);
-  await mkdir(assetsOutput, { recursive: true });
-  await rm(tmpOutput, { recursive: true, force: true });
-  await mkdir(tmpOutput, { recursive: true });
-  try {
-    try {
-      await execFile('unzip', ['-oq', jarPath, 'assets/minecraft/*', '-d', tmpOutput], { maxBuffer: 50 * 1024 * 1024 });
-    } catch (e) {
-      throw new Error(`unzip failed: ${(e as Error).message}`);
+  async function getVersionInfo(versionId: string): Promise<VersionInfo> {
+    const manifest = await getManifest();
+    const entry = manifest.versions.find((v) => v.id === versionId);
+    if (!entry) throw new Error(`unknown version: ${versionId}`);
+    const cacheFile = join(cacheDir, `${versionId}.json`);
+    const cached = await readCachedJson<VersionInfo>(cacheFile);
+    if (cached) return cached;
+    console.log(`Fetching version metadata: ${versionId}`);
+    const info = await fetchJson<VersionInfo>(entry.url);
+    await writeFile(cacheFile, JSON.stringify(info));
+    return info;
+  }
+
+  async function listVersions(includeSnapshots: boolean) {
+    const manifest = await getManifest();
+    const versions = includeSnapshots ? manifest.versions : manifest.versions.filter((v) => v.type === 'release');
+    for (const v of versions) console.log(`${v.id}\t${v.type}\t${(v.releaseTime ?? v.time).substring(0, 10)}`);
+    console.log(`\n${versions.length} versions`);
+  }
+
+  async function extractAssets(versionId: string, outputDir: string, dryRun = false) {
+    const info = await getVersionInfo(versionId);
+    const jarPath = join(cacheDir, `${versionId}.jar`);
+    const assetsOutput = resolvePath(outputDir);
+    const tmpOutput = join(cacheDir, `${versionId}-extract`);
+
+    await downloadFile(info.downloads.client.url, jarPath, info.downloads.client.sha1, dryRun);
+    if (dryRun) {
+      console.log(`  dry-run extract assets/minecraft/* -> ${assetsOutput}/minecraft`);
+      return;
     }
 
-    const srcDir = join(tmpOutput, 'assets', 'minecraft');
-    if (!existsSync(srcDir)) throw new Error(`assets/minecraft was not found in jar: ${jarPath}`);
-    await rm(join(assetsOutput, 'minecraft'), { recursive: true, force: true });
-    await copy(srcDir, join(assetsOutput, 'minecraft'), { recursive: true, force: true });
-  } finally {
+    console.log(`Extracting assets from ${jarPath}...`);
+    await mkdir(assetsOutput, { recursive: true });
     await rm(tmpOutput, { recursive: true, force: true });
+    await mkdir(tmpOutput, { recursive: true });
+    try {
+      try {
+        await execFile('unzip', ['-oq', jarPath, 'assets/minecraft/*', '-d', tmpOutput], {
+          maxBuffer: 50 * 1024 * 1024,
+        });
+      } catch (e) {
+        throw new Error(`unzip failed: ${(e as Error).message}`);
+      }
+
+      const srcDir = join(tmpOutput, 'assets', 'minecraft');
+      if (!existsSync(srcDir)) throw new Error(`assets/minecraft was not found in jar: ${jarPath}`);
+      await rm(join(assetsOutput, 'minecraft'), { recursive: true, force: true });
+      await copy(srcDir, join(assetsOutput, 'minecraft'), { recursive: true, force: true });
+    } finally {
+      await rm(tmpOutput, { recursive: true, force: true });
+    }
+
+    console.log(`Assets extracted to: ${assetsOutput}`);
   }
 
-  console.log(`Assets extracted to: ${assetsOutput}`);
-}
-
-async function extractAllAssets(minVersion: string, outputDir: string, includeSnapshots: boolean, dryRun = false) {
-  const manifest = await getManifest();
-  const minimum = manifest.versions.find((version) => version.id === minVersion);
-  if (!minimum) throw new Error(`unknown version: ${minVersion}`);
-  const minimumTime = Date.parse(minimum.releaseTime ?? minimum.time);
-  if (!Number.isFinite(minimumTime)) throw new Error(`invalid version time: ${minVersion}`);
-  const versions = manifest.versions.filter(
-    (version) =>
-      (includeSnapshots || version.type === 'release') &&
-      Date.parse(version.releaseTime ?? version.time) >= minimumTime,
-  );
-  console.log(`Extracting ${versions.length} versions >= ${minVersion}`);
-  for (const v of versions) {
-    console.log(`\n--- ${v.id} ---`);
-    try {
-      await extractAssets(v.id, join(outputDir, `minecraft-${v.id}`), dryRun);
-    } catch (e) {
-      console.error(`  Failed: ${(e as Error).message}`);
+  async function extractAllAssets(minVersion: string, outputDir: string, includeSnapshots: boolean, dryRun = false) {
+    const manifest = await getManifest();
+    const minimum = manifest.versions.find((version) => version.id === minVersion);
+    if (!minimum) throw new Error(`unknown version: ${minVersion}`);
+    const minimumTime = Date.parse(minimum.releaseTime ?? minimum.time);
+    if (!Number.isFinite(minimumTime)) throw new Error(`invalid version time: ${minVersion}`);
+    const versions = manifest.versions.filter(
+      (version) =>
+        (includeSnapshots || version.type === 'release') &&
+        Date.parse(version.releaseTime ?? version.time) >= minimumTime,
+    );
+    console.log(`Extracting ${versions.length} versions >= ${minVersion}`);
+    for (const v of versions) {
+      console.log(`\n--- ${v.id} ---`);
+      try {
+        await extractAssets(v.id, join(outputDir, `minecraft-${v.id}`), dryRun);
+      } catch (e) {
+        console.error(`  Failed: ${(e as Error).message}`);
+      }
     }
   }
-}
 
-async function generateBiomes(versionId: string, outputFile: string) {
-  const output = resolvePath(outputFile);
-  const mcData = await importMinecraftData(versionId);
-  const biomeMap: Record<string, unknown> = {
-    default: {
-      temperature: 0.8,
-      downfall: 0.4,
-      effects: { sky_color: 7907327, fog_color: 12638463, water_color: 4159204 },
-    },
-  };
-  for (const b of mcData.biomesArray ?? []) {
-    biomeMap[`minecraft:${b.name}`] = {
-      temperature: b.temperature ?? 0.5,
-      downfall: b.rainfall ?? 0.5,
-      effects: {
-        sky_color: b.color ?? 7907327,
-        fog_color: 12638463,
-        water_color: 4159204,
-        ...(b.name === 'swamp' ? { foliage_color: 6975545, grass_color_modifier: 'swamp' } : {}),
-        ...(b.name === 'mangrove_swamp' ? { foliage_color: 9285927, grass_color_modifier: 'swamp' } : {}),
-        ...(b.name === 'dark_forest' ? { grass_color_modifier: 'dark_forest' } : {}),
-        ...(b.name === 'badlands' || b.name === 'wooded_badlands'
-          ? { grass_color: 9470285, foliage_color: 10387789 }
-          : {}),
-        ...(b.name === 'cherry_grove' ? { grass_color: 11983713, foliage_color: 11983713 } : {}),
+  async function generateBiomes(versionId: string, outputFile: string) {
+    const output = resolvePath(outputFile);
+    const mcData = await importMinecraftData(versionId);
+    const biomeMap: Record<string, unknown> = {
+      default: {
+        temperature: 0.8,
+        downfall: 0.4,
+        effects: { sky_color: 7907327, fog_color: 12638463, water_color: 4159204 },
       },
     };
-  }
-  await mkdir(dirname(output), { recursive: true });
-  await writeFile(output, `${JSON.stringify(biomeMap, null, 2)}\n`);
-  console.log(`Generated biomes: ${output}`);
-}
-
-async function generateDimensions(versionId: string, outputFile: string) {
-  const output = resolvePath(outputFile);
-  const dimensions: Record<string, unknown> = {
-    'minecraft:overworld': { hasSkyLight: true, ambientLight: 0.03, sky: 'normal', defaultBiome: 'minecraft:plains' },
-    'minecraft:the_nether': {
-      hasSkyLight: false,
-      ambientLight: 0.25,
-      sky: 'nether',
-      defaultBiome: 'minecraft:nether_wastes',
-    },
-    'minecraft:the_end': { hasSkyLight: false, ambientLight: 0.18, sky: 'end', defaultBiome: 'minecraft:the_end' },
-  };
-  try {
-    const mcData = await importMinecraftData(versionId);
-    for (const dim of mcData.dimensionTypes ?? []) {
-      if (dimensions[dim.name]) continue;
-      dimensions[dim.name] = {
-        hasSkyLight: dim.hasSkylight ?? true,
-        ambientLight: dim.ambientLight ?? 0.03,
-        sky: dim.name.includes('nether') ? 'nether' : dim.name.includes('end') ? 'end' : 'normal',
-        defaultBiome: dim.defaultBiome ?? 'minecraft:plains',
+    for (const b of mcData.biomesArray ?? []) {
+      biomeMap[`minecraft:${b.name}`] = {
+        temperature: b.temperature ?? 0.5,
+        downfall: b.rainfall ?? 0.5,
+        effects: {
+          sky_color: b.color ?? 7907327,
+          fog_color: 12638463,
+          water_color: 4159204,
+          ...(b.name === 'swamp' ? { foliage_color: 6975545, grass_color_modifier: 'swamp' } : {}),
+          ...(b.name === 'mangrove_swamp' ? { foliage_color: 9285927, grass_color_modifier: 'swamp' } : {}),
+          ...(b.name === 'dark_forest' ? { grass_color_modifier: 'dark_forest' } : {}),
+          ...(b.name === 'badlands' || b.name === 'wooded_badlands'
+            ? { grass_color: 9470285, foliage_color: 10387789 }
+            : {}),
+          ...(b.name === 'cherry_grove' ? { grass_color: 11983713, foliage_color: 11983713 } : {}),
+        },
       };
     }
-  } catch {
-    // minecraft-data does not expose dimensionTypes for every version.
+    await mkdir(dirname(output), { recursive: true });
+    await writeFile(output, `${JSON.stringify(biomeMap, null, 2)}\n`);
+    console.log(`Generated biomes: ${output}`);
   }
-  await mkdir(dirname(output), { recursive: true });
-  await writeFile(output, `${JSON.stringify(dimensions, null, 2)}\n`);
-  console.log(`Generated dimensions: ${output}`);
-}
 
-async function importMinecraftData(versionId: string): Promise<any> {
-  const mcDataModule = await import('minecraft-data');
-  return mcDataModule.default(versionId);
-}
-
-export function assetsUsage(): string {
-  return `Usage:
-  vm-cli assets list [--include-snapshots]
-  vm-cli assets extract --version <id> --dir <dir> [--dry-run]
-  vm-cli assets extract-all --min-version <id> --dir <dir> [--include-snapshots] [--dry-run]
-  vm-cli assets generate-biomes --version <id> --output <file>
-  vm-cli assets generate-dimensions --version <id> --output <file>`;
-}
-
-export async function runAssetsCommand(args: string[]) {
-  const command = args[0];
-  const reader = argsReader(args);
-  if (!command || command === '--help' || command === '-h' || command === 'help') {
-    console.log(assetsUsage());
-    return;
+  async function generateDimensions(versionId: string, outputFile: string) {
+    const output = resolvePath(outputFile);
+    const dimensions: Record<string, unknown> = {
+      'minecraft:overworld': { hasSkyLight: true, ambientLight: 0.03, sky: 'normal', defaultBiome: 'minecraft:plains' },
+      'minecraft:the_nether': {
+        hasSkyLight: false,
+        ambientLight: 0.25,
+        sky: 'nether',
+        defaultBiome: 'minecraft:nether_wastes',
+      },
+      'minecraft:the_end': { hasSkyLight: false, ambientLight: 0.18, sky: 'end', defaultBiome: 'minecraft:the_end' },
+    };
+    try {
+      const mcData = await importMinecraftData(versionId);
+      for (const dim of mcData.dimensionTypes ?? []) {
+        if (dimensions[dim.name]) continue;
+        dimensions[dim.name] = {
+          hasSkyLight: dim.hasSkylight ?? true,
+          ambientLight: dim.ambientLight ?? 0.03,
+          sky: dim.name.includes('nether') ? 'nether' : dim.name.includes('end') ? 'end' : 'normal',
+          defaultBiome: dim.defaultBiome ?? 'minecraft:plains',
+        };
+      }
+    } catch {
+      // minecraft-data does not expose dimensionTypes for every version.
+    }
+    await mkdir(dirname(output), { recursive: true });
+    await writeFile(output, `${JSON.stringify(dimensions, null, 2)}\n`);
+    console.log(`Generated dimensions: ${output}`);
   }
-  switch (command) {
-    case 'list':
-      await listVersions(reader.flag('--include-snapshots'));
-      break;
-    case 'extract':
-      await extractAssets(
-        reader.get('--version', '1.21.4')!,
-        reader.get('--dir', './assets')!,
-        reader.flag('--dry-run'),
-      );
-      break;
-    case 'extract-all':
-      await extractAllAssets(
-        reader.get('--min-version', '1.18')!,
-        reader.get('--dir', './assets')!,
-        reader.flag('--include-snapshots'),
-        reader.flag('--dry-run'),
-      );
-      break;
-    case 'generate-biomes':
-      await generateBiomes(reader.get('--version', '1.21.4')!, reader.get('--output', './biomes.json')!);
-      break;
-    case 'generate-dimensions':
-      await generateDimensions(reader.get('--version', '1.21.4')!, reader.get('--output', './dimensions.json')!);
-      break;
-    default:
-      throw new Error(`unknown assets command: ${command}`);
+
+  async function importMinecraftData(versionId: string): Promise<any> {
+    const mcDataModule = await import('minecraft-data');
+    return mcDataModule.default(versionId);
   }
+
+  return {
+    list: listVersions,
+    extract: extractAssets,
+    extractAll: extractAllAssets,
+    generateBiomes,
+    generateDimensions,
+  };
 }

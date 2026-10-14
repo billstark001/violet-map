@@ -38,3 +38,4 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm --filter @violet-map/server test:db:artifact
+      - run: pnpm --filter @violet-map/cli test:artifact

@@ -7,11 +7,9 @@ import path from 'node:path';
 
 test('asset downloads stay atomic and extract-all includes later snapshots', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'violet-assets-download-'));
-  const previousHome = process.env.HOME;
   const previousFetch = globalThis.fetch;
-  process.env.HOME = root;
   try {
-    const cache = path.join(root, '.vm-assets-cache');
+    const cache = path.join(root, 'cache');
     await mkdir(cache);
     await writeFile(
       path.join(cache, 'version_manifest_v2.json'),
@@ -24,11 +22,9 @@ test('asset downloads stay atomic and extract-all includes later snapshots', asy
     const jar = path.join(cache, 'test-version.jar');
     await writeFile(jar, 'previous jar');
     globalThis.fetch = async () => new Response('replacement jar');
-    const { runAssetsCommand } = await import('../src/commands/assets.js');
-    await assert.rejects(
-      runAssetsCommand(['extract', '--version', 'test-version', '--dir', path.join(root, 'out')]),
-      /sha1 verification failed/,
-    );
+    const { assetCommands } = await import('../src/commands/assets.js');
+    const commands = assetCommands(cache);
+    await assert.rejects(commands.extract('test-version', path.join(root, 'out')), /sha1 verification failed/);
     assert.equal(await readFile(jar, 'utf8'), 'previous jar');
     assert.deepEqual(
       (await readdir(cache)).filter((name) => name.endsWith('.tmp')),
@@ -47,10 +43,7 @@ test('asset downloads stay atomic and extract-all includes later snapshots', asy
         },
       }),
     );
-    await assert.rejects(
-      runAssetsCommand(['extract', '--version', 'test-version', '--dir', path.join(root, 'out')]),
-      /unzip failed/,
-    );
+    await assert.rejects(commands.extract('test-version', path.join(root, 'out')), /unzip failed/);
     assert.equal(await readFile(jar, 'utf8'), replacement);
     assert.equal(
       (await readdir(cache)).some((name) => name.endsWith('-extract')),
@@ -79,15 +72,7 @@ test('asset downloads stay atomic and extract-all includes later snapshots', asy
     const previousLog = console.log;
     console.log = (...args: unknown[]) => logs.push(args.join(' '));
     try {
-      await runAssetsCommand([
-        'extract-all',
-        '--min-version',
-        '1.18',
-        '--dir',
-        path.join(root, 'out'),
-        '--include-snapshots',
-        '--dry-run',
-      ]);
+      await commands.extractAll('1.18', path.join(root, 'out'), true, true);
     } finally {
       console.log = previousLog;
     }
@@ -96,8 +81,6 @@ test('asset downloads stay atomic and extract-all includes later snapshots', asy
     assert.doesNotMatch(logs.join('\n'), /21w44a/);
   } finally {
     globalThis.fetch = previousFetch;
-    if (previousHome === undefined) delete process.env.HOME;
-    else process.env.HOME = previousHome;
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -18,7 +18,6 @@ import {
   type TopMapTileSetManifest,
 } from '@violet-map/core';
 import {
-  argsReader,
   ensureLight,
   defaultTopMapOut,
   ensureDir,
@@ -29,7 +28,6 @@ import {
   loadRegionColumns,
   makeColorOf,
   makeTextureColorOf,
-  numberArg,
   parseDim,
   resolveAssetDirs,
   resolvePath,
@@ -60,11 +58,6 @@ const DEFAULT_COLOR_STRIDE = 1;
 const TOPMAP_COLOR_VERSION = 3;
 const TOPMAP_LIGHT_VERSION = 1;
 
-function usage(): string {
-  return `Usage:
-  vm-cli bake-topmap <world> [--dim <id>] [--out <dir>] [--limit <regions>] [--block-info <file>] [--biomes <file>] [--assets-dir <dir[,dir]>] [--sample-stride <blocks>] [--color-stride <blocks>] [--light-stride <blocks>] [--approach <top|bottom>] [--light-mode <stored-first|rebake>] [--no-sky]`;
-}
-
 function parseApproach(value: string | undefined): TopMapApproach {
   if (!value || value === 'top') return 'top';
   if (value === 'bottom') return 'bottom';
@@ -77,27 +70,37 @@ function parseLightMode(value: string | undefined): TopMapLightMode {
   throw new Error(`bad --light-mode: ${value}`);
 }
 
-function parseOptions(args: string[]): BakeOptions {
-  const reader = argsReader(args);
-  const world = args.find((arg) => !arg.startsWith('-'));
-  if (!world) throw new Error(`missing world path\n${usage()}`);
-  const resolvedWorld = resolvePath(world);
+export interface BakeInput {
+  world: string;
+  dim?: string;
+  out?: string;
+  limit?: number;
+  sky?: boolean;
+  blockInfo?: string;
+  biomes?: string;
+  assetsDir?: string;
+  sampleStride?: number;
+  colorStride?: number;
+  lightStride?: number;
+  approach?: TopMapApproach;
+  lightMode?: TopMapLightMode;
+}
+function bakeOptions(input: BakeInput): BakeOptions {
+  const resolvedWorld = resolvePath(input.world);
   const options: BakeOptions = {
     world: resolvedWorld,
-    dim: parseDim(reader.get('--dim', 'minecraft:overworld')),
-    out: resolvePath(reader.get('--out') ?? defaultTopMapOut(resolvedWorld)),
-    limit: Math.floor(numberArg(reader.get('--limit'), Infinity, 1)),
-    hasSkyLight: !reader.flag('--no-sky'),
-    blockInfo: reader.get('--block-info'),
-    biomes: reader.get('--biomes'),
-    assetDirs: resolveAssetDirs(reader.get('--assets-dir')),
-    sampleStride: Math.floor(numberArg(reader.get('--sample-stride'), DEFAULT_SAMPLE_STRIDE, 1)),
-    colorStride: Math.floor(numberArg(reader.get('--color-stride'), DEFAULT_COLOR_STRIDE, 1)),
-    lightStride: Math.floor(
-      numberArg(reader.get('--light-stride'), numberArg(reader.get('--color-stride'), DEFAULT_COLOR_STRIDE, 1), 1),
-    ),
-    approach: parseApproach(reader.get('--approach')),
-    lightMode: parseLightMode(reader.get('--light-mode')),
+    dim: parseDim(input.dim),
+    out: resolvePath(input.out ?? defaultTopMapOut(resolvedWorld)),
+    limit: input.limit ?? Infinity,
+    hasSkyLight: input.sky !== false,
+    blockInfo: input.blockInfo,
+    biomes: input.biomes,
+    assetDirs: resolveAssetDirs(input.assetsDir),
+    sampleStride: input.sampleStride ?? DEFAULT_SAMPLE_STRIDE,
+    colorStride: input.colorStride ?? DEFAULT_COLOR_STRIDE,
+    lightStride: input.lightStride ?? input.colorStride ?? DEFAULT_COLOR_STRIDE,
+    approach: parseApproach(input.approach),
+    lightMode: parseLightMode(input.lightMode),
   };
   for (const [label, stride] of [
     ['sample', options.sampleStride],
@@ -383,12 +386,8 @@ async function selectRegions(opts: BakeOptions): Promise<RegionFile[]> {
   return Number.isFinite(opts.limit) ? regions.slice(0, opts.limit) : regions;
 }
 
-export async function runBakeTopMap(args: string[]) {
-  if (args.includes('--help') || args.includes('-h')) {
-    console.log(usage());
-    return;
-  }
-  const opts = parseOptions(args);
+export async function runBakeTopMap(input: BakeInput) {
+  const opts = bakeOptions(input);
   const blockInfo = await loadBlockInfo(opts.blockInfo);
   const infoOf = infoGetter(blockInfo);
   const biomeColors = await loadBiomeColors(opts.assetDirs, opts.biomes);

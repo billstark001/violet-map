@@ -17,11 +17,11 @@
     "start:light": "pnpm --filter=@violet-map/server --filter=@violet-map/web --parallel -r run start",
     "start:full": "pnpm --filter=@violet-map/server --filter=@violet-map/web --filter=@violet-map/admin --parallel -r run start",
     "typecheck": "pnpm -r run typecheck",
-    "test": "tsx --test scripts/test/*.test.mjs packages/cli/test/*.test.ts packages/core/test/*.test.ts packages/server/test/*.test.ts packages/web/test/*.test.ts",
+    "test": "tsx --conditions=development --test scripts/test/*.test.mjs packages/cli/test/*.test.ts packages/core/test/*.test.ts packages/server/test/*.test.ts packages/web/test/*.test.ts",
     "lint": "oxlint --deny-warnings packages",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "admin": "pnpm --filter @violet-map/server admin"
+    "violet-map": "tsx --conditions=development packages/cli/src/cli.ts"
   },
   "devDependencies": {
     "oxfmt": "^0.71.0",

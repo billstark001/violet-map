@@ -38,11 +38,6 @@ import { iterateRegionChunks } from '@violet-map/core/region';
 import minecraftData from 'minecraft-data';
 import { PNG } from 'pngjs';
 
-export interface ArgReader {
-  get(names: string | string[], fallback?: string): string | undefined;
-  flag(name: string): boolean;
-}
-
 export interface ColumnEntry {
   col: ChunkColumn;
   litSky: boolean;
@@ -94,40 +89,8 @@ function isMissingPath(error: unknown): boolean {
   return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
-export function argsReader(args: string[]): ArgReader {
-  return {
-    get(names, fallback) {
-      const all = Array.isArray(names) ? names : [names];
-      for (const name of all) {
-        const idx = args.indexOf(name);
-        if (idx >= 0 && idx + 1 < args.length) return args[idx + 1];
-      }
-      return fallback;
-    },
-    flag(name) {
-      return args.includes(name);
-    },
-  };
-}
-
-export function required(value: string | undefined, label: string): string {
-  if (!value) throw new Error(`missing ${label}`);
-  return value;
-}
-
-export function resolvePath(input: string, base = process.env.INIT_CWD ?? process.cwd()): string {
-  if (path.isAbsolute(input)) return input;
-  const bases = [...new Set([base, process.cwd(), REPO_ROOT])];
-  for (const candidateBase of bases) {
-    const candidate = path.resolve(candidateBase, input);
-    if (existsSync(candidate)) return candidate;
-  }
-  return path.resolve(process.cwd() === PACKAGE_ROOT ? REPO_ROOT : base, input);
-}
-
-export function numberArg(value: string | undefined, fallback: number, min = -Infinity): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? Math.max(min, n) : fallback;
+export function resolvePath(input: string): string {
+  return path.resolve(process.env.INIT_CWD ?? process.cwd(), input);
 }
 
 export function parseDim(value = 'minecraft:overworld'): string {

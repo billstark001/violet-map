@@ -2,7 +2,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import {
-  argsReader,
   buildMesherResources,
   ensureLight,
   infoGetter,
@@ -11,11 +10,9 @@ import {
   loadRegionColumns,
   makeColorOf,
   makeNeighborhood,
-  numberArg,
   printSummaryTable,
   profileFullColumn,
   profileLodColumn,
-  required,
   resolvePath,
   summarize,
   timed,
@@ -36,35 +33,32 @@ interface ProfileOptions {
   blockInfo?: string;
 }
 
-function usage(): string {
-  return `Usage:
-  vm-cli profile-mca <file.mca> [--limit <n>] [--rounds <n>] [--center <cx,cz>] [--no-sky]
-                            [--assets-dir <dir[,dir]>] [--block-info <file>] [--out <file>]`;
+export interface ProfileInput {
+  region: string;
+  limit?: number;
+  rounds?: number;
+  center?: string;
+  sky?: boolean;
+  out?: string;
+  assetsDir?: string;
+  blockInfo?: string;
 }
-
-function parseOptions(args: string[]): ProfileOptions {
-  const reader = argsReader(args);
-  const positional = args.find((arg) => !arg.startsWith('-'));
-  const center = reader
-    .get('--center', '0,0')!
-    .split(',')
-    .map((v) => Number(v.trim()));
-  if (!Number.isFinite(center[0]) || !Number.isFinite(center[1])) throw new Error('center must be cx,cz');
-  const assetDirs = reader
-    .get('--assets-dir', '')!
-    .split(',')
-    .map((v) => v.trim())
-    .filter(Boolean);
+function profileOptions(input: ProfileInput): ProfileOptions {
+  const center = (input.center ?? '0,0').split(',').map(Number);
+  if (center.length !== 2 || !center.every(Number.isFinite)) throw new Error('center must be cx,cz');
   return {
-    region: resolvePath(required(reader.get('--region') ?? positional, 'mca file')),
-    limit: Math.floor(numberArg(reader.get('--limit'), 64, 1)),
-    rounds: Math.floor(numberArg(reader.get('--rounds'), 2, 1)),
+    region: resolvePath(input.region),
+    limit: input.limit ?? 64,
+    rounds: input.rounds ?? 2,
     centerX: center[0],
     centerZ: center[1],
-    hasSkyLight: !reader.flag('--no-sky'),
-    out: reader.get('--out'),
-    assetDirs,
-    blockInfo: reader.get('--block-info'),
+    hasSkyLight: input.sky !== false,
+    out: input.out,
+    assetDirs: (input.assetsDir ?? '')
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean),
+    blockInfo: input.blockInfo,
   };
 }
 
@@ -80,12 +74,8 @@ function selectColumns(entries: Map<string, ColumnEntry>, opts: ProfileOptions) 
     .slice(0, opts.limit);
 }
 
-export async function runProfileMca(args: string[]) {
-  if (args.includes('--help') || args.includes('-h')) {
-    console.log(usage());
-    return;
-  }
-  const opts = parseOptions(args);
+export async function runProfileMca(input: ProfileInput) {
+  const opts = profileOptions(input);
   const setupStart = performance.now();
   const [blockInfo, bundle] = await Promise.all([
     loadBlockInfo(opts.blockInfo),
