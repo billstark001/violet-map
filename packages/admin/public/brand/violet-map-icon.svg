@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">Violet Map</title>
+  <desc id="desc">A flat violet rounded-square app icon with a folded map and mint voxel landscape.</desc>
+<path fill="#7252D9" d="M286 24H738C912 24 1000 112 1000 286V738C1000 912 912 1000 738 1000H286C112 1000 24 912 24 738V286C24 112 112 24 286 24Z"/>
+<g transform="translate(144 248) scale(0.9583333333333333)"><g>
+    <path fill="#D8C8FF" d="M180 0 384 138 588 0 758 90Q768 95 768 106V488Q768 513 746 502L588 420 384 552 180 420 22 502Q0 513 0 488V106Q0 95 10 90Z"/>
+    <path fill="#FAF8F2" d="M180 0 384 138V552L180 420Z"/>
+    <path fill="#FAF8F2" d="M384 138 588 0V108L488 165V198Z"/>
+    <path fill="#AE92E4" d="M488 165 588 222V250L684 196V157L768 109V234L588 333V296L488 239Z"/>
+    <path fill="#9BDCAE" d="M588 0 758 90Q768 95 768 106V109L684 157V196L588 250V222L488 165 588 108Z"/>
+  </g></g>
+</svg>

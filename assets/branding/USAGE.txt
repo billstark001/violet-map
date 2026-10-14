@@ -1,0 +1,61 @@
+Violet Map — brand assets
+
+Master source
+  violet-map-logo.svg is the editable, background-free SVG geometry source.
+  It contains native vector paths only; there are no embedded raster images.
+  The map's central fold suggests V; the mint stepped surface suggests Minecraft terrain.
+  An opaque map silhouette underlies the facets to prevent transparent seams.
+
+Variants
+  violet-map-logo.svg: violet mark on transparent canvas, for light backgrounds.
+  violet-map-logo-light.svg: light mark on transparent canvas, for dark backgrounds.
+  violet-map-icon.svg: light mark on a violet rounded tile, for favicons and app previews.
+  violet-map-icon-square.svg: opaque full-bleed tile for platforms that apply their own corner mask.
+  preview.svg and png/preview.png: visual overview, not the standalone logo.
+
+Raster exports (all rendered directly from SVG)
+  Mark and light mark: 768 × 552 and 1536 × 1104 (@2x).
+  Rounded icon: 16, 32, 48, 64, 128, 256, 512 and 1024 pixels.
+  Full-bleed icon: 180-pixel Apple touch icon and 512-pixel square icon.
+
+Regenerate
+  pnpm install
+  pnpm brand:export
+
+Edit violet-map-logo.svg, then rerun the export command. The script rebuilds
+the palette variants, icons, PNGs and preview, and synchronizes the public/brand
+assets used by the viewer and admin UI. The rounded violet background is
+only used for icon contexts. The page headers use the background-free light mark.
+
+Palette
+  Violet: #7252D9
+  Lavender: #A78BE3
+  Deep violet: #5636AA
+  Mint: #9BDCAE
+  Light mark: #D8C8FF, #FAF8F2, #AE92E4
+
+Design process
+  Bitmap concepts used the built-in image_gen tool; no API/CLI fallback was used.
+  The final deliverable was redrawn as SVG after the request for a vector master.
+  Flat, fully opaque path fills remove the bitmap concepts' accidental alpha holes.
+  sharp renders the final raster exports from SVG.
+
+ImageGen concept prompt
+Use case: logo-brand.
+Asset type: final app icon / project logo for Violet Map, a browser-based Minecraft world and map explorer.
+Primary request: Design one excellent, original, very minimal modern iOS/macOS flat app icon. Unify an abstract folded map with a subtle Minecraft voxel terrain cue, in one memorable geometric emblem.
+Scene/backdrop: a deep violet rounded-square app tile, with smooth continuous iOS-style corners. Everything outside the tile is genuinely transparent. Tile fills about 90 percent of a square canvas, evenly centered.
+Subject: one broad, bold, folded-map emblem. The map's angular fold and negative space quietly suggest the letter V. Use only a few large crisp polygon planes in ivory and pale lavender. Integrate one small mint-green square terrain surface with a simple two-step block-shaped edge into the map itself, suggesting Minecraft's block landscapes. This terrain detail must be part of the single emblem, not a separate floating cube or decoration.
+Style/medium: precision flat vector-like graphic, solid color fills, balanced negative space, quiet Apple platform polish. Rich violet tile, off-white and lavender map, restrained mint grass accent. The primary emblem occupies roughly 60 percent of the tile, comfortably padded. Readable silhouette at 32 pixels.
+Composition/framing: front-facing square icon, centered emblem, no mockup, no perspective of the outer tile. The emblem can use simplified isometric geometric map folds, but rendered entirely with flat colors.
+Text: none.
+Constraints: deliver ONE standalone production icon, not a presentation sheet. Absolutely flat, no gradients, no gloss, no bevel, no glass, no 3D rendering, no cast shadows, no texture, no pixel noise, no thin contour lines, no tiny grid, no compass, no location pin, no Creeper face, no letters or wordmark, no watermark. Use large simple shapes and exceptional spacing. Preserve true alpha outside the rounded-square tile.
+
+ImageGen flat-color refinement prompt
+Use case: logo-brand, precise-object-edit.
+Image 1 is the edit target: the Violet Map app logo just generated.
+Make one targeted refinement: convert the entire design to strictly flat, clean solid-color vector-like artwork.
+Preserve exactly the existing composition, rounded-square silhouette, folded-map geometry, proportions, central V-shaped map fold, and integrated stepped grass terrain. Preserve transparency outside the tile.
+Use a single uniform saturated violet #7252D9 fill for the entire rounded-square tile, a single uniform pale lavender #D8C8FF for the large lavender map panels, a single uniform ivory #FAF8F2 for the light map panels, a single uniform mid lavender #AE92E4 for the vertical terrain side, and a single uniform soft mint green #9BDCAE for the grass top.
+Every individual polygon must have exactly one solid color. Remove ALL gradients, noise, lighting, sheen, shadows, and the shadow under the map. Clean crisp anti-aliased edges. Do not add or remove shapes, change the layout, add text or a wordmark. ONE final production icon only, square canvas, genuine transparent background outside the tile.
+

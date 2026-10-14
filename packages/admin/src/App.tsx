@@ -522,7 +522,10 @@ export default function App() {
     <Theme appearance="dark" accentColor="violet">
       <Container size="3" py="5">
         <Flex justify="between" align="end" gap="3" mb="4" wrap="wrap">
-          <Heading>{t('title')}</Heading>
+          <Flex align="center" gap="3">
+            <img src="/brand/violet-map-logo-light.svg" alt="" width="44" height="32" />
+            <Heading>{t('title')}</Heading>
+          </Flex>
           <Flex gap="2" align="end" wrap="wrap">
             <Box style={{ width: 150 }}>
               <Text as="label" size="1" htmlFor="login-username">

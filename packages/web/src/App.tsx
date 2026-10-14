@@ -535,9 +535,12 @@ export default function App() {
           <Flex direction="column" gap="3">
             <Flex justify="between" align="center">
               {!panelCollapsed && (
-                <Text size="2" weight="bold">
-                  Violet Map
-                </Text>
+                <Flex align="center" gap="2">
+                  <img src="/brand/violet-map-logo-light.svg" alt="" width="28" height="21" />
+                  <Text size="2" weight="bold">
+                    Violet Map
+                  </Text>
+                </Flex>
               )}
               <Button
                 size="1"
