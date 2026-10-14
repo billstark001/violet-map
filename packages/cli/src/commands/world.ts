@@ -11,7 +11,7 @@ import { argsReader, required, resolvePath } from './common.js';
 
 function usage(): string {
   return `Usage:
-  vm-assets world sync --from <local-world-dir> --world <world-name> --target <local|s3|server> [options]
+  vm-cli world sync --from <local-world-dir> --world <world-name> --target <local|s3|server> [options]
 
 Targets:
   local:  --target-dir <worlds-root>

@@ -8,10 +8,10 @@ function usage(): string {
   return `Violet Map CLI
 
 Usage:
-  vm-assets assets <list|extract|extract-all|generate-biomes|generate-dimensions> [...]
-  vm-assets profile-mca <file.mca> [...]
-  vm-assets bake-topmap <world> [...]
-  vm-assets world sync --from <local-world-dir> --world <world-name> --target <local|s3|server> [...]
+  vm-cli assets <list|extract|extract-all|generate-biomes|generate-dimensions> [...]
+  vm-cli profile-mca <file.mca> [...]
+  vm-cli bake-topmap <world> [...]
+  vm-cli world sync --from <local-world-dir> --world <world-name> --target <local|s3|server> [...]
 
 ${assetsUsage()}`;
 }

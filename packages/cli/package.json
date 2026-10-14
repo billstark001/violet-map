@@ -1,8 +1,8 @@
 {
-  "name": "@violet-map/assets",
+  "name": "@violet-map/cli",
   "version": "0.1.0",
   "bin": {
-    "vm-assets": "./dist/cli.js"
+    "vm-cli": "./dist/cli.js"
   },
   "type": "module",
   "scripts": {

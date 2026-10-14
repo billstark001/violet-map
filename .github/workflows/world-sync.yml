@@ -57,7 +57,7 @@ jobs:
           flags=()
           if [ "${{ inputs.delete }}" = "true" ]; then flags+=(--delete); fi
           if [ "${{ inputs.force }}" = "true" ]; then flags+=(--force); fi
-          pnpm --filter @violet-map/assets dev world sync \
+          pnpm --filter @violet-map/cli dev world sync \
             --from "${{ inputs.source_dir }}" \
             --world "${{ inputs.world }}" \
             --target "${{ inputs.target }}" \

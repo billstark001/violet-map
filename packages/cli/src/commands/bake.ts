@@ -62,7 +62,7 @@ const TOPMAP_LIGHT_VERSION = 1;
 
 function usage(): string {
   return `Usage:
-  vm-assets bake-topmap <world> [--dim <id>] [--out <dir>] [--limit <regions>] [--block-info <file>] [--biomes <file>] [--assets-dir <dir[,dir]>] [--sample-stride <blocks>] [--color-stride <blocks>] [--light-stride <blocks>] [--approach <top|bottom>] [--light-mode <stored-first|rebake>] [--no-sky]`;
+  vm-cli bake-topmap <world> [--dim <id>] [--out <dir>] [--limit <regions>] [--block-info <file>] [--biomes <file>] [--assets-dir <dir[,dir]>] [--sample-stride <blocks>] [--color-stride <blocks>] [--light-stride <blocks>] [--approach <top|bottom>] [--light-mode <stored-first|rebake>] [--no-sky]`;
 }
 
 function parseApproach(value: string | undefined): TopMapApproach {

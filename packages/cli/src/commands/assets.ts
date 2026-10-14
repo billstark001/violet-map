@@ -239,11 +239,11 @@ async function importMinecraftData(versionId: string): Promise<any> {
 
 export function assetsUsage(): string {
   return `Usage:
-  vm-assets assets list [--include-snapshots]
-  vm-assets assets extract --version <id> --dir <dir> [--dry-run]
-  vm-assets assets extract-all --min-version <id> --dir <dir> [--include-snapshots] [--dry-run]
-  vm-assets assets generate-biomes --version <id> --output <file>
-  vm-assets assets generate-dimensions --version <id> --output <file>`;
+  vm-cli assets list [--include-snapshots]
+  vm-cli assets extract --version <id> --dir <dir> [--dry-run]
+  vm-cli assets extract-all --min-version <id> --dir <dir> [--include-snapshots] [--dry-run]
+  vm-cli assets generate-biomes --version <id> --output <file>
+  vm-cli assets generate-dimensions --version <id> --output <file>`;
 }
 
 export async function runAssetsCommand(args: string[]) {

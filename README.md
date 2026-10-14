@@ -7,7 +7,7 @@ Violet Map is a browser-first Minecraft Java world explorer. It combines a Hono 
 | Package | Purpose |
 | --- | --- |
 | `@violet-map/core` | NBT, regions, lighting, meshing, top-map code, plus the shared local/S3/server `WorldStorage` adapters. |
-| `@violet-map/assets` | CLI for vanilla assets, top-map baking, profiling, and verified world-file synchronization. |
+| `@violet-map/cli` | CLI for vanilla assets, top-map baking, profiling, and verified world-file synchronization. |
 | `@violet-map/server` | Hono API, world service, storage-backed administration, and the Drizzle user database. |
 | `@violet-map/web` | Three.js world viewer with worker meshing and an optional IndexedDB mesh cache. |
 | `@violet-map/admin` | Admin UI for worlds, uploads, biome data, users, and temporary credentials. |
@@ -44,7 +44,7 @@ Docker equivalents are `docker compose --profile light up` and `docker compose -
 Extract client assets (only use Minecraft assets you are entitled to use):
 
 ```bash
-pnpm --filter @violet-map/assets dev assets extract --version 1.21.4 --dir packages/server/data/assets
+pnpm --filter @violet-map/cli dev assets extract --version 1.21.4 --dir packages/server/data/assets
 ```
 
 The server default expects worlds under `packages/server/data/worlds/<world-name>/`. Set `WORLDS_DIR` to use another directory. Region files can also be uploaded through Admin.
@@ -100,21 +100,21 @@ Set `DATABASE_DIR` to override the PGlite path. `DATABASE_URL` takes precedence.
 2. `s3` — AWS S3 or S3-compatible object storage.
 3. `server` — a remote Violet Map server through authenticated storage APIs.
 
-The server selects `local` or `s3` with `WORLD_STORAGE`. The assets CLI syncs a **local world archive** to any of the three. It creates `.violet-map/identity.json` in the source archive and checks it against the target before writing. A different or missing marker on a non-empty target emits a warning and aborts unless `--force` is explicitly supplied.
+The server selects `local` or `s3` with `WORLD_STORAGE`. The CLI syncs a **local world archive** to any of the three. It creates `.violet-map/identity.json` in the source archive and checks it against the target before writing. A different or missing marker on a non-empty target emits a warning and aborts unless `--force` is explicitly supplied.
 
 ```bash
 # Local archive -> another filesystem worlds root
-pnpm --filter @violet-map/assets dev world sync \
+pnpm --filter @violet-map/cli dev world sync \
   --from /backups/my-world --world survival --target local \
   --target-dir /srv/violet-map/worlds --delete
 
 # Local archive -> S3-compatible storage (credentials may also come from S3_* env vars)
-pnpm --filter @violet-map/assets dev world sync \
+pnpm --filter @violet-map/cli dev world sync \
   --from /backups/my-world --world survival --target s3 \
   --s3-endpoint https://s3.example.com --s3-bucket violet-worlds --s3-prefix production
 
 # Local archive -> remote Violet Map server, using a CI/admin/root credential
-pnpm --filter @violet-map/assets dev world sync \
+pnpm --filter @violet-map/cli dev world sync \
   --from /backups/my-world --world survival --target server \
   --server-url https://map.example.com --server-token "$VIOLET_SERVER_TOKEN"
 ```
@@ -179,7 +179,7 @@ Secrets (`DATABASE_URL`, root password, S3 secrets, credentials) must remain in 
 The viewer persists its selected world, camera, scheduler, diagnostics, and settings in local storage. The **Settings** tab includes **Enable IndexedDB cache**. Disabling it bypasses all mesh-cache reads and writes without deleting existing cache data; clear it explicitly if desired. Viewer initialization errors appear in the center of the screen so the tabs never obscure them.
 
 ```bash
-pnpm --filter @violet-map/assets dev --help
+pnpm --filter @violet-map/cli dev --help
 ```
 
 | Command | Description |

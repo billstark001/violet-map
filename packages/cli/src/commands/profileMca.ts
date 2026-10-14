@@ -38,7 +38,7 @@ interface ProfileOptions {
 
 function usage(): string {
   return `Usage:
-  vm-assets profile-mca <file.mca> [--limit <n>] [--rounds <n>] [--center <cx,cz>] [--no-sky]
+  vm-cli profile-mca <file.mca> [--limit <n>] [--rounds <n>] [--center <cx,cz>] [--no-sky]
                             [--assets-dir <dir[,dir]>] [--block-info <file>] [--out <file>]`;
 }
 
