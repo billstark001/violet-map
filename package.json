@@ -1,10 +1,11 @@
 {
-  "name": "violet-map",
+  "name": "@violet-map/workspace",
   "private": true,
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
+    "brand:export": "node scripts/export-branding.mjs",
     "dev": "pnpm run dev:light",
     "dev:light": "pnpm --filter=@violet-map/server --filter=@violet-map/web --parallel -r run dev",
     "dev:full": "pnpm --filter=@violet-map/server --filter=@violet-map/web --filter=@violet-map/admin --parallel -r run dev",
