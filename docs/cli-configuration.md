@@ -35,7 +35,7 @@ Example `config.json` (all fields other than `version` and `profiles` are option
 }
 ```
 
-Server URLs are normalized HTTP(S) origins, without a path, query, fragment, or embedded credentials. A saved login is bound to both the profile name and server origin. Selecting another server does not reuse the first server's cached token. An environment token paired with a different environment server URL is rejected when a command overrides that URL.
+Server URLs are normalized HTTP(S) API bases, optionally including a reverse-proxy path prefix, without query, fragment, or embedded credentials. A saved login is bound to both the profile name and normalized API base. Selecting another server does not reuse the first server's cached token. An environment token paired with a different environment server URL is rejected when a command overrides that URL.
 
 | Location       | Default                                                       |
 | -------------- | ------------------------------------------------------------- |
@@ -93,3 +93,9 @@ pnpm violet-map users list --via database --database-url-ref file:/run/secrets/d
 `credentials set <name> --stdin` also accepts piped secret input. Configuration rejects inline token/password/connection-string fields; use a reference for the entire sensitive database URL. Avoid secrets in argv or checked-in files. CI can inject `VIOLET_SERVER_URL`/`VIOLET_SERVER_TOKEN` directly, or use `--server-token-ref env:NAME|file:PATH|secret:NAME`. Command-line token references override environment tokens; environment tokens override a matching cached login. Explicitly missing credentials fail without falling back. Use HTTPS for remote servers.
 
 S3 uses the AWS SDK's default provider chain when no provider is selected, including AWS environment variables, shared configuration, SSO, and workload roles. `--aws-profile <name>` selects a named SDK profile. Custom S3 credentials can be supplied using `--s3-credentials-ref` or profile `s3.credentialsRef`, containing JSON with `accessKeyId`, `secretAccessKey`, and an optional `sessionToken`. An explicit provider overrides environment/profile providers; environment providers override profile providers. `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` must be supplied together, with optional `S3_SESSION_TOKEN`. Temporary credentials and refreshable providers are supported without copying AWS credentials into CLI configuration.
+
+## Optional command capabilities
+
+The only mandatory workspace package is core. Install optional peers in the same npm project as `@violet-map/cli`; a global CLI needs its peers in the global dependency environment. Versions must match the workspace release line (currently 0.1.x). `npm install @violet-map/cli @violet-map/render` enables `bake-topmap` and `profile-mca`; add `@violet-map/storage` for `world sync`, or `@violet-map/server` for explicit database administration. API login/users/credentials, help/version/config/profiles, file credential storage and asset extraction/generation work without these peers. Registration and `--help` never load optional implementations. Missing peers give a command-specific installation error; installed implementation errors are preserved. The native keyring retains its existing explicit file-backend fallback policy.
+
+Asset directories resolve from explicit `--assets-dir`, then `ASSETS_DIRS`, then `assets` under the invocation directory. Shared biome/dimension/block defaults are packaged in core; no CLI command searches server source directories.

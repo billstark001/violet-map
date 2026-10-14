@@ -7,10 +7,10 @@
 Extract client assets (only use Minecraft assets you are entitled to use):
 
 ```bash
-pnpm violet-map assets extract --version 1.21.4 --dir packages/server/data/assets
+pnpm violet-map assets extract --version 1.21.4 --dir data/assets
 ```
 
-The server default expects worlds under `packages/server/data/worlds/<world-name>/`. Set `WORLDS_DIR` to use another directory. Region files can also be uploaded through Admin.
+The server default expects worlds under `data/worlds/<world-name>/`. Set `WORLDS_DIR` to use another directory. Region files can also be uploaded through Admin.
 
 ```text
 <world>/
@@ -79,3 +79,9 @@ Only registered entities are rendered. There are deliberately no built-in legacy
 - Rendering targets modern (1.18+) `sections` / `block_states` chunk layouts.
 - Biome tinting is sampled per block; radius blending is not implemented.
 - Fluid surfaces approximate vanilla flow.
+
+## Independent static hosting
+
+Build web/admin separately and deliver only their `dist` directory. Each loads `runtime-config.json` before mounting React; replace `{ "apiBaseUrl": "https://api.example.com/violet/", "capabilityFallback": "legacy" }` to change API without rebuilding JavaScript. Only a missing runtime file uses `VITE_API_BASE_URL` or the origin root fallback. Invalid config, network errors and API 5xx display a retryable startup error; only an explicit capabilities 404 can enable old-server behavior. API credentials are isolated by normalized API URL.
+
+Build with `VITE_BASE_PATH=/map/` or `/console/` for static subpaths. Runtime config, workers and brand resources use the static base; API prefix is independent. Atlas, individual fallback textures and colormaps support CORS Canvas reads and WebGL uploads. Set the API CORS origins to the browser-visible frontend origins. See [deployment](deployment.md).

@@ -38,4 +38,89 @@ s3:
   forcePathStyle: true
 ```
 
-Secrets (`DATABASE_URL`, root password, S3 secrets, credentials) must remain in environment variables or your deployment secret manager.
+Secrets (`DATABASE_URL`, root password, S3 secrets, `STATIC_API_TOKEN`) are ENV-only. YAML attempts to provide them are rejected. Root username also remains ENV-only. Unknown YAML names/types and conflicting old/new fields fail startup; errors do not print secret values. Configuration is read once by bootstrap and passed to application/service factories.
+
+## Profiles and capabilities
+
+Settings resolve ENV > YAML > profile > defaults. Explicit `configFile` takes precedence over `VIOLET_MAP_CONFIG`; otherwise cwd is searched for `violet-map.yaml`, then `.yml`. Missing default files are allowed; explicit missing files and malformed YAML fail. Paths supplied in YAML use its directory, ENV paths use cwd, bundled resources use module URLs.
+
+| `deployment.profile` / `DEPLOYMENT_PROFILE` | adminApi | users | worldWrites | dataWrites | diagnostics | Auth   |
+| ------------------------------------------- | -------- | ----- | ----------- | ---------- | ----------- | ------ |
+| public                                      | false    | false | false       | false      | false       | none   |
+| sync                                        | true     | false | true        | false      | false       | static |
+| full (default)                              | true     | true  | true        | true       | true        | users  |
+
+`public` and `sync` never initialize, migrate, inspect or create a user DB, irrespective of configured database/root settings. Full retains existing login/revocation/role behavior and requires prior explicit migration. Process-group scripts `dev:light/full` and `start:light/full` do not select a server capability profile.
+
+| YAML | Environment | Meaning |
+| --- | --- | --- |
+| features.adminApi | ADMIN_API_ENABLED | All management read/write/user interfaces, including routes outside `/api/admin`. |
+| features.users | USERS_ENABLED | User/credential DB, login/identity/logout. |
+| features.worldWrites | WORLD_WRITES_ENABLED | Create/delete/upload/raw storage writes and sync writes. |
+| features.dataWrites | DATA_WRITES_ENABLED | Biome writes and asset reload. |
+| features.diagnostics | DIAGNOSTICS_ENABLED | Protected diagnostic uploads, independent of adminApi. |
+| auth.mode | AUTH_MODE | none, static, users. |
+| auth.staticRole | STATIC_TOKEN_ROLE | viewer, ci or admin; defaults to ci. |
+| — | STATIC_API_TOKEN | Required ENV-only secret for static mode. |
+| server.cors.origins | CORS_ORIGINS | YAML list or ENV comma-separated browser origins; default `*`. |
+
+Disabling adminApi forces effective worldWrites/dataWrites off; capabilities report the effective values. User management requires both users and adminApi, while login/identity/logout require only users. All disabled endpoints return 404 before auth, enabled protected routes keep 401/403. Maps remain public and read-only batch POSTs/atlas builds stay available in public mode.
+
+Auth defaults to users when users is enabled, static when users is disabled under sync, otherwise none. Explicit users mode requires users enabled; none/static require users disabled. Any effective admin or diagnostic capability requires usable auth. To disable users under full while retaining admin, explicitly choose static and supply its token. Static uses constant-time credential comparison, the existing role policy, and no login, issuance or persistence.
+
+## Normalized fields and retained external settings
+
+| Old YAML field | Normalized YAML field | Existing ENV    |
+| -------------- | --------------------- | --------------- |
+| port           | server.port           | PORT            |
+| worldsDir      | worlds.dir            | WORLDS_DIR      |
+| worldStorage   | storage.driver        | WORLD_STORAGE   |
+| assetsDirs     | assets.dirs           | ASSETS_DIRS     |
+| dataDir        | data.dir              | DATA_DIR        |
+| databaseDir    | database.dir          | DATABASE_DIR    |
+| mcVersion      | minecraft.version     | MC_VERSION      |
+| mcDataVersion  | minecraft.dataVersion | MC_DATA_VERSION |
+
+These documented external settings remain supported; they are not ServerConfig code aliases. Two names supplied by the same YAML file must agree even if ENV overrides them. Booleans must be YAML booleans or ENV true/false/1/0. Numbers must be safe integers in their allowed range; empty strings, fractions and malformed values are rejected. Port is 1–65535. Zero disables cache capacity/TTL or queuing where listed below; active-work limits and request byte limits must be positive.
+
+| YAML                     | Environment             | Default      |
+| ------------------------ | ----------------------- | ------------ |
+| cache.regionBytes        | REGION_CACHE_BYTES      | 268435456    |
+| cache.chunkNbtBytes      | CHUNK_NBT_CACHE_BYTES   | 134217728    |
+| cache.textureBytes       | TEXTURE_CACHE_BYTES     | 33554432     |
+| cache.storageStatMs      | STORAGE_STAT_CACHE_MS   | 1000         |
+| cache.storageListMs      | STORAGE_LIST_CACHE_MS   | 2000         |
+| cache.manifestMs         | MANIFEST_CACHE_MS       | 5000         |
+| cache.worldListMs        | WORLD_LIST_CACHE_MS     | 15000        |
+| cache.prewarm            | CACHE_PREWARM           | true         |
+| limits.chunkReads        | CHUNK_READ_CONCURRENCY  | 8 (1–1024)   |
+| limits.chunkQueue        | CHUNK_READ_QUEUE        | 64 (0–65536) |
+| limits.atlasBuilds       | ATLAS_BUILD_CONCURRENCY | 1 (1–1024)   |
+| limits.atlasQueue        | ATLAS_BUILD_QUEUE       | 16 (0–65536) |
+| limits.chunkRequestBytes | CHUNK_REQUEST_BYTES     | 65536        |
+| limits.atlasRequestBytes | ATLAS_REQUEST_BYTES     | 131072       |
+| limits.diagnosticBytes   | DIAGNOSTIC_BYTES        | 2097152      |
+| limits.uploadBytes       | UPLOAD_BYTES            | 268435456    |
+
+Cache and byte limits are bounded by safe integers. Protocol constants such as batch sizes remain in code. Limits/caches belong to instances, so applications in the same process do not share state.
+
+Public deployment example:
+
+```yaml
+deployment:
+  profile: public
+server:
+  port: 3300
+  cors:
+    origins: [https://map.example.com, https://console.example.com]
+storage:
+  driver: local
+worlds:
+  dir: /srv/violet-map/worlds
+assets:
+  dirs: [/srv/violet-map/assets]
+data:
+  dir: /srv/violet-map/data
+```
+
+For sync use `deployment.profile: sync` and supply `STATIC_API_TOKEN` in ENV. For independent artifacts, static runtime config, containers and database maintenance, see [deployment](deployment.md).

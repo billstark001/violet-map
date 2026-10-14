@@ -15,7 +15,7 @@ If either variable is omitted, no root account exists. After running the server'
 
 ```bash
 pnpm violet-map users create --via database \
-  --database-dir "$PWD/packages/server/data/users.pglite" \
+  --database-dir "$PWD/data/users.pglite" \
   --username alice --role admin
 ```
 
@@ -52,3 +52,5 @@ The server is authoritative for remote access:
 | All API operations                                                   | root         |
 
 Missing, expired, or revoked credentials return HTTP 401. An authenticated user with insufficient permissions receives HTTP 403. Commands report the failure without changing transport or trying another identity. Direct database mode is an explicit trusted operator channel, authorized by database credentials or filesystem permissions, and retains the same user/password/role business validation.
+
+Deployment capabilities are checked before authentication: disabled endpoints return 404 even with a root token. Default `full` keeps the user behavior above. `public` has public map reads and no login, management, diagnostics or user database. `sync` enables world/storage administration with `STATIC_API_TOKEN` (ENV only), and `STATIC_TOKEN_ROLE=viewer|ci|admin` (default ci), without login or user CRUD. Static authentication never signs or persists user credentials. Admin offers a service Bearer input in static mode and hides unavailable panels. Browser tokens are stored by normalized API URL including its prefix; changing the API requires a separate login/token. See [server configuration](server-configuration.md) for valid feature/auth combinations.

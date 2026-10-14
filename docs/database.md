@@ -4,13 +4,13 @@
 
 ## Optional server library
 
-API administration and map tools require only the CLI and core runtime dependencies. Database mode dynamically loads the optional peer `@violet-map/server`; install it in the same dependency environment as the CLI when direct access is needed. This workspace supplies it as a development dependency. `@violet-map/server/admin` exports `readAdminConfig` and `createAdminContext`, providing user CRUD and credential issuance/revocation with explicit connection ownership and `close()`. Importing it does not read deployment configuration, start HTTP, or open a database. SQL, schema checks, password processing, and user logic remain owned by server; map/storage algorithms remain owned by core.
+API administration requires only the CLI and core runtime dependencies. Offline rendering and synchronization load their own optional peers. Database mode dynamically loads the optional peer `@violet-map/server`; install it in the same dependency environment as the CLI when direct access is needed. This workspace supplies it as a development dependency. `@violet-map/server/admin` exports `readAdminConfig` and `createAdminContext`, providing user CRUD and credential issuance/revocation with explicit connection ownership and `close()`. Importing it does not read deployment configuration, start HTTP, or open a database. SQL, schema checks, password processing, and user logic remain owned by server; render algorithms belong to render and storage adapters/sync belong to storage.
 
-Published/default package exports use built JavaScript. Workspace source launchers and tests use the `development` export condition. Build core, server, and CLI before using relocated production artifacts. Database maintenance is available only through the [server maintenance scripts](#database-operations), not the `violet-map` command tree or the admin library exports.
+Published/default package exports use built JavaScript. Workspace source launchers and tests use the `development` export condition. Build core, storage, server, and CLI before using relocated production artifacts. Database maintenance is available only through the [server maintenance scripts](#database-operations), not the `violet-map` command tree or the admin library exports.
 
 ## Database drivers
 
-Both drivers use the same versioned SQL migrations. Server startup and direct business operations verify the full migration history; initialize or upgrade the database explicitly before starting them:
+Both drivers use the same versioned SQL migrations. Server startup with users enabled and direct business operations verify the full migration history; initialize or upgrade the database explicitly before starting them:
 
 - Default: persistent PGlite at `DATA_DIR/users.pglite`.
 - PostgreSQL: set `DATABASE_URL` (for example `postgres://user:password@host:5432/violet_map`).
@@ -63,3 +63,5 @@ PGlite holds an atomic `<canonical-database-directory>.lock` directory for the e
 Production maintenance requires only the built `dist` directory, a package manifest with `type: module`, and server runtime dependencies. For example, from a deployed server package run `node dist/src/db/maintenance.js migrate`; `status` and `baseline` use the same entrypoint. Neither TypeScript execution nor Drizzle Kit is needed. Back up databases before deployments; recovery requiring old data uses a backup restore rather than automatic down migrations.
 
 CI runs the initialization, unversioned-schema adoption, data upgrade, repeated execution, rollback, history-integrity and concurrent-maintenance tests on both PGlite and PostgreSQL 17, followed by a relocated JavaScript artifact test with production dependencies only. To run both drivers locally, provide an isolated PostgreSQL account with `CREATEDB` to `TEST_DATABASE_URL` and run `pnpm --filter @violet-map/server test:db`; each test creates and drops its own randomly named database. Without that variable only PostgreSQL tests are skipped.
+
+The `public` and `sync` HTTP presets never initialize or check the user database. Explicit maintenance and `server/admin` remain available with either preset and validate only their database/root configuration projection, independently of HTTP authentication or S3 requirements. See [deployment](deployment.md) for the production container maintenance command.

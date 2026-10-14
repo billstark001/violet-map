@@ -26,6 +26,11 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Added
 
+- Independent render/storage packages, core contracts/formats/default data, AST dependency checks and isolated CLI capability loading.
+- Server configuration/service/application factories, public/sync/full capability presets and static Bearer authentication without a user database.
+- Frontend runtime API configuration, API/static prefixes, CORS resources and credentials bound to the API URL.
+- Built standalone server artifacts, three production Dockerfiles, production Compose, publication checks and three-origin browser acceptance.
+
 - Named CLI profiles, platform configuration/state/cache paths, `--cli-home` and explicit configuration-file overrides, with setting-source inspection.
 - Shared server login, identity, logout/revocation, and credential references for API administration and remote world synchronization. Secrets use an optional OS credential-store binding or an explicitly selected private file backend; CI can inject environment variables or files.
 - A side-effect-free optional `@violet-map/server/admin` library for direct user/credential operations on already-migrated PGlite or PostgreSQL databases. Database generation/status/migration/baseline remain exclusively in the server deployment tooling.
@@ -33,6 +38,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 - An explicit real-system credential-store integration test covering write/read/update/delete, application credential replacement, and verified cleanup in an isolated temporary namespace.
 
 ### Changed
+
+- Core mesher/model/colors/light/storage implementations and server/contracts exports are removed; import algorithms from render, adapters from storage, and shared HTTP DTOs from core/contracts. No transitional compatibility exports or legacy symbol aliases are provided. CLI requires only core and declares render/storage/server as optional peers. Existing HTTP paths, data schemas, sync identity checks, authentication and documented deployment settings remain supported.
 
 - The sole CLI executable is `violet-map`, using Commander for every command; user administration now belongs to the CLI package. Former executable names, the server admin CLI, and old command/flag aliases are removed.
 - CLI administration defaults to authenticated HTTP APIs; direct access requires `--via database` and an explicit target. Explicit database-directory selection takes precedence over ambient PostgreSQL connection settings.

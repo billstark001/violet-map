@@ -2,11 +2,11 @@
 
 [Back to README](../README.md)
 
-`WorldStorage` lives in `@violet-map/core/storage` and has three interchangeable adapters:
+`WorldReader` and `WorldStorage` interfaces live in `@violet-map/core/storage`. Install the CLI optional peer `@violet-map/storage` alongside the CLI to synchronize worlds. The implementations have separate entries:
 
-1. `local` — a filesystem root.
-2. `s3` — AWS S3 or S3-compatible object storage.
-3. `server` — a remote Violet Map server through authenticated storage APIs.
+1. `@violet-map/storage/local` — a filesystem root.
+2. `@violet-map/storage/s3` — AWS S3 or S3-compatible object storage.
+3. `@violet-map/storage/server` — a remote Violet Map server through authenticated storage APIs.
 
 The server selects `local` or `s3` with `WORLD_STORAGE`. The CLI syncs a **local world archive** to any of the three. It creates `.violet-map/identity.json` in the source archive and checks it against the target before writing. A different or missing marker on a non-empty target emits a warning and aborts unless `--force` is explicitly supplied.
 
@@ -30,3 +30,5 @@ pnpm violet-map world sync \
 `--dry-run` prints changes without writing. `--delete` mirrors deletions from source to target. `--force` is intentionally separate and should only be used after confirming the target is the same world. Sync hashes same-size files before skipping them, so it works across local filesystems, S3 etags, and server storage consistently.
 
 The server exposes its shared storage adapter under protected `/api/admin/storage/*` endpoints. This is what makes remote CLI sync work, while regular Admin uploads and world edits use the same adapter directly.
+
+Remote storage accepts an API prefix such as `https://api.example.com/violet/` and requires enabled admin/world-write capabilities for synchronization. A sync deployment uses a static Bearer service credential without a user database. The storage root entry exports decorators and synchronization only; local/HTTP operations do not load the AWS SDK.

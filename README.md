@@ -8,7 +8,7 @@ Requires Node.js 24+ and pnpm 12.
 
 ```bash
 pnpm install
-pnpm --filter @violet-map/server build
+pnpm --filter @violet-map/server... build
 pnpm --filter @violet-map/server db:migrate
 pnpm dev:full
 ```
@@ -33,4 +33,7 @@ Docker equivalents are `docker compose --profile light up` and `docker compose -
 | [Database administration](docs/database.md) | Database drivers, migrations, maintenance, and the optional server library. |
 | [World storage and synchronization](docs/world-storage.md) | Local, S3, and server storage; archive identity checks and sync commands. |
 | [Server configuration](docs/server-configuration.md) | Deployment YAML, environment variables, and defaults. |
+| [Independent deployment](docs/deployment.md) | Production artifacts, Docker services, static API configuration and subpaths. |
 | [Development and releases](docs/development.md) | Workspace packages, validation, version policy, and CI/CD. |
+
+The default server profile is `full`; `light`/`full` scripts select local processes. For a public map without a user database, use `DEPLOYMENT_PROFILE=public`. After `pnpm build`, server runs built Node ESM and web/admin serve their static artifacts without Vite. Production services can run independently; see [deployment](docs/deployment.md).

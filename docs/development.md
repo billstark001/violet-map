@@ -6,7 +6,9 @@
 
 | Package | Purpose |
 | --- | --- |
-| `@violet-map/core` | NBT, regions, lighting, meshing, top-map code, plus the shared local/S3/server `WorldStorage` adapters. |
+| `@violet-map/core` | Neutral world data, NBT/region codecs, top-map formats, HTTP contracts, storage interfaces and concurrency utilities. |
+| `@violet-map/render` | CPU models, lighting, colors, meshes, top-map sampling/geometry and camera ranking; depends only on core. |
+| `@violet-map/storage` | Local/S3/HTTP adapters, caching, prefixes and synchronization; depends only on core. |
 | `@violet-map/cli` | The `violet-map` CLI: assets, maps, profiles, credentials, and API/direct user administration. |
 | `@violet-map/server` | Hono API, world service, database/user services, and a side-effect-free optional `server/admin` library. |
 | `@violet-map/web` | Three.js world viewer with worker meshing and an optional IndexedDB mesh cache. |
@@ -17,19 +19,25 @@
 ```bash
 pnpm typecheck
 pnpm version:check
+pnpm boundary:check
 pnpm lint
 pnpm format:check
 pnpm test
 pnpm build
 pnpm --filter @violet-map/cli test:artifact
 pnpm --filter @violet-map/server test:db:artifact
+pnpm test:production
+pnpm test:containers
+# Browser acceptance also supports /map/ and /console/ builds.
+pnpm exec playwright install chromium
+pnpm test:frontend
 ```
 
 To exercise the real OS credential store on a machine with an unlocked keychain, run `pnpm --filter @violet-map/cli test:keychain` explicitly. This integration test uses a temporary CLI home and its isolated random keychain namespace, checks native write/read/update/delete and the application's replacement lifecycle, and verifies cleanup of every test entry and the temporary directory. It never reads or changes existing CLI credentials. It is excluded from `pnpm test` and CI because those environments may not have an accessible credential store.
 
 ## Versions and changelog
 
-The root workspace and all five packages start at `0.1.0`. Each package's `package.json` is the source of truth for its version; executable versions are read from that metadata. Run `pnpm violet-map --version` to inspect the CLI version; every subcommand uses that package version.
+The root workspace and all seven packages start at `0.1.0`. Each package's `package.json` is the source of truth for its version; executable versions are read from that metadata. Run `pnpm violet-map --version` to inspect the CLI version; every subcommand uses that package version.
 
 [CHANGELOG.md](../CHANGELOG.md) records releases and the version policy. `pnpm version:check` validates every package's semantic version and enforces a shared MAJOR, plus a shared MINOR while MAJOR is `0`. Package PATCH versions may differ; after `1.0.0`, MINOR versions may also differ. CI runs this check.
 
@@ -45,3 +53,5 @@ For a coordinated release, run `pnpm version:set <version>` (for example, `pnpm 
 - S3: `S3_BUCKET`, `S3_ENDPOINT` (optional), `S3_REGION`, `S3_PREFIX` (optional), `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_SESSION_TOKEN` (optional)
 
 The workflow accepts the checked-in archive directory, target world name, destination type, and explicit `delete`/`force` switches. Use an issued CI credential with the least privilege necessary.
+
+Production artifacts and independent Docker services are described in [deployment](deployment.md). CI also runs AST package-boundary checks, relocated production server tests, package publication checks and three-origin browser acceptance with static/API prefixes.
