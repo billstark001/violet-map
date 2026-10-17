@@ -1,4 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
+import { LruCache } from '@violet-map/core/cache';
 import type { MeshBuffers } from '@violet-map/render';
 import type { SectionMeshMsg } from './worker/protocol';
 
@@ -11,6 +12,8 @@ const MAX_PENDING_WRITE_BYTES = 32 * 1024 * 1024;
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 10 * 1000;
 const TOUCH_INTERVAL_MS = 5 * 60 * 1000;
+const MAX_MEMORY_BYTES = 32 * 1024 * 1024;
+const MAX_MEMORY_ENTRIES = 64;
 
 type CacheMode = 'full' | 'lod';
 
@@ -53,6 +56,14 @@ export interface MeshCacheKeyParts {
 let dbPromise: Promise<IDBPDatabase<MeshCacheDb>> | undefined;
 let cacheEnabled = true;
 let cacheGeneration = 0;
+// Mesh arrays are immutable after worker transfer. GPU geometry can share them
+// with this small CPU cache; switching full/LOD or revisiting a chunk need not
+// clone the same buffers out of IndexedDB on every request.
+const memory = new LruCache<string, MeshCacheRecord>({
+  maxEntries: MAX_MEMORY_ENTRIES,
+  maxWeight: MAX_MEMORY_BYTES,
+  weightOf: (record) => record.bytes,
+});
 
 function database() {
   if (!dbPromise) {
@@ -78,7 +89,10 @@ function database() {
 
 /** Disabling this bypasses all mesh reads and writes without deleting existing cache data. */
 export function setMeshCacheEnabled(enabled: boolean): void {
-  if (!enabled && cacheEnabled) cacheGeneration++;
+  if (!enabled && cacheEnabled) {
+    cacheGeneration++;
+    memory.clear();
+  }
   cacheEnabled = enabled;
 }
 export function isMeshCacheEnabled(): boolean {
@@ -165,6 +179,7 @@ async function touch<T extends MeshCacheRecord>(record: T): Promise<T> {
 
 async function putRecord(record: MeshCacheRecord): Promise<void> {
   if (!cacheEnabled) return;
+  memory.set(record.key, record);
   const generation = cacheGeneration;
   const bytes = Math.max(0, record.bytes);
   if (bytes > MAX_PENDING_WRITE_BYTES) return;
@@ -182,12 +197,21 @@ async function putRecord(record: MeshCacheRecord): Promise<void> {
 
 export async function getCachedFull(parts: Omit<MeshCacheKeyParts, 'mode' | 'step'>): Promise<SectionMeshMsg[] | null> {
   if (!cacheEnabled) return null;
+  const key = cacheKey({ ...parts, mode: 'full', step: 0 });
+  const warm = memory.get(key);
+  if (warm?.full && Date.now() - warm.accessedAt <= TTL_MS) {
+    void touch(warm).catch(() => {});
+    return warm.full;
+  }
+  memory.delete(key);
   const generation = cacheGeneration;
-  const record = await (await database()).get(STORE, cacheKey({ ...parts, mode: 'full', step: 0 }));
+  const record = await (await database()).get(STORE, key);
   if (!cacheEnabled || generation !== cacheGeneration || !record?.full || Date.now() - record.accessedAt > TTL_MS)
     return null;
   const touched = await touch(record);
-  return cacheEnabled && generation === cacheGeneration ? (touched.full ?? null) : null;
+  if (!cacheEnabled || generation !== cacheGeneration) return null;
+  memory.set(key, touched);
+  return touched.full ?? null;
 }
 
 export async function putCachedFull(
@@ -211,12 +235,21 @@ export async function getCachedLod(
   parts: Omit<MeshCacheKeyParts, 'mode'> & { step: number },
 ): Promise<MeshBuffers | null | undefined> {
   if (!cacheEnabled) return undefined;
+  const key = cacheKey({ ...parts, mode: 'lod' });
+  const warm = memory.get(key);
+  if (warm && Date.now() - warm.accessedAt <= TTL_MS) {
+    void touch(warm).catch(() => {});
+    return warm.lod;
+  }
+  memory.delete(key);
   const generation = cacheGeneration;
-  const record = await (await database()).get(STORE, cacheKey({ ...parts, mode: 'lod' }));
+  const record = await (await database()).get(STORE, key);
   if (!cacheEnabled || generation !== cacheGeneration || !record || Date.now() - record.accessedAt > TTL_MS)
     return undefined;
   const touched = await touch(record);
-  return cacheEnabled && generation === cacheGeneration ? touched.lod : undefined;
+  if (!cacheEnabled || generation !== cacheGeneration) return undefined;
+  memory.set(key, touched);
+  return touched.lod;
 }
 
 export async function putCachedLod(
@@ -257,6 +290,7 @@ export async function getMeshCacheStats(): Promise<MeshCacheStats> {
 
 export async function clearMeshCache(): Promise<void> {
   cacheGeneration++;
+  memory.clear();
   await (await database()).clear(STORE);
   lastPrune = 0;
 }
