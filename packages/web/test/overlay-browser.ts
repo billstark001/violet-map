@@ -9,6 +9,7 @@ import {
 import { TOP_MAP_POSITION_OFFSET, TOP_MAP_POSITION_SCALE } from '@violet-map/render/top-map/mesh';
 import { initializeRuntime } from '../src/runtime';
 import { OVERLAY_LIMITS } from '../src/render/overlayLimits';
+import { TransparencyRenderer } from '../src/render/transparency';
 
 const query = new URLSearchParams(location.search);
 
@@ -27,6 +28,7 @@ renderer.setClearColor(0x101010);
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
+const transparency = new TransparencyRenderer(renderer);
 const shared = createSharedUniforms();
 
 shared.skyDarken.value = 1;
@@ -127,7 +129,7 @@ function draw() {
     ambient: 0.18,
     surfaceMaxY: 384,
   });
-  renderer.render(scene, camera);
+  transparency.render(scene, camera);
   if (profiling) cpu.push(performance.now() - start);
 }
 
@@ -277,6 +279,7 @@ const harness = {
     })),
   dispose: () => {
     manager.dispose();
+    transparency.dispose();
     renderer.setAnimationLoop(null);
   },
 };

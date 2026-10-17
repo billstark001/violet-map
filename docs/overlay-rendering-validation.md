@@ -1,23 +1,40 @@
-# Overlay rendering reference: phase 7 release
+# Overlay rendering validation
 
-Measured 2026-10-17 on Apple M3 / macOS arm64, Headless Chrome 155.0.0.0 with SwiftShader enabled, viewport 800×600 CSS pixels, DPR 1. Run `pnpm build && pnpm test:overlays` to regenerate screenshots and JSON in `LOCAL_railway_deploy/overlay-acceptance/`. All cases use the same production build, browser, terrain patches and fixed 180-frame camera path after resources settle: orthographic sweep, perspective sweep, offscreen and return.
+[Back to overlays](overlays.md)
 
-| Fixture | Declared / peak active | CPU median / p95 / max (ms) | Frame interval median / p95 / max (ms) | Load / path requests | Peak JS heap (MiB) | Peak media / mask (bytes) | Final geometries / textures |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Baseline | 0 / 0 | 0.20 / 0.40 / 0.70 | 16.70 / 17.00 / 19.00 | 0 / 0 | 7.25 | 0 / 0 | 3 / 6 |
-| Typical | 32 / 32 | 1.10 / 2.00 / 13.10 | 16.70 / 16.90 / 18.10 | 4 / 3 | 10.85 | 1,255 / 16,150,680 | 29 / 8 |
-| Pressure | 560 / 512 | 2.80 / 5.40 / 23.40 | 16.70 / 16.90 / 24.20 | 4 / 3 | 27.55 | 1,255 / 16,150,680 | 477 / 8 |
+## Run the browser checks
 
-Typical means 20 curves, 4 areas and 8 media instances sharing 2 versions. Pressure means 500 curves, 20 areas and 40 instances sharing 2 versions; the visible-feature budget suppresses 48 features. Images are a 16×8 colored-alpha fixture; the model is a small static cube. The pressure fixture measures feature bookkeeping and draw calls, not worst-case model complexity. Load requests include manifest/media and browser fetches during activation; path requests include visible media refetch after the last owner leaves view and returns. Baseline makes zero requests through the same moving path. Offscreen checkpoints have zero active features, media bytes, mask bytes and curve points. Peak sampled points were 260 typical and 904 pressure. CPU times measure `OverlayManager.update` plus renderer submission on the main thread; they exclude asset initialization and mesh workers. Frame intervals are paced by the browser. Peak JS heap readings are approximate; five separate GC-assisted unload samples measured 5,739,340 / 5,733,716 / 5,732,292 / 5,733,952 / 5,737,532 bytes, below the 2 MiB growth tolerance. Four actual delayed media requests were canceled on context change. GPU byte values are estimates of media buffers/textures and the actual RGBA mask dimensions; driver overhead, shaders and terrain storage are excluded. These results do not establish arbitrary production FPS or total GPU memory use. Resource limits and reference-machine CPU/frame regression envelopes are fixed in [release acceptance](overlay-release-acceptance.md).
+```sh
+pnpm build
+pnpm exec playwright install chromium
+pnpm test:overlays
+pnpm test:transparency
+```
 
-Dense curve reference samples in perspective and orthographic projection stay within 0.51 CSS pixels of the sampled polyline. Actual 8-pixel curves measure 8 CSS pixels in both top projections. A 2-block curve measures 10 pixels at camera Y=150 and 4 pixels at Y=300, with the curve at Y=35. The sampler documents its point/depth caps and eye-plane degradation in [the format/display guide](overlays.md).
+The overlay suite builds an isolated production viewer and starts temporary API/storage fixtures. On macOS it uses installed Google Chrome by default; set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to use another Chromium executable. Tests do not seed annotations into a production world.
 
-The WebGL suite checks world-XZ masks against terrain heights 0, 12 and 24, using online, LOD and offline top-map materials in both top projections. Opacity 0 leaves the base color, opacity 1 replaces it, and red/blue partial overlap follows stable feature order. Player walls match the finite extrusion, show from inside/outside, obey a solid occluder by default and overpaint it only with `occlusion: always`. `water-intersecting-walls.png` records the approximate sorted-transparency reference; intersecting walls/water are not order-independent.
+Overlay screenshots and `browser-results.json` are written to ignored `LOCAL_railway_deploy/overlay-acceptance/`. Synthetic-world screenshots and `results.json` are written to `LOCAL_render_acceptance/transparency/`. Ordinary production builds exclude test harnesses. Keep reports local or attach selected artifacts to a review; committed documentation describes contracts and reproduction rather than individual runs.
 
-PNG, JPEG, WebP and a viewBox SVG enter through the built CLI and a real API under `/violet/`. Pixel and bounds assertions cover row orientation, bottom-left anchoring, explicit aspect ratio and transparent borders. The GLB reference checks translation, positive scale, a 45-degree Y rotation and shared model resources. Models remain visible at both day factors in Overworld, Nether and End; label mode remains unlit. Unsupported GLB extensions and external dependencies fail explicitly. Publishing a new PNG version leaves the bound old version visible until a layer revision explicitly changes its pinned version.
+## Rendering contracts
 
-Removing one shared-model instance retains the remaining instances without a second media download. Five load/disable cycles return every overlay media/mask byte counter to zero and renderer counts to the same baseline: 3 geometries, 6 textures and 2 programs. Unit tests additionally cover delayed canceled decode disposal, request generation checks, ETag retention, download failures and unknown media alongside a working curve. The browser suite validates the production `/map/` viewer's map control, toggle, upgraded image, actual GLB rendering/deferred loader and legacy capabilities with no overlay/media/GLB requests. The production GLB loader bundle is separate, about 44 kB uncompressed / 13 kB gzip, and is absent from the entry HTML's preload list.
+| Area | Assertions |
+| --- | --- |
+| Terrain masks | Full-detail, tiled, LOD and offline top-map materials sample the same world-XZ field across terrain heights and both top projections. Opacity 0/1 and ordered partial overlaps retain their defined semantics. |
+| Player walls | Extrusion uses declared heights, displays from both sides, obeys solid occlusion by default, and overpaints only with `occlusion: always`. |
+| Transparent intersections | Water, depth-tested walls, curves, images and alpha-blended models share [depth-binned OIT](transparency.md). Changing object/triangle order must not change visibility; finite-bin color reconstruction remains approximate. |
+| Curves | Dense projected samples check the subdivision tolerance, CSS-pixel widths stay constant and block widths vary with distance. Point/depth budgets and eye-plane degradation are exercised. |
+| Media | PNG/JPEG/WebP/SVG tests check orientation, transparent borders, anchoring and explicit aspect ratios through the real API and CLI. Static GLB tests check transforms, lighting, shared resources and lazy loading. |
+| Context and ownership | Disabled/offscreen content releases media and masks; canceled or stale downloads cannot resurrect an obsolete context. Shared versions remain loaded until their last owner leaves. Repeated cycles return renderer counts to the captured baseline. |
+| Viewer integration | Production `/map/` builds exercise controls, real media, deferred GLB loading, static/API prefixes and servers without overlay capabilities. |
 
-Reference images: `topPerspective-terrain-mask.png`, `topOrthographic-terrain-mask.png`, `player-wall.png`, `water-intersecting-walls.png`, `bezier-curve.png`, `top-images.png`, `player-models.png`, `upright-billboard.png`, `pressure.png` `viewer-integration.png` and `viewer-model-integration.png`. `browser-results.json` records raw machine data. Test fixtures and reports remain local; deployment publishes the branch's viewer/API and the existing world without seeding example annotations into production.
+The dedicated transparency suite uses the actual mesher to build a four-chunk synthetic world with cross-chunk glass, water and a special translucent model. It verifies both camera projections, actual changed draw sequences, pixel alpha/occlusion, texture cutouts, GLTFLoader alpha blending, allocation limits, error-state restoration and disposal. See [the pipeline guide](transparency.md) for GPU requirements and memory accounting.
 
-Visual review confirmed region bounds on the stepped terrain, finite wall/occluder references, image orientation/alpha, distinguishable GLB day/dimension lighting, the pressure reference and visible rotated/unlit cubes in the actual `/map/` viewer. World terrain is separately checked on the existing Railway world.
+## Resource and performance comparisons
+
+The overlay fixture uses a fixed camera path: orthographic sweep, perspective sweep, leave view, return. Baseline, typical and pressure scenes exercise feature selection, shared assets and the display budget. Resource limits come from `packages/web/src/render/overlayLimits.ts`; OIT attachments have a separate [bounded allocation](transparency.md#requirements-and-memory).
+
+Reports include CPU submission time, browser-paced frame intervals, network requests, approximate JS heap, estimated media/mask bytes and renderer object counts. CPU measurements include overlay update and rendering submission; they exclude initialization and mesh workers. GPU memory estimates omit driver overhead. Small media fixtures do not bound arbitrary model complexity.
+
+Use `VIOLET_REFERENCE_PERF=1 pnpm test:overlays` only on a comparable reference machine to enforce the CPU/frame envelopes described in [release acceptance](overlay-release-acceptance.md). Other environments still enforce correctness and resource/lifecycle assertions. Record browser version, GPU/backend, viewport, DPR and concurrent workload when comparing results; these checks do not imply portable FPS or zero stutter.
+
+Review the mask, wall/water, curve, image, GLB and synthetic-world screenshots after changing shaders or rendering passes. Inspect pixel assertions and raw reports alongside the images; a screenshot alone cannot establish order invariance or resource release.

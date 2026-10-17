@@ -24,6 +24,7 @@ import {
 } from './materials';
 import { TopMapManager, type TopMapDiagnosticSnapshot } from './topMapManager';
 import { OverlayManager, type OverlayDiagnosticSnapshot } from './overlayManager';
+import { TransparencyRenderer, type TransparencyDiagnosticSnapshot } from './transparency';
 import { serviceCapabilities } from '../runtime';
 import type { WorkerInit } from '../worker/protocol';
 import { browserStorage, readStored } from '../browserStorage';
@@ -106,6 +107,7 @@ export interface ViewerDiagnosticSnapshot {
   chunkManager: ChunkManagerDiagnosticSnapshot | null;
   topMap: TopMapDiagnosticSnapshot;
   overlays: OverlayDiagnosticSnapshot;
+  transparency: TransparencyDiagnosticSnapshot;
 }
 
 type ActiveCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
@@ -131,6 +133,7 @@ interface ViewerResources {
 
 interface Engine {
   renderer: THREE.WebGLRenderer;
+  transparency: TransparencyRenderer;
   scene: THREE.Scene;
   perspectiveCamera: THREE.PerspectiveCamera;
   topPerspectiveCamera: THREE.PerspectiveCamera;
@@ -291,6 +294,7 @@ function diagnosticSnapshotForViewer(
     chunkManager: manager?.diagnosticSnapshot() ?? null,
     topMap: engine.topMap.diagnosticSnapshot(),
     overlays: engine.overlays.diagnosticSnapshot(),
+    transparency: engine.transparency.diagnosticSnapshot(),
   };
 }
 
@@ -534,6 +538,9 @@ function createSkyObjects(scene: THREE.Scene): SkyObjects {
   });
   const stars = new THREE.Points(starGeometry, starMaterial);
   group.add(stars);
+  group.traverse((object) => {
+    object.userData.oitBackground = true;
+  });
   scene.add(group);
 
   return {
@@ -713,6 +720,14 @@ function createEngine(
   inertiaEnabled: boolean,
 ): Engine {
   const renderer = createRenderer(container);
+  let transparency: TransparencyRenderer;
+  try {
+    transparency = new TransparencyRenderer(renderer);
+  } catch (error) {
+    renderer.dispose();
+    renderer.domElement.remove();
+    throw error;
+  }
   const scene = createScene();
   const skyObjects = createSkyObjects(scene);
   const cameras = createCameras(container, initialView);
@@ -725,6 +740,7 @@ function createEngine(
 
   const engine: Engine = {
     renderer,
+    transparency,
     scene,
     perspectiveCamera: cameras.perspectiveCamera,
     topPerspectiveCamera: cameras.topPerspectiveCamera,
@@ -765,6 +781,7 @@ function createResizeHandler(engine: Engine, container: HTMLElement): () => void
 
 function disposeEngine(engine: Engine) {
   engine.renderer.setAnimationLoop(null);
+  engine.transparency.dispose();
   engine.flyControls.dispose();
   engine.topPerspectiveControls.dispose();
   engine.topOrthographicControls.dispose();
@@ -1009,7 +1026,7 @@ function renderFrame({ engine, manager, latestStats, props, capabilities, state 
   if (now - state.lastStatsReport > 250) props.onOverlayStatus?.(engine.overlays.diagnosticSnapshot());
   maybeReportStats(state, now, latestStats, camera, props.viewMode, props.onStats);
   maybePersistActiveView(state, now, engine, camera, props.viewMode);
-  engine.renderer.render(engine.scene, camera);
+  engine.transparency.render(engine.scene, camera);
 }
 
 function createWorldManager(engine: Engine, props: ViewerOptions): ChunkManager {
@@ -1107,16 +1124,21 @@ export class ViewerController {
       state.timer.connect(document);
       this.frameState = state;
       this.syncEngine(null);
-      engine.renderer.setAnimationLoop(() =>
-        renderFrame({
-          engine,
-          manager: this.manager,
-          latestStats: this.latestStats,
-          props: this.props,
-          capabilities: this.capabilities,
-          state,
-        }),
-      );
+      engine.renderer.setAnimationLoop(() => {
+        try {
+          renderFrame({
+            engine,
+            manager: this.manager,
+            latestStats: this.latestStats,
+            props: this.props,
+            capabilities: this.capabilities,
+            state,
+          });
+        } catch (error) {
+          engine.renderer.setAnimationLoop(null);
+          if (!this.disposed) this.onError(error instanceof Error ? error.message : String(error));
+        }
+      });
       this.onReady?.();
     } catch (error) {
       this.resourceRequest.abort();

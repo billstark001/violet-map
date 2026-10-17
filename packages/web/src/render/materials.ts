@@ -180,6 +180,10 @@ vec3 applyOverlay(vec3 color){
 void main() {
   vec4 tex = animatedTexture(vUv);
   if (tex.a <= alphaTest) discard;
+  #ifdef VIOLET_OIT_ALPHA_ONLY
+    gl_FragColor = vec4(0.0, 0.0, 0.0, tex.a * opacity);
+    return;
+  #endif
   float l = max(vLight.y, vLight.x * skyDarken);
   float b = ambient + (1.0 - ambient) * l;
   vec3 c = tex.rgb * vColor * b;
@@ -225,6 +229,10 @@ void main() {
   vec2 atlasUv = mix(vAtlasRect.xy, vAtlasRect.zw, tileUv);
   vec4 tex = texture2D(map, atlasUv);
   if (tex.a <= alphaTest) discard;
+  #ifdef VIOLET_OIT_ALPHA_ONLY
+    gl_FragColor = vec4(0.0, 0.0, 0.0, tex.a * opacity);
+    return;
+  #endif
   float l = max(vLight.y, vLight.x * skyDarken);
   float b = ambient + (1.0 - ambient) * l;
   vec3 c = tex.rgb * vColor * b;
