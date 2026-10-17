@@ -62,3 +62,26 @@ test('benchmark preludes allow consecutive const helpers without relaxing functi
   await fs.writeFile(file, source.replace("strict';\n\nconst", "strict';\nconst"));
   assert.equal(run().status, 1);
 });
+
+test('Oxlint marks type-only imports while retaining runtime constructors', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-type-imports-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const file = path.join(root, 'fixture.ts');
+  await fs.writeFile(
+    file,
+    "import { Stats, Dirent } from 'node:fs';\n\nexport const directory = new Dirent();\n\nexport function size(info: Stats) { return info.size; }\n",
+  );
+  const run = (...args) =>
+    spawnSync(
+      process.execPath,
+      [path.join(project, 'node_modules/oxlint/bin/oxlint'), '-c', path.join(project, '.oxlintrc.json'), ...args, file],
+      { cwd: project, encoding: 'utf8' },
+    );
+  assert.equal(run().status, 1);
+  const fixed = run('--fix');
+  assert.equal(fixed.status, 0, fixed.stderr + fixed.stdout);
+  const result = await fs.readFile(file, 'utf8');
+  assert.match(result, /type Stats/);
+  assert.doesNotMatch(result, /type Dirent/);
+  assert.equal(run().status, 0);
+});

@@ -55,6 +55,14 @@
           "selector": "Program > :matches(VariableDeclaration, ExportNamedDeclaration):has(VariableDeclarator > :matches(ArrowFunctionExpression, FunctionExpression))"
         }
       }
+    ],
+    "typescript/consistent-type-imports": [
+      "error",
+      {
+        "prefer": "type-imports",
+        "fixStyle": "inline-type-imports",
+        "disallowTypeAnnotations": false
+      }
     ]
   },
   "overrides": [
