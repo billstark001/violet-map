@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 import { serve } from '@hono/node-server';
 import { chromium } from 'playwright';
 import type { OverlayMediaReference } from '../../packages/core/src/overlayTypes.js';
@@ -74,7 +75,7 @@ test(
       });
       vite.stdout.on('data', (bytes) => {
         output += String(bytes);
-        const match = output.match(/http:\/\/127\.0\.0\.1:\d+/);
+        const match = stripVTControlCharacters(output).match(/http:\/\/127\.0\.0\.1:\d+/);
         if (match) {
           clearTimeout(timeout);
           resolve(match[0]);
