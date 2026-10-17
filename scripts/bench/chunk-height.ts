@@ -14,6 +14,7 @@ const heights = (root: unknown) => {
 };
 const withoutHeightmaps = chunks.map((chunk) => ({ ...chunk, Heightmaps: undefined }));
 let gridChecked = 0;
+
 for (const region of new Set(records.map((record) => record.region))) {
   for (const x of [0, 8, 16, 24, 31])
     for (const z of [0, 8, 16, 24, 31]) {
@@ -28,11 +29,14 @@ for (const region of new Set(records.map((record) => record.region))) {
       gridChecked++;
     }
 }
+
 for (let index = 0; index < chunks.length; index++) {
   assert.ok(parseChunkColumn(chunks[index]).heightMap, 'sample must exercise the stored height map');
   assert.deepEqual(heights(chunks[index]), heights(withoutHeightmaps[index]), 'stored and scanned heights must agree');
 }
+
 const summaries = [];
+
 for (const [mode, inputs] of [
   ['scanned', withoutHeightmaps],
   ['stored-heightmap', chunks],
@@ -46,6 +50,7 @@ for (const [mode, inputs] of [
   samples.sort((a, b) => a - b);
   summaries.push({ mode, batchP50Ms: samples[15], batchP95Ms: samples[28] });
 }
+
 console.log(
   JSON.stringify(
     {

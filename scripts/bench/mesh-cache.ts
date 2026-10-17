@@ -11,6 +11,7 @@ const vite = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host',
   env: { ...process.env, FORCE_COLOR: '0' },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
+
 try {
   const origin = await new Promise<string>((resolve, reject) => {
     vite.stdout.on('data', (bytes) => {

@@ -25,6 +25,7 @@ const codecs = {
 const decoded = samples.map(codecs.pako);
 const rounds = 20;
 const results = [];
+
 for (const [name, decode] of Object.entries(codecs)) {
   for (let i = 0; i < samples.length; i++) assert.deepEqual(await decode(samples[i]), decoded[i]);
   const elapsed = [];
@@ -54,6 +55,7 @@ for (const [name, decode] of Object.entries(codecs)) {
     longestTimerDelayMs,
   });
 }
+
 console.log(
   JSON.stringify(
     {

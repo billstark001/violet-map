@@ -5,6 +5,7 @@ import { BitArray } from '../../packages/core/src/world.js';
 import { loadHardRegionSamples } from './helpers/region-samples.js';
 
 const cases = new Map<string, { bits: number; data: BigUint64Array; length: number }>();
+
 for (const sample of await loadHardRegionSamples(process.argv.slice(2))) {
   const root = parseNbt(getRegionChunk(sample.region, sample.x, sample.z)!);
   for (const section of root.sections)
@@ -17,7 +18,9 @@ for (const sample of await loadHardRegionSamples(process.argv.slice(2))) {
       cases.set(`${kind}-${bits}`, { bits, data: toLongs(input.data), length });
     }
 }
+
 assert.ok(cases.size > 0);
+
 const reference = (bits: number, data: BigUint64Array, out: Uint16Array) => {
   const perLong = Math.floor(64 / bits),
     mask = (1n << BigInt(bits)) - 1n,
@@ -34,6 +37,7 @@ const reference = (bits: number, data: BigUint64Array, out: Uint16Array) => {
 };
 const results = [];
 let checksum = 0;
+
 for (const [name, input] of cases) {
   const packed = new BitArray(input.bits, input.data);
   const expected = new Uint16Array(input.length),
@@ -62,4 +66,5 @@ for (const [name, input] of cases) {
     currentP95Ms: percentile(samples.current, 0.95),
   });
 }
+
 console.log(JSON.stringify({ node: process.version, measuredRounds: 20, repeat: 500, checksum, results }, null, 2));

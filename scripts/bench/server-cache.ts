@@ -15,13 +15,17 @@ import type { ObjectStorage } from '../../packages/core/src/storage.js';
 // Read-only soak with two explicit regions, small cache budgets and a bounded
 // request rate. Run with tsx --expose-gc for comparable post-GC heap samples.
 const [worldArgument, durationArgument = '60'] = process.argv.slice(2);
+
 assert.ok(worldArgument, 'provide the world directory');
+
 const worldRoot = path.resolve(worldArgument);
 const durationSeconds = Number(durationArgument);
+
 assert.ok(
   Number.isSafeInteger(durationSeconds) && durationSeconds >= 1 && durationSeconds <= 3600,
   'duration must be 1..3600 seconds',
 );
+
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-cache-bench-'));
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 let seed = 20261018;
@@ -29,6 +33,7 @@ const random = () => {
   seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
   return seed / 2 ** 32;
 };
+
 try {
   const samples: { cx: number; cz: number; digest: string }[] = [];
   for (const [rx, rz] of [
