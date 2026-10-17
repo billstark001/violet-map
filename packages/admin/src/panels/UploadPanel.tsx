@@ -1,48 +1,33 @@
+import type { AdminSession } from '../session';
+import { usePanelTask } from '../usePanelTask';
 import { useState } from 'react';
 import { Button, Callout, Card, Flex, Heading, Select, Text, TextField } from '@radix-ui/themes';
 import { useTranslation } from 'react-i18next';
-import { apiFetch } from '../runtime';
-import { authHeaders, VANILLA_DIMENSIONS } from '../panelShared';
+import { VANILLA_DIMENSIONS } from '../panelShared';
 
-export function UploadPanel({ token }: { token: string }) {
+export function UploadPanel({ session }: { session: AdminSession }) {
+  const { token } = session.getSnapshot();
   const { t } = useTranslation();
   const [world, setWorld] = useState('demo');
   const [dim, setDim] = useState(VANILLA_DIMENSIONS[0]);
   const [file, setFile] = useState<File | null>(null);
-  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { message, setMessage, busy, run } = usePanelTask();
 
-  const upload = async () => {
-    if (!file) {
-      setMessage({ ok: false, text: t('missingFile') });
-      return;
-    }
-    setBusy(true);
-    setMessage(null);
-    try {
+  const upload = () =>
+    run(async () => {
+      if (!file) throw new Error(t('missingFile'));
       const form = new FormData();
       form.set('file', file);
       form.set('dim', dim);
-      const res = await apiFetch(`api/admin/worlds/${encodeURIComponent(world)}/upload`, {
-        method: 'POST',
-        headers: authHeaders(token),
-        body: form,
-      });
-      const data = await res.json();
-      setMessage(
-        res.ok
-          ? {
-              ok: true,
-              text: data.type === 'region' ? `Saved region file ${data.name}` : `Saved chunk (${data.x}, ${data.z})`,
-            }
-          : { ok: false, text: data.error ?? t('uploadFailed') },
+      const data = await session.request<{ type: string; name?: string; x?: number; z?: number }>(
+        `api/admin/worlds/${encodeURIComponent(world)}/upload`,
+        { method: 'POST', body: form },
       );
-    } catch (e) {
-      setMessage({ ok: false, text: (e as Error).message });
-    } finally {
-      setBusy(false);
-    }
-  };
+      setMessage({
+        ok: true,
+        text: data.type === 'region' ? `Saved region file ${data.name}` : `Saved chunk (${data.x}, ${data.z})`,
+      });
+    });
 
   return (
     <Card>

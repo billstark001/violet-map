@@ -1,89 +1,76 @@
-import { useCallback, useEffect, useState } from 'react';
+import type { AdminSession } from '../session';
+import { usePanelTask } from '../usePanelTask';
+import { useAsyncResource } from '../useAsyncResource';
+import { ConfirmAction } from '../ConfirmAction';
+import { useCallback, useState } from 'react';
 import { Badge, Box, Button, Callout, Card, Flex, Heading, Select, Table, Text, TextField } from '@radix-ui/themes';
 import type { PublicUser } from '@violet-map/core/contracts';
 import { useTranslation } from 'react-i18next';
-import { apiFetch } from '../runtime';
-import { authHeaders } from '../panelShared';
 
-export function UsersPanel({ token }: { token: string }) {
+export function UsersPanel({ session }: { session: AdminSession }) {
+  const { token } = session.getSnapshot();
   const { t } = useTranslation();
-  const [users, setUsers] = useState<PublicUser[]>([]);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<'viewer' | 'ci' | 'admin'>('viewer');
   const [lifetime, setLifetime] = useState('3600');
-  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const { message, setMessage, busy, run } = usePanelTask();
   const [credential, setCredential] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    const res = await apiFetch('api/admin/users', { headers: authHeaders(token) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    setUsers((await res.json()) as PublicUser[]);
-  }, [token]);
-  useEffect(() => {
-    if (token) void refresh().catch((error) => setMessage({ ok: false, text: String(error) }));
-  }, [token, refresh]);
-
-  const create = async () => {
-    setCredential(null);
-    const res = await apiFetch('api/admin/users', {
-      method: 'POST',
-      headers: authHeaders(token, { 'content-type': 'application/json' }),
-      body: JSON.stringify({ username, password, role }),
-    });
-    const data = await res.json();
-    setMessage(
-      res.ok ? { ok: true, text: `${data.username} created` } : { ok: false, text: data.error ?? `HTTP ${res.status}` },
-    );
-    if (res.ok) {
+  const load = useCallback(
+    (signal: AbortSignal) =>
+      token ? session.request<PublicUser[]>('api/admin/users', { signal }) : Promise.resolve([]),
+    [session, token],
+  );
+  const { data: users, error, loading, reload: refresh } = useAsyncResource(load, []);
+  const create = () =>
+    run(async () => {
+      setCredential(null);
+      const data = await session.request<PublicUser>('api/admin/users', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username, password, role }),
+      });
+      setMessage({ ok: true, text: `${data.username} created` });
       setPassword('');
-      void refresh();
-    }
-  };
-  const update = async (user: PublicUser, patch: Partial<Pick<PublicUser, 'role' | 'enabled'>>) => {
-    const res = await apiFetch(`api/admin/users/${encodeURIComponent(user.username)}`, {
-      method: 'PATCH',
-      headers: authHeaders(token, { 'content-type': 'application/json' }),
-      body: JSON.stringify(patch),
+      await refresh();
     });
-    const data = await res.json();
-    setMessage(
-      res.ok ? { ok: true, text: `${data.username} updated` } : { ok: false, text: data.error ?? `HTTP ${res.status}` },
-    );
-    if (res.ok) void refresh();
-  };
+  const update = (user: PublicUser, patch: Partial<Pick<PublicUser, 'role' | 'enabled'>>) =>
+    run(async () => {
+      const data = await session.request<PublicUser>(`api/admin/users/${encodeURIComponent(user.username)}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      setMessage({ ok: true, text: `${data.username} updated` });
+      await refresh();
+    });
   const remove = async (user: PublicUser) => {
-    const res = await apiFetch(`api/admin/users/${encodeURIComponent(user.username)}`, {
-      method: 'DELETE',
-      headers: authHeaders(token),
-    });
-    const data = await res.json();
-    setMessage(
-      res.ok ? { ok: true, text: `${user.username} deleted` } : { ok: false, text: data.error ?? `HTTP ${res.status}` },
-    );
-    if (res.ok) void refresh();
-  };
-  const issue = async (user: PublicUser) => {
+    await session.request(`api/admin/users/${encodeURIComponent(user.username)}`, { method: 'DELETE' });
     setCredential(null);
-    const res = await apiFetch(`api/admin/users/${encodeURIComponent(user.username)}/credentials`, {
-      method: 'POST',
-      headers: authHeaders(token, { 'content-type': 'application/json' }),
-      body: JSON.stringify({ expiresInSeconds: Number(lifetime) }),
-    });
-    const data = await res.json();
-    setMessage(
-      res.ok
-        ? { ok: true, text: `${user.username}: ${data.expiresAt}` }
-        : { ok: false, text: data.error ?? `HTTP ${res.status}` },
-    );
-    if (res.ok) setCredential(data.token);
+    setMessage({ ok: true, text: `${user.username} deleted` });
+    await refresh();
   };
+  const issue = (user: PublicUser) =>
+    run(async () => {
+      setCredential(null);
+      const data = await session.request<{ token: string; expiresAt: string }>(
+        `api/admin/users/${encodeURIComponent(user.username)}/credentials`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ expiresInSeconds: Number(lifetime) }),
+        },
+      );
+      setMessage({ ok: true, text: `${user.username}: ${data.expiresAt}` });
+      setCredential(data.token);
+    });
 
   return (
     <Card>
       <Flex justify="between" align="center" mb="2">
         <Heading size="4">{t('users')}</Heading>
-        <Button variant="soft" onClick={() => void refresh()} disabled={!token}>
+        <Button variant="soft" onClick={() => void refresh()} disabled={!token || loading || busy}>
           {t('refresh')}
         </Button>
       </Flex>
@@ -118,7 +105,7 @@ export function UsersPanel({ token }: { token: string }) {
             </Select.Content>
           </Select.Root>
         </Box>
-        <Button disabled={!token || !username || !password} onClick={create}>
+        <Button disabled={!token || !username || !password || busy} onClick={create}>
           {t('createUser')}
         </Button>
       </Flex>
@@ -156,6 +143,7 @@ export function UsersPanel({ token }: { token: string }) {
                   user.role
                 ) : (
                   <Select.Root
+                    disabled={busy}
                     value={user.role}
                     onValueChange={(value) => void update(user, { role: value as PublicUser['role'] })}
                   >
@@ -177,15 +165,33 @@ export function UsersPanel({ token }: { token: string }) {
                 <Flex gap="1" justify="end">
                   {!user.virtual && (
                     <>
-                      <Button size="1" variant="soft" onClick={() => void update(user, { enabled: !user.enabled })}>
+                      <Button
+                        size="1"
+                        variant="soft"
+                        disabled={busy}
+                        onClick={() => void update(user, { enabled: !user.enabled })}
+                      >
                         {user.enabled ? t('disabled') : t('enabled')}
                       </Button>
-                      <Button size="1" variant="soft" onClick={() => void issue(user)} disabled={!user.enabled}>
+                      <Button
+                        size="1"
+                        variant="soft"
+                        onClick={() => void issue(user)}
+                        disabled={
+                          !user.enabled || busy || !Number.isSafeInteger(Number(lifetime)) || Number(lifetime) < 60
+                        }
+                      >
                         {t('issueCredential')}
                       </Button>
-                      <Button size="1" color="red" variant="soft" onClick={() => void remove(user)}>
-                        {t('delete')}
-                      </Button>
+                      <ConfirmAction
+                        title={t('deleteTitle', { name: user.username })}
+                        description={t('deleteDescription', { name: user.username })}
+                        action={() => remove(user)}
+                      >
+                        <Button size="1" color="red" variant="soft" disabled={busy}>
+                          {t('delete')}
+                        </Button>
+                      </ConfirmAction>
                     </>
                   )}
                 </Flex>
@@ -199,6 +205,11 @@ export function UsersPanel({ token }: { token: string }) {
           <Callout.Text>
             {t('credentialIssued')}: <code style={{ wordBreak: 'break-all' }}>{credential}</code>
           </Callout.Text>
+        </Callout.Root>
+      )}
+      {error && (
+        <Callout.Root mt="3" color="red" role="alert">
+          <Callout.Text>{error}</Callout.Text>
         </Callout.Root>
       )}
       {message && (

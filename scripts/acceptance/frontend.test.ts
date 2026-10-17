@@ -4,41 +4,12 @@ import { test } from 'node:test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
 import { serve } from '@hono/node-server';
 import { chromium } from 'playwright';
 import { createApp } from '../../packages/server/src/app.js';
 import { createServices } from '../../packages/server/src/services.js';
 import { loadServerConfig } from '../../packages/server/src/configuration.js';
-
-const project = fileURLToPath(new URL('../../', import.meta.url));
-const close = (server: ReturnType<typeof serve>) =>
-  new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-    if ('closeAllConnections' in server) server.closeAllConnections();
-  });
-async function origin(server: ReturnType<typeof serve>) {
-  if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));
-  return `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-}
-async function staticSite(root: string, name: 'web' | 'admin', base: string, api: string) {
-  const dist = path.join(root, name);
-  await fs.cp(path.join(project, 'packages', name, 'dist'), dist, { recursive: true });
-  const child = spawn(process.execPath, [path.join(dist, 'serve.mjs'), '0', api], {
-    env: { ...process.env, PORT: '0', STATIC_BASE_PATH: base, API_BASE_URL: undefined },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  const port = await new Promise<number>((resolve, reject) => {
-    child.stdout.on('data', (bytes) => {
-      const match = String(bytes).match(/:(\d+)/);
-      if (match) resolve(Number(match[1]));
-    });
-    child.once('error', reject);
-    child.once('exit', (code) => reject(new Error(`static site exited ${code}`)));
-  });
-  return { url: `http://127.0.0.1:${port}${base}`, dist, child };
-}
+import { project, closeServer, serverOrigin, startStaticSite } from './helpers/frontend.js';
 
 test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities and token isolation', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-frontend-'));
@@ -79,8 +50,8 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
     hostname: '127.0.0.1',
     port: 0,
   });
-  t.after(() => close(api));
-  const apiBase = `${await origin(api)}/violet/`;
+  t.after(() => closeServer(api));
+  const apiBase = `${await serverOrigin(api)}/violet/`;
   const webBase = (await fs.readFile(path.join(project, 'packages/web/dist/index.html'), 'utf8')).includes(
     '/map/assets/',
   )
@@ -91,8 +62,8 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
   )
     ? '/console/'
     : '/';
-  const web = await staticSite(root, 'web', webBase, apiBase),
-    admin = await staticSite(root, 'admin', adminBase, apiBase);
+  const web = await startStaticSite(root, 'web', webBase, apiBase),
+    admin = await startStaticSite(root, 'admin', adminBase, apiBase);
   t.after(async () => {
     for (const site of [web, admin]) {
       site.child.kill('SIGTERM');
@@ -226,11 +197,11 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
     hostname: '127.0.0.1',
     port: 0,
   });
-  t.after(() => close(secondApi));
+  t.after(() => closeServer(secondApi));
   const before = (await fs.readdir(path.join(admin.dist, 'assets'))).sort();
   await fs.writeFile(
     path.join(admin.dist, 'runtime-config.json'),
-    JSON.stringify({ apiBaseUrl: await origin(secondApi) }),
+    JSON.stringify({ apiBaseUrl: await serverOrigin(secondApi) }),
   );
   await consolePage.reload();
   await consolePage.getByText('This server has not enabled management features.').waitFor();

@@ -21,6 +21,16 @@ const resources = {
       credentialIssued: 'Credential (shown once)',
       signIn: 'Sign in',
       signInFailed: 'Sign in failed',
+      accountMenu: 'Account menu',
+      credential: 'Credential',
+      credentialPresent: 'Credential present; identity not checked',
+      signedOut: 'Signed out',
+      checkSession: 'Check session',
+      signOut: 'Sign out',
+      cancel: 'Cancel',
+      confirmDelete: 'Delete permanently',
+      deleteTitle: 'Delete {{name}}?',
+      deleteDescription: 'This permanently deletes {{name}} and its stored data.',
       usersHelp: 'root and guest are reserved roles. Credentials are bound to this user and expire automatically.',
       refresh: 'Refresh',
       world: 'World',
@@ -62,6 +72,16 @@ const resources = {
       credentialIssued: '凭据（仅显示一次）',
       signIn: '登录',
       signInFailed: '登录失败',
+      accountMenu: '账户菜单',
+      credential: '凭据',
+      credentialPresent: '已设置凭据，尚未验证身份',
+      signedOut: '未登录',
+      checkSession: '验证登录状态',
+      signOut: '退出登录',
+      cancel: '取消',
+      confirmDelete: '永久删除',
+      deleteTitle: '删除 {{name}}？',
+      deleteDescription: '这将永久删除 {{name}} 及其存储的数据。',
       usersHelp: 'root 和 guest 为保留角色。凭据绑定到该用户并会自动过期。',
       refresh: '刷新',
       world: '世界',
@@ -103,6 +123,16 @@ const resources = {
       credentialIssued: '憑證（只顯示一次）',
       signIn: '登入',
       signInFailed: '登入失敗',
+      accountMenu: '帳戶選單',
+      credential: '憑據',
+      credentialPresent: '已設定憑據，尚未驗證身分',
+      signedOut: '未登入',
+      checkSession: '驗證登入狀態',
+      signOut: '登出',
+      cancel: '取消',
+      confirmDelete: '永久刪除',
+      deleteTitle: '刪除 {{name}}？',
+      deleteDescription: '這將永久刪除 {{name}} 及其儲存的資料。',
       usersHelp: 'root 和 guest 是保留角色。憑證會繫結至該使用者並自動過期。',
       refresh: '重新整理',
       world: '世界',
@@ -144,6 +174,16 @@ const resources = {
       credentialIssued: '認証情報（一度だけ表示）',
       signIn: 'ログイン',
       signInFailed: 'ログインに失敗しました',
+      accountMenu: 'アカウントメニュー',
+      credential: '認証情報',
+      credentialPresent: '認証情報あり・本人確認前',
+      signedOut: 'ログアウト状態',
+      checkSession: 'セッションを確認',
+      signOut: 'ログアウト',
+      cancel: 'キャンセル',
+      confirmDelete: '完全に削除',
+      deleteTitle: '{{name}} を削除しますか？',
+      deleteDescription: '{{name}} と保存データを完全に削除します。',
       usersHelp: 'root と guest は予約済みロールです。認証情報はユーザーに紐付き、自動的に期限切れになります。',
       refresh: '更新',
       world: 'ワールド',
@@ -169,7 +209,12 @@ const resources = {
 } as const;
 
 function initialLanguage(): string {
-  const saved = localStorage.getItem('violet-map:language');
+  let saved: string | null = null;
+  try {
+    saved = localStorage.getItem('violet-map:language');
+  } catch {
+    /* restricted storage */
+  }
   if (saved && resources[saved as keyof typeof resources]) return saved;
   if (navigator.language.startsWith('ja')) return 'ja';
   if (navigator.language.startsWith('zh-TW') || navigator.language.startsWith('zh-HK')) return 'zh-TW';

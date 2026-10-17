@@ -1,43 +1,52 @@
-import { useEffect, useState } from 'react';
+import type { AdminSession } from '../session';
+import { usePanelTask } from '../usePanelTask';
+import { useAsyncResource } from '../useAsyncResource';
+import { useCallback, useState } from 'react';
 import { Button, Callout, Card, Flex, Heading, TextArea } from '@radix-ui/themes';
 import { useTranslation } from 'react-i18next';
-import { apiFetch } from '../runtime';
-import { authHeaders } from '../panelShared';
 
-export function BiomesPanel({ token }: { token: string }) {
+export function BiomesPanel({ session }: { session: AdminSession }) {
+  const { token } = session.getSnapshot();
   const { t } = useTranslation();
-  const [text, setText] = useState('');
-  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [draft, setDraft] = useState<string | null>(null);
+  const { message, setMessage, busy, run } = usePanelTask();
 
-  useEffect(() => {
-    apiFetch('api/data/biomes')
-      .then((r) => r.json())
-      .then((j) => setText(JSON.stringify(j, null, 2)));
-  }, []);
-
-  const save = async () => {
-    try {
-      const parsed = JSON.parse(text);
-      const res = await apiFetch('api/data/biomes', {
+  const load = useCallback(
+    async (signal: AbortSignal) => JSON.stringify(await session.request('api/data/biomes', { signal }), null, 2),
+    [session],
+  );
+  const { data, error, loading } = useAsyncResource(load, '');
+  const text = draft ?? data;
+  const save = () =>
+    run(async () => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch (error) {
+        throw new Error(`Invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      await session.request('api/data/biomes', {
         method: 'PUT',
-        headers: authHeaders(token, { 'content-type': 'application/json' }),
+        headers: { 'content-type': 'application/json' },
         body: JSON.stringify(parsed),
       });
-      setMessage(res.ok ? { ok: true, text: t('saved') } : { ok: false, text: `Save failed: ${res.status}` });
-    } catch (e) {
-      setMessage({ ok: false, text: `Invalid JSON: ${(e as Error).message}` });
-    }
-  };
+      setMessage({ ok: true, text: t('saved') });
+    });
 
   return (
     <Card>
       <Flex justify="between" align="center" mb="3">
         <Heading size="4">{t('biomeTitle')}</Heading>
-        <Button onClick={save} disabled={!token}>
+        <Button onClick={save} disabled={!token || busy || loading || !!error}>
           {t('save')}
         </Button>
       </Flex>
-      <TextArea value={text} onChange={(e) => setText(e.target.value)} rows={24} style={{ fontFamily: 'monospace' }} />
+      <TextArea value={text} onChange={(e) => setDraft(e.target.value)} rows={24} style={{ fontFamily: 'monospace' }} />
+      {error && (
+        <Callout.Root mt="3" color="red" role="alert">
+          <Callout.Text>{error}</Callout.Text>
+        </Callout.Root>
+      )}
       {message && (
         <Callout.Root mt="3" color={message.ok ? 'green' : 'red'}>
           <Callout.Text>{message.text}</Callout.Text>

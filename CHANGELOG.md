@@ -34,6 +34,7 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 - Unavailable or failing IndexedDB now falls back to worker meshing instead of repeatedly retrying a failed cache read with missing terrain.
 - Partial camera/look-at URLs retain unspecified coordinates instead of turning them into zero; restricted browser storage no longer prevents viewer initialization.
 - Overlay media downloads cancel as soon as their pinned byte budget is exceeded, including responses without Content-Length. Upload/download readers share the same bounded streaming helper.
+- Admin actions report HTTP/network failures without unhandled promises, serialize duplicate submissions and cancel stale panel reads. Restricted browser storage is tolerated during language/session initialization.
 
 ### Changed
 
@@ -44,6 +45,7 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 - Web uses native Preact, signals-backed translations and accessible native form/tab controls, removing React, Radix and react-i18next from the viewer. React aliases/compat are disabled and checked by the package-boundary tooling. Admin continues to use React.
 - Viewer UI is split into view/settings/diagnostic panels and camera fields with CSS Modules. Shared world loading, capabilities, settings and diagnostics use signals; the canvas lives outside the UI tree. World-list failures can be retried, URL overrides remain session-local, and blank camera inputs no longer silently become zero.
 - Removed deprecated `WorldReader`/`WorldStorage`, world-named local/S3/cache/scope class aliases, `createWorldStorage`, and `AppServices.storage`. Consumers now use object-storage names and `services.mounts.worlds`; the distinct remote `ServerWorldStorage` protocol remains supported.
+- Admin is split into a small application shell, independent panels and shared async/session controls. Account menus show verified identity/role, check sessions and revoke user credentials on logout; destructive actions use retryable confirmation dialogs.
 
 ### Added
 
