@@ -122,6 +122,20 @@ test('remote storage maps an EOF range response to an empty read', async (t) => 
   assert.deepEqual(await storage.readRange('world/file', 3, 1), new Uint8Array());
 });
 
+test('remote range reads slice ignored 200 responses and retain only requested bytes', async (t) => {
+  let partial = false;
+  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    assert.equal(new Headers(init?.headers).get('range'), 'bytes=3-4');
+    return new Response(new Uint8Array(partial ? [3, 4] : [0, 1, 2, 3, 4, 5, 6, 7]), { status: partial ? 206 : 200 });
+  });
+  const storage = new ServerWorldStorage({ url: 'https://example.test', token: 'test' });
+  for (partial of [false, true]) {
+    const bytes = (await storage.readRange('world/file', 3, 2))!;
+    assert.deepEqual(bytes, new Uint8Array([3, 4]));
+    assert.equal(bytes.buffer.byteLength, 2);
+  }
+});
+
 test('sync reuses source bytes when a same-size target file differs', async () => {
   const sourceBytes = new Uint8Array([1, 2, 3]);
   let sourceReads = 0;

@@ -49,7 +49,11 @@ export class ServerWorldStorage implements ObjectStorage {
     });
     if (response.status === 404) return null;
     if (response.status === 416) return (await this.stat(filePath)) ? new Uint8Array() : null;
-    return new Uint8Array(await (await this.required(response)).arrayBuffer());
+    const bytes = new Uint8Array(await (await this.required(response)).arrayBuffer());
+    // HTTP permits a server/proxy to ignore Range and return the complete 200
+    // representation. Preserve ObjectReader's slice/ownership contract in that case.
+    if (response.status === 200) return bytes.slice(start, start + length);
+    return bytes.length > length ? bytes.slice(0, length) : bytes;
   }
   async write(filePath: string, bytes: Uint8Array, contentType = 'application/octet-stream'): Promise<void> {
     await this.required(
