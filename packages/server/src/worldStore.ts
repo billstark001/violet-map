@@ -12,7 +12,7 @@ import { createMinimalLevelDat } from './levelDat.js';
 import { cleanStoragePath } from '@violet-map/storage';
 import { type StoredFileInfo } from '@violet-map/core/storage';
 import { ensureWorldIdentity, ScopedStorage } from '@violet-map/storage';
-import { isChunkCoordinate } from './chunkCoordinates.js';
+import { isChunkCoordinate } from '@violet-map/core/domain';
 
 export interface ChunkMetadata extends ChunkHashPayload {
   sourcePath?: string;

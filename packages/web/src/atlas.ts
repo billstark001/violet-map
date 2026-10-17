@@ -1,4 +1,5 @@
 import { resolveApiResourceUrl } from './runtime';
+import { normalizeId } from '@violet-map/core/domain';
 import { mapWithConcurrency } from '@violet-map/core/async';
 import {
   type AssetBundle,
@@ -93,15 +94,14 @@ export function collectTextureIds(bundle: AssetBundle, blockInfo: BlockInfoMap):
   const ids = new Set<string>();
   const models = new Set<string>();
   const seenModels = new Set<string>();
-  const normalize = (id: string) => (id.includes(':') ? id : `minecraft:${id}`);
   const add = (v: unknown) => {
     if (v && typeof v === 'object') v = (v as { sprite?: unknown }).sprite;
     if (typeof v !== 'string') return;
-    if (!v.startsWith('#')) ids.add(normalize(v));
+    if (!v.startsWith('#')) ids.add(normalizeId(v));
   };
   const addModel = (v: unknown) => {
     if (v && typeof v === 'object') v = (v as { model?: unknown }).model;
-    if (typeof v === 'string') models.add(normalize(v));
+    if (typeof v === 'string') models.add(normalizeId(v));
   };
   const collectBlockstateModels = (bs: any) => {
     if (bs?.variants) {
@@ -143,7 +143,7 @@ export function collectTextureIds(bundle: AssetBundle, blockInfo: BlockInfoMap):
     const model = bundle.models[id] as BlockModelJson | undefined;
     if (!model) return;
     if (model.textures) for (const v of Object.values(model.textures)) add(v);
-    if (typeof model.parent === 'string') visitModel(normalize(model.parent));
+    if (typeof model.parent === 'string') visitModel(normalizeId(model.parent));
   };
   for (const id of models) {
     visitModel(id);

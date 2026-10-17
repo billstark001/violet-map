@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Chunk parsing rejects out-of-range/duplicate section coordinates, oversized palettes and invalid chunk coordinates before height-dependent work, avoiding runaway loops on malformed archives. Resource namespace normalization and signed chunk-coordinate validation now have one shared implementation.
+
 - Media proxy responses evaluate conditional requests, HEAD, and unsatisfiable ranges before blob I/O; satisfiable ranges read only the requested bytes. Weak/list ETags and strong If-Range validators are handled correctly.
 
 - Database maintenance and direct admin imports retain their small runtime dependency set when media URL configuration is enabled; relocated maintenance artifacts no longer require storage or AWS packages.

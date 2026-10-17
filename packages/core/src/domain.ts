@@ -27,10 +27,9 @@ export interface DimensionDef {
 
 export type DimensionMap = Record<string, DimensionDef>;
 
-export function normalizeId(id: string): string {
-  return id.includes(':') ? id : `minecraft:${id}`;
-}
+export { normalizeId } from './resourceId.js';
 
 export * from './world.js';
 export * from './dimensionId.js';
 export * from './worldName.js';
+export * from './chunkCoordinate.js';

@@ -1,5 +1,13 @@
 import { toLongs, toBytes } from './binary.js';
-import { BlockStateRef, normalizeId } from '@violet-map/core/domain';
+import type { BlockStateRef } from './domain.js';
+import { normalizeId } from './resourceId.js';
+import { isChunkCoordinate } from './chunkCoordinate.js';
+
+const MIN_SECTION_Y = -128;
+const MAX_SECTION_Y = 127;
+const MAX_CHUNK_SECTIONS = MAX_SECTION_Y - MIN_SECTION_Y + 1;
+const BLOCKS_PER_SECTION = 16 ** 3;
+const BIOMES_PER_SECTION = 4 ** 3;
 
 const HEIGHTMAP_VALUES = 16 * 16;
 const MAX_HEIGHTMAP_BITS = 16;
@@ -327,26 +335,50 @@ function restoreHeightMap(col: ChunkColumn, value: unknown, minSectionY: unknown
   col.heightMapOffset = 0;
 }
 
-/** 解析 1.18+ 区块 NBT（simplify 后的对象）。 */
+function validatePalette(value: unknown, limit: number, kind: string): void {
+  if (value !== undefined && (!Array.isArray(value) || value.length < 1 || value.length > limit))
+    throw new Error(`Invalid ${kind} palette size`);
+}
+
+/** Parse simplified 1.18+ chunk NBT. Section Y is a signed byte and chunk
+ * coordinates are signed ints. Reject invalid palettes/ranges before allocating
+ * terrain or entering height-dependent loops; absent packed values remain zero. */
 export function parseChunkColumn(root: any): ChunkColumn {
+  if (!root || typeof root !== 'object' || Array.isArray(root)) throw new Error('Invalid chunk root');
   const r = root.Level ?? root;
-  if (!Array.isArray(r.sections)) {
+  if (!r || typeof r !== 'object' || !Array.isArray(r.sections)) {
     throw new Error('Unsupported chunk format: expected 1.18+ ("sections" tag missing)');
   }
-  const col = new ChunkColumn(r.xPos ?? 0, r.zPos ?? 0);
+  const x = r.xPos ?? 0,
+    z = r.zPos ?? 0;
+  if (!isChunkCoordinate(x) || !isChunkCoordinate(z)) throw new Error('Invalid chunk xPos/zPos');
+  if (r.sections.length > MAX_CHUNK_SECTIONS) throw new Error('Invalid chunk section count');
+  const col = new ChunkColumn(x, z);
   let first = true;
   for (const s of r.sections) {
     if (!s || typeof s !== 'object') throw new Error('Invalid chunk section');
     const sy: number = s.Y;
-    if (!Number.isInteger(sy)) throw new Error(`Invalid chunk section Y: ${String(sy)}`);
+    if (!Number.isInteger(sy) || sy < MIN_SECTION_Y || sy > MAX_SECTION_Y)
+      throw new Error(`Invalid chunk section Y: ${String(sy)}`);
+    if (col.sections.has(sy)) throw new Error(`Duplicate chunk section Y: ${sy}`);
     const bs = s.block_states;
+    validatePalette(bs?.palette, BLOCKS_PER_SECTION, 'block');
     const palette: BlockStateRef[] = bs?.palette
-      ? bs.palette.map((p: any) => ({ name: normalizeId(p.Name), properties: parseProps(p.Properties) }))
+      ? bs.palette.map((p: any) => {
+          if (!p || typeof p.Name !== 'string' || !p.Name) throw new Error('Invalid block palette entry');
+          return { name: normalizeId(p.Name), properties: parseProps(p.Properties) };
+        })
       : [AIR];
     const bits = Math.max(4, Math.ceil(Math.log2(palette.length)));
     const states = bs?.data ? new BitArray(bits, toLongs(bs.data)) : null;
 
-    const biomePalette: string[] = s.biomes?.palette ? s.biomes.palette.map(normalizeId) : ['minecraft:plains'];
+    validatePalette(s.biomes?.palette, BIOMES_PER_SECTION, 'biome');
+    const biomePalette: string[] = s.biomes?.palette
+      ? s.biomes.palette.map((name: unknown) => {
+          if (typeof name !== 'string' || !name) throw new Error('Invalid biome palette entry');
+          return normalizeId(name);
+        })
+      : ['minecraft:plains'];
     const bbits = Math.max(1, Math.ceil(Math.log2(biomePalette.length)));
     const biomeStates = s.biomes?.data ? new BitArray(bbits, toLongs(s.biomes.data)) : null;
 

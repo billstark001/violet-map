@@ -61,9 +61,31 @@ test('truncated packed arrays leave missing values at zero', () => {
   assert.throws(() => new BitArray(0, new BigUint64Array()), /bits/);
 });
 
-test('malformed section coordinates fail before an invisible chunk is accepted', () => {
-  assert.throws(() => parseChunkColumn({ sections: [{ Y: undefined }] }), /section Y/);
+test('malformed chunk ranges and palettes fail before height-dependent work', () => {
+  for (const Y of [undefined, NaN, Infinity, -129, 128, 1e12, 1.5])
+    assert.throws(() => parseChunkColumn({ sections: [{ Y }] }), /section Y/);
   assert.throws(() => parseChunkColumn({ sections: [null] }), /Invalid chunk section/);
+  assert.throws(() => parseChunkColumn(null), /Invalid chunk root/);
+  assert.throws(() => parseChunkColumn({ sections: [{ Y: 0 }, { Y: 0 }] }), /Duplicate/);
+  assert.throws(() => parseChunkColumn({ sections: Array(257).fill({ Y: 0 }) }), /section count/);
+  for (const xPos of [1.5, 0x80000000, -0x80000001, '1', NaN])
+    assert.throws(() => parseChunkColumn({ xPos, sections: [] }), /xPos\/zPos/);
+  const extremes = parseChunkColumn({ xPos: -0x80000000, zPos: 0x7fffffff, sections: [{ Y: -128 }, { Y: 127 }] });
+  assert.equal(extremes.minY, -2048);
+  assert.equal(extremes.maxY, 2048);
+  for (const palette of [[], {}, null, Array(4097).fill({ Name: 'stone' })])
+    assert.throws(() => parseChunkColumn({ sections: [{ Y: 0, block_states: { palette } }] }), /block palette/);
+  for (const entry of [null, {}, { Name: 1 }, { Name: '' }])
+    assert.throws(
+      () => parseChunkColumn({ sections: [{ Y: 0, block_states: { palette: [entry] } }] }),
+      /block palette/,
+    );
+  for (const palette of [[], Array(65).fill('plains'), [null], ['']])
+    assert.throws(() => parseChunkColumn({ sections: [{ Y: 0, biomes: { palette } }] }), /biome palette/);
+  // Light-only and absent packed arrays remain supported.
+  const sparse = parseChunkColumn({ sections: [{ Y: -4 }, { Y: 0, block_states: { palette: [{ Name: 'stone' }] } }] });
+  assert.equal(sparse.getBlock(0, 0, 0).name, 'minecraft:stone');
+  assert.equal(sparse.getBlock(0, -64, 0).name, 'minecraft:air');
 });
 
 test('canonical height maps restore negative heights, wrap local coordinates and tolerate light-only boundary sections', () => {
