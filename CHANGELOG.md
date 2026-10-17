@@ -36,6 +36,7 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 - Overlay media downloads cancel as soon as their pinned byte budget is exceeded, including responses without Content-Length. Upload/download readers share the same bounded streaming helper.
 - Admin actions report HTTP/network failures without unhandled promises, serialize duplicate submissions and cancel stale panel reads. Restricted browser storage is tolerated during language/session initialization.
 - World names reject `.` and `..` before storage access; `.` previously normalized to the entire worlds mount during direct deletion/synchronization. Server, CLI and content registration share this validation. Invalid creation metadata is rejected before partial writes, and encoded world names no longer shift uploaded file paths.
+- Local filesystem-root mounts now resolve children correctly; S3 listings normalize root-equivalent prefixes consistently. Metadata caches reuse canonical paths instead of retaining duplicate spellings.
 
 ### Changed
 
@@ -47,6 +48,7 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 - Viewer UI is split into view/settings/diagnostic panels and camera fields with CSS Modules. Shared world loading, capabilities, settings and diagnostics use signals; the canvas lives outside the UI tree. World-list failures can be retried, URL overrides remain session-local, and blank camera inputs no longer silently become zero.
 - Removed deprecated `WorldReader`/`WorldStorage`, world-named local/S3/cache/scope class aliases, `createWorldStorage`, and `AppServices.storage`. Consumers now use object-storage names and `services.mounts.worlds`; the distinct remote `ServerWorldStorage` protocol remains supported.
 - Admin is split into a small application shell, independent panels and shared async/session controls. Account menus show verified identity/role, check sessions and revoke user credentials on logout; destructive actions use retryable confirmation dialogs.
+- S3 prefix deletion uses up to four concurrent SDK `DeleteObjects` batches of at most 1000 keys, rather than one request per object. Per-object errors in HTTP-success responses reject the operation explicitly.
 
 ### Added
 

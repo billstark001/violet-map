@@ -87,6 +87,12 @@ test('local storage reads empty ranges and rejects invalid offsets', async () =>
   try {
     const storage = new LocalStorage(root);
     await storage.write('world/file', new Uint8Array([1, 2, 3]));
+    const filesystemRoot = path.parse(root).root;
+    const rooted = new LocalStorage(filesystemRoot);
+    assert.deepEqual(
+      await rooted.read(path.relative(filesystemRoot, path.join(root, 'world/file'))),
+      new Uint8Array([1, 2, 3]),
+    );
     await storage.write('world/nested/second', new Uint8Array([4]));
     assert.deepEqual(
       (await storage.list('world')).map((file) => file.path),

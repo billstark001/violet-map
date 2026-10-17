@@ -1,5 +1,6 @@
 import {
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
@@ -11,6 +12,9 @@ import { validateReadRange } from './range.js';
 import { forEachConcurrent } from '@violet-map/core/async';
 import type { S3StorageOptions } from '@violet-map/storage/types';
 import type { StoredFileInfo, ObjectStorage } from '@violet-map/core/storage';
+
+const DELETE_BATCH_SIZE = 1000;
+const DELETE_BATCH_CONCURRENCY = 4;
 
 function isMissingObject(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
@@ -64,6 +68,12 @@ export class S3Storage implements ObjectStorage {
     return !this.prefix ? key : key.startsWith(`${this.prefix}/`) ? key.slice(this.prefix.length + 1) : key;
   }
 
+  private listingPrefix(prefix: string): { relative: string; absolute: string } {
+    const clean = cleanStoragePath(prefix);
+    const relative = clean ? `${clean}/` : '';
+    return { relative, absolute: this.prefix ? `${this.prefix}/${relative}` : relative };
+  }
+
   async read(filePath: string): Promise<Uint8Array | null> {
     try {
       return bodyToBytes(
@@ -112,7 +122,22 @@ export class S3Storage implements ObjectStorage {
   }
   async deletePrefix(prefix: string): Promise<number> {
     const files = await this.list(prefix);
-    await forEachConcurrent(files, 16, (file) => this.delete(file.path));
+    const batches = Array.from({ length: Math.ceil(files.length / DELETE_BATCH_SIZE) }, (_, index) =>
+      files.slice(index * DELETE_BATCH_SIZE, (index + 1) * DELETE_BATCH_SIZE),
+    );
+    await forEachConcurrent(batches, DELETE_BATCH_CONCURRENCY, async (batch) => {
+      const result = await this.client.send(
+        new DeleteObjectsCommand({
+          Bucket: this.bucket,
+          Delete: { Quiet: true, Objects: batch.map((file) => ({ Key: this.key(file.path) })) },
+        }),
+      );
+      if (result.Errors?.length)
+        throw new AggregateError(
+          result.Errors.map((error) => new Error(`S3 object deletion failed: ${error.Code ?? 'UnknownError'}`)),
+          `S3 batch deletion failed for ${result.Errors.length} objects`,
+        );
+    });
     return files.length;
   }
 
@@ -133,8 +158,7 @@ export class S3Storage implements ObjectStorage {
 
   async list(prefix = ''): Promise<StoredFileInfo[]> {
     const files: StoredFileInfo[] = [];
-    const cleanPrefix = prefix ? `${cleanStoragePath(prefix).replace(/\/?$/, '')}/` : '';
-    const Prefix = this.prefix ? `${this.prefix}/${cleanPrefix}` : cleanPrefix;
+    const { absolute: Prefix } = this.listingPrefix(prefix);
     let ContinuationToken: string | undefined;
     do {
       const result = await this.client.send(
@@ -154,8 +178,7 @@ export class S3Storage implements ObjectStorage {
   }
 
   async listDirectories(prefix = ''): Promise<string[]> {
-    const cleanPrefix = prefix ? `${cleanStoragePath(prefix).replace(/\/?$/, '')}/` : '';
-    const Prefix = this.prefix ? `${this.prefix}/${cleanPrefix}` : cleanPrefix;
+    const { relative: cleanPrefix, absolute: Prefix } = this.listingPrefix(prefix);
     const dirs = new Set<string>();
     let ContinuationToken: string | undefined;
     do {

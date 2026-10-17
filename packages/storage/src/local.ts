@@ -25,7 +25,9 @@ export class LocalStorage implements ObjectStorage {
   private abs(filePath: string): string {
     const clean = cleanStoragePath(filePath);
     const abs = path.resolve(this.root, clean);
-    if (abs !== this.root && !abs.startsWith(`${this.root}${path.sep}`)) throw new Error('invalid storage path');
+    const relative = path.relative(this.root, abs);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+      throw new Error('invalid storage path');
     return abs;
   }
 

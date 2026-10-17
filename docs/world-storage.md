@@ -4,6 +4,8 @@
 
 World names are single directory segments containing ASCII letters, numbers, dot, dash or underscore; `.` and `..` are rejected. This is shared by server operations, CLI world synchronization and overlay registrations so a world cannot normalize to the mount root. Creation validates level names and every dimension before any write; malformed JSON/metadata returns HTTP 400 without leaving a partial world.
 
+S3 prefix deletion uses [bulk deletion](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html), which [R2 also supports](https://developers.cloudflare.com/r2/api/s3/api/). Each request contains at most 1000 keys and at most four requests run simultaneously; an HTTP 200 with per-key failures still rejects. Deletion is not transactional: completed keys remain deleted if another key/batch fails. Directory prefixes exclude same-name and sibling objects, including after normalization of `/` or `.` to the root.
+
 `ObjectReader`, `ObjectStorage`, and `AtomicObjectStorage` interfaces live in `@violet-map/core/storage`. Install the CLI optional peer `@violet-map/storage` alongside the CLI to synchronize worlds. The implementations have separate entries:
 
 1. `@violet-map/storage/local` — a filesystem root.

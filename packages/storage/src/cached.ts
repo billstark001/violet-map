@@ -1,5 +1,6 @@
 import type { StoredFileInfo, ObjectStorage } from '@violet-map/core/storage';
 import { LruCache } from '@violet-map/core/cache';
+import { cleanStoragePath } from './paths.js';
 
 export interface StorageCacheOptions {
   /** Cache metadata probes; defaults are intentionally short to tolerate external writers. */
@@ -108,14 +109,15 @@ export class CachedStorage implements ObjectStorage {
     return deleted;
   }
   stat(filePath: string) {
-    return this.cached('stat', this.stats, filePath, this.statTtlMs, () => this.storage.stat(filePath));
+    const key = cleanStoragePath(filePath);
+    return this.cached('stat', this.stats, key, this.statTtlMs, () => this.storage.stat(key));
   }
   list(prefix = '') {
-    return this.cached('list', this.lists, prefix, this.listTtlMs, () => this.storage.list(prefix));
+    const key = cleanStoragePath(prefix);
+    return this.cached('list', this.lists, key, this.listTtlMs, () => this.storage.list(key));
   }
   listDirectories(prefix = '') {
-    return this.cached('directories', this.directories, prefix, this.listTtlMs, () =>
-      this.storage.listDirectories(prefix),
-    );
+    const key = cleanStoragePath(prefix);
+    return this.cached('directories', this.directories, key, this.listTtlMs, () => this.storage.listDirectories(key));
   }
 }

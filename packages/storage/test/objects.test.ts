@@ -65,7 +65,7 @@ test('S3 directory prefixes never list or delete same-name or sibling objects; w
   };
   await storage.deletePrefix('a');
   assert.equal(calls[0].input.Prefix, 'physical/a/');
-  assert.equal(calls[1].input.Key, 'physical/a/file');
+  assert.deepEqual(calls[1].input.Delete, { Quiet: true, Objects: [{ Key: 'physical/a/file' }] });
   calls.length = 0;
   await storage.replace('head', bytes('{}'), 'application/json');
   assert.deepEqual(
@@ -107,4 +107,55 @@ test('metadata caches bound unique misses and total list items without changing 
   await cache.listDirectories('b');
   await cache.listDirectories('a');
   assert.equal(calls, 5, 'list item budgets apply across all cached prefixes');
+});
+
+test('canonical metadata keys coalesce equivalent directory and object paths', async () => {
+  let stats = 0,
+    lists = 0,
+    directories = 0;
+  const backend = {
+    kind: 'local',
+    stat: async () => {
+      stats++;
+      return null;
+    },
+    list: async () => {
+      lists++;
+      return [];
+    },
+    listDirectories: async () => {
+      directories++;
+      return [];
+    },
+  } as unknown as import('@violet-map/core/storage').ObjectStorage;
+  const cache = new CachedStorage(backend);
+  await Promise.all(['a/file', '/a//file', 'a/./file'].map((path) => cache.stat(path)));
+  await Promise.all(['', '/', '.'].map((path) => cache.list(path)));
+  await Promise.all(['a', '/a/', './a'].map((path) => cache.listDirectories(path)));
+  assert.deepEqual({ stats, lists, directories }, { stats: 1, lists: 1, directories: 1 });
+});
+
+test('S3 normalizes root-equivalent prefixes and reports per-object bulk errors', async () => {
+  const storage = new S3Storage({ bucket: 'test', prefix: 'physical' });
+  const prefixes: unknown[] = [];
+  let fail = false;
+  const client = storage as unknown as {
+    client: { send: (command: { constructor: { name: string }; input: Record<string, unknown> }) => Promise<unknown> };
+  };
+  client.client = {
+    send: async (command) => {
+      if (command.constructor.name === 'ListObjectsV2Command') {
+        prefixes.push(command.input.Prefix);
+        return { Contents: [{ Key: 'physical/file' }], CommonPrefixes: [{ Prefix: 'physical/directory/' }] };
+      }
+      return fail ? { Errors: [{ Key: 'physical/file', Code: 'AccessDenied' }] } : {};
+    },
+  };
+  for (const root of ['', '/', '.', './']) {
+    assert.equal((await storage.list(root))[0].path, 'file');
+    assert.deepEqual(await storage.listDirectories(root), ['directory']);
+  }
+  assert.ok(prefixes.every((prefix) => prefix === 'physical/'));
+  fail = true;
+  await assert.rejects(storage.deletePrefix(''), AggregateError);
 });
