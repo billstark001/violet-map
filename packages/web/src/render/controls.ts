@@ -56,7 +56,8 @@ export function clampFlyPitch(pitch: number): number {
   return Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, Number.isFinite(pitch) ? pitch : 0));
 }
 
-/** 指针锁定 + WASD/空格/Shift 的飞行控制。 */
+/** Pointer-lock flight with WASD, Space/Shift and Control acceleration. Call
+ * update with elapsed seconds; dispose disables movement and releases the lock. */
 export class FlyControls {
   private keys = new Set<string>();
   private enabled = true;
@@ -82,7 +83,12 @@ export class FlyControls {
     handleMovementKey(e, this.keys, FLY_KEYS);
   };
   private onClick = () => {
-    if (this.enabled) this.dom.requestPointerLock();
+    if (!this.enabled) return;
+    try {
+      void this.dom.requestPointerLock?.()?.catch(() => {});
+    } catch {
+      // Sandboxed or unsupported browsers can deny pointer lock synchronously.
+    }
   };
   private onBlur = () => {
     this.keys.clear();
@@ -179,6 +185,7 @@ export class FlyControls {
   }
 
   dispose() {
+    this.setEnabled(false);
     this.dom.removeEventListener('click', this.onClick);
     document.removeEventListener('mousemove', this.onMouseMove);
     document.removeEventListener('keydown', this.onKey);
@@ -187,7 +194,8 @@ export class FlyControls {
   }
 }
 
-/** 正交顶视图控制：锁定垂直俯视，只允许平移和缩放。 */
+/** Top-down pan/zoom for orthographic and perspective cameras. Drag ownership
+ * ends on pointer loss, blur, disable or dispose; update receives seconds. */
 export class TopDownControls {
   private keys = new Set<string>();
   private enabled = true;
@@ -227,6 +235,7 @@ export class TopDownControls {
   private readonly onPointerUp = (e: PointerEvent) => {
     if (e.pointerId === this.capturedPointerId) this.releasePointer();
   };
+  private readonly onLostPointer = () => this.releasePointer();
   private readonly onBlur = () => {
     this.keys.clear();
     this.releasePointer();
@@ -260,6 +269,7 @@ export class TopDownControls {
     dom.addEventListener('pointermove', this.onPointerMove);
     dom.addEventListener('pointerup', this.onPointerUp);
     dom.addEventListener('pointercancel', this.onPointerUp);
+    dom.addEventListener('lostpointercapture', this.onLostPointer);
     window.addEventListener('blur', this.onBlur);
   }
 
@@ -323,7 +333,7 @@ export class TopDownControls {
   }
 
   dispose() {
-    this.releasePointer();
+    this.setEnabled(false);
     document.removeEventListener('keydown', this.onKey);
     document.removeEventListener('keyup', this.onKey);
     this.dom.removeEventListener('wheel', this.onWheel);
@@ -331,6 +341,7 @@ export class TopDownControls {
     this.dom.removeEventListener('pointermove', this.onPointerMove);
     this.dom.removeEventListener('pointerup', this.onPointerUp);
     this.dom.removeEventListener('pointercancel', this.onPointerUp);
+    this.dom.removeEventListener('lostpointercapture', this.onLostPointer);
     window.removeEventListener('blur', this.onBlur);
   }
 

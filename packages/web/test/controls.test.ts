@@ -147,3 +147,46 @@ test('camera shortcuts prevent browser selection and scrolling without intercept
     Object.assign(globalThis, previous);
   }
 });
+
+test('control disposal stops held movement, releases locks and tolerates denied pointer lock', async () => {
+  const previous = { document: globalThis.document, window: globalThis.window, HTMLElement: globalThis.HTMLElement };
+  const events = new FakeEvents();
+  const canvas = new FakeElement('CANVAS');
+  let unlocked = 0;
+  const document = Object.assign(events, {
+    pointerLockElement: canvas as FakeElement | null,
+    exitPointerLock() {
+      unlocked++;
+      this.pointerLockElement = null;
+    },
+  });
+  Object.assign(globalThis, { document, window: new FakeEvents(), HTMLElement: FakeElement });
+  try {
+    const camera = new THREE.PerspectiveCamera();
+    const fly = new FlyControls(canvas as unknown as HTMLElement, camera);
+    canvas.requestPointerLock = () => Promise.reject(new Error('permission denied'));
+    canvas.emit('click');
+    await new Promise((resolve) => setImmediate(resolve));
+    events.emit('keydown', { code: 'KeyW', target: canvas });
+    fly.update(1);
+    const before = camera.position.clone();
+    fly.dispose();
+    fly.update(1);
+    assert.deepEqual(camera.position, before);
+    assert.equal(unlocked, 1);
+    const topCamera = new THREE.OrthographicCamera();
+    const top = new TopDownControls(canvas as unknown as HTMLElement, topCamera);
+    canvas.emit('pointerdown', { target: canvas, button: 0, pointerId: 7 });
+    canvas.releasePointerCapture(7);
+    canvas.emit('lostpointercapture', { pointerId: 7 });
+    const origin = topCamera.position.clone();
+    canvas.emit('pointermove', { pointerId: 7, movementX: 10, movementY: 10 });
+    assert.deepEqual(topCamera.position, origin);
+    events.emit('keydown', { code: 'KeyW', target: canvas });
+    top.dispose();
+    top.update(1);
+    assert.deepEqual(topCamera.position, origin);
+  } finally {
+    Object.assign(globalThis, previous);
+  }
+});
