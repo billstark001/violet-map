@@ -1099,6 +1099,10 @@ export class ChunkManager {
       return true;
     }
     void getCachedFull(cache.parts)
+      // Persistent storage is optional (private browsing, quota, blocked IDB).
+      // A read failure must take the normal worker path instead of retrying
+      // the same broken cache forever with no terrain on screen.
+      .catch(() => null)
       .then((hit) => {
         if (this.disposed) {
           this.finishActiveMesh();
@@ -1166,6 +1170,7 @@ export class ChunkManager {
       return true;
     }
     void getCachedLod({ ...cache.parts, step })
+      .catch(() => undefined)
       .then((hit) => {
         if (this.disposed) {
           this.finishActiveMesh();

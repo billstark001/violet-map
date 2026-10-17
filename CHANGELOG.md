@@ -31,6 +31,7 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 - Disconnected tunnels now union section-visibility connections correctly; duplicate connections previously carried into other bits and could hide reachable terrain.
 - Storage metadata caches now bound retained keys and aggregate list items, including negative lookups; long-running read-only servers no longer retain every path ever probed.
 - Legacy overworld entity sidecars resolve to `entities/` rather than rereading terrain from `region/`. Warm chunk reads reuse entity NBT and hashes, and world deletion releases cached region/header bytes immediately.
+- Unavailable or failing IndexedDB now falls back to worker meshing instead of repeatedly retrying a failed cache read with missing terrain.
 
 ### Changed
 
