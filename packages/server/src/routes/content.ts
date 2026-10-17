@@ -37,28 +37,34 @@ function documentResponse(c: Context, document: { revision: number }, created = 
 
 async function bytesResponse(c: Context, { version, read }: PublishedMedia) {
   const etag = `"${version.digest}"`;
-  c.header('etag', etag);
-  c.header('accept-ranges', 'bytes');
-  c.header('cache-control', 'private, max-age=0, must-revalidate');
-  c.header('content-type', version.mediaType);
-  c.header('x-content-type-options', 'nosniff');
-  c.header('content-security-policy', "default-src 'none'; style-src 'none'; sandbox");
+  const headers = {
+    etag,
+    'accept-ranges': 'bytes',
+    'cache-control': 'private, max-age=0, must-revalidate',
+    'content-type': version.mediaType,
+    'x-content-type-options': 'nosniff',
+    'content-security-policy': "default-src 'none'; style-src 'none'; sandbox",
+  };
   if (
     fresh({ 'if-none-match': c.req.header('if-none-match'), 'cache-control': c.req.header('cache-control') }, { etag })
   )
-    return c.body(null, 304);
+    return c.body(null, 304, headers);
   const ifRange = c.req.header('if-range');
   const header =
     c.req.method === 'GET' && (ifRange === undefined || ifRange === etag) ? c.req.header('range') : undefined;
   const range = header === undefined ? undefined : parseByteRange(header, version.bytes);
-  if (header !== undefined && !range) return c.body(null, 416, { 'content-range': `bytes */${version.bytes}` });
-  c.header('content-length', String(range ? range.end - range.start + 1 : version.bytes));
-  if (c.req.method === 'HEAD') return c.body(null, 200);
+  if (header !== undefined && !range)
+    return c.body(null, 416, { ...headers, 'content-range': `bytes */${version.bytes}` });
+  if (c.req.method === 'HEAD') return c.body(null, 200, { ...headers, 'content-length': String(version.bytes) });
   const body = await read(range ?? undefined);
   return c.body(
     body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer,
     range ? 206 : 200,
-    range ? { 'content-range': `bytes ${range.start}-${range.end}/${version.bytes}` } : undefined,
+    {
+      ...headers,
+      'content-length': String(body.byteLength),
+      ...(range ? { 'content-range': `bytes ${range.start}-${range.end}/${version.bytes}` } : {}),
+    },
   );
 }
 

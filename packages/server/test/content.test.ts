@@ -404,3 +404,33 @@ test('media import capacity is reserved before reading queued bodies; excess req
   assert.deepEqual(reads, [1, 1, 0]);
   assert.equal(imports.mock.callCount(), 2);
 });
+
+test('media read failures return JSON without stale representation length, MIME, validators or range headers', async (t) => {
+  const { app, content, services } = await fixture(t);
+  const asset = await content.importMedia(
+    Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>'),
+    'image/svg+xml',
+    'fixture',
+  );
+  const url = `/api/admin/media/${asset.document.assetId}/versions/${asset.version.versionId}/file`;
+  t.mock.method(services.mounts.blobs, 'read', async () => null);
+  t.mock.method(services.mounts.blobs, 'readRange', async () => new Uint8Array(1));
+  for (const extra of [{}, { range: 'bytes=0-3' }]) {
+    const response = await app.request(url, { headers: { authorization: 'Bearer test', ...extra } });
+    assert.equal(response.status, 503);
+    for (const header of ['content-length', 'content-range', 'etag', 'accept-ranges'])
+      assert.equal(response.headers.get(header), null, header);
+    assert.match(response.headers.get('content-type')!, /application\/json/);
+    assert.equal((await response.json()).code, 'CONTENT_BACKEND_UNAVAILABLE');
+  }
+  const preflight = await app.request(url, {
+    method: 'OPTIONS',
+    headers: {
+      origin: 'https://viewer.example',
+      'access-control-request-method': 'HEAD',
+      'access-control-request-headers': 'if-none-match,if-range',
+    },
+  });
+  assert.ok(preflight.headers.get('access-control-allow-methods')!.split(',').includes('HEAD'));
+  assert.match(preflight.headers.get('access-control-allow-headers')!, /If-Range/);
+});

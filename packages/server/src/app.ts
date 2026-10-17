@@ -30,7 +30,7 @@ export function createApp(config: ServerConfig, services: AppServices) {
           : config.server.cors.origins.includes(origin)
             ? origin
             : undefined,
-      allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowMethods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowHeaders: ['Authorization', 'Content-Type', 'Accept', 'Range', 'If-None-Match', 'If-Match', 'If-Range'],
       exposeHeaders: ['ETag', 'Content-Range', 'Accept-Ranges', 'Retry-After'],
       credentials: false,
