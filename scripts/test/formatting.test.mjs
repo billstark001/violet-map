@@ -46,3 +46,19 @@ test('Oxlint enforces top-level section padding while preserving import and vari
   assert.ok(result.includes("from 'node:fs';\nexport { stat }"), 'reexports remain grouped');
   assert.equal(run().status, 0);
 });
+
+test('benchmark preludes allow consecutive const helpers without relaxing function/import boundaries', async (t) => {
+  const file = path.join(project, 'scripts/bench', `padding-fixture-${process.pid}.ts`);
+  t.after(() => fs.rm(file, { force: true }));
+  const source =
+    "import assert from 'node:assert/strict';\n\nconst first = 1;\nconst helper = () => first;\nconst second = helper();\n\nassert.equal(second, first);\n";
+  await fs.writeFile(file, source);
+  const run = () =>
+    spawnSync(process.execPath, [path.join(project, 'node_modules/oxlint/bin/oxlint'), file], {
+      cwd: project,
+      encoding: 'utf8',
+    });
+  assert.equal(run().status, 0);
+  await fs.writeFile(file, source.replace("strict';\n\nconst", "strict';\nconst"));
+  assert.equal(run().status, 1);
+});
