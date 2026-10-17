@@ -13,6 +13,7 @@ import {
 } from '@violet-map/core/domain';
 import { mapWithConcurrency } from '@violet-map/core/async';
 import { LruCache } from '@violet-map/core/cache';
+import { parseRegionFileName } from '@violet-map/core/region';
 import { parseNbt } from '@violet-map/core/nbt';
 import { decodeRegionChunk, decompressNbt } from './nbtCodec.js';
 import { createMinimalLevelDat } from './levelDat.js';
@@ -39,7 +40,6 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
   const { invalidateTopMapManifest } = topMap;
 
   const DEFAULT_DIMS = ['minecraft:overworld'];
-  const REGION_RE = /^r\.(-?\d+)\.(-?\d+)\.mca$/;
   const CHUNK_RE = /^c\.(-?\d+)\.(-?\d+)\.nbt$/;
 
   interface WorldMeta {
@@ -205,7 +205,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
 
   async function prefixHasRegionFiles(prefix: string): Promise<boolean> {
     const files = await worldStorage.list(prefix);
-    return files.some((f) => REGION_RE.test(f.path.split('/').pop() ?? ''));
+    return files.some((f) => parseRegionFileName(f.path.split('/').pop() ?? '') !== null);
   }
 
   async function regionDir(world: string, dim: string): Promise<string> {
@@ -396,15 +396,15 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
   }
 
   function addDimensionFromPath(rest: string[], dims: Set<string>) {
-    if (rest[0] === 'region' && REGION_RE.test(rest.at(-1) ?? '')) dims.add('minecraft:overworld');
-    else if (rest[0] === 'DIM-1' && rest[1] === 'region' && REGION_RE.test(rest.at(-1) ?? ''))
+    if (rest[0] === 'region' && parseRegionFileName(rest.at(-1) ?? '') !== null) dims.add('minecraft:overworld');
+    else if (rest[0] === 'DIM-1' && rest[1] === 'region' && parseRegionFileName(rest.at(-1) ?? '') !== null)
       dims.add('minecraft:the_nether');
-    else if (rest[0] === 'DIM1' && rest[1] === 'region' && REGION_RE.test(rest.at(-1) ?? ''))
+    else if (rest[0] === 'DIM1' && rest[1] === 'region' && parseRegionFileName(rest.at(-1) ?? '') !== null)
       dims.add('minecraft:the_end');
     else if (rest[0] === 'chunks' && rest[1]) addEncodedDimension(rest[1], dims);
     else if (rest[0] === 'dimensions' && rest.length >= 5) {
       const regionIndex = rest.length - 2;
-      if (rest[regionIndex] === 'region' && REGION_RE.test(rest.at(-1) ?? '')) {
+      if (rest[regionIndex] === 'region' && parseRegionFileName(rest.at(-1) ?? '') !== null) {
         addEncodedDimension(`${rest[1]}:${rest.slice(2, regionIndex).join('/')}`, dims);
       }
     }
@@ -461,9 +461,8 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     const out = new Map<string, { x: number; z: number }>();
     for (const sub of dimensionRegionPaths(dim)) {
       for (const file of await worldStorage.list(`${world}/${sub}`)) {
-        const match = REGION_RE.exec(file.path.split('/').pop() ?? '');
-        if (!match) continue;
-        const item = { x: Number(match[1]), z: Number(match[2]) };
+        const item = parseRegionFileName(file.path.split('/').pop() ?? '');
+        if (!item) continue;
         out.set(`${item.x},${item.z}`, item);
       }
     }
@@ -482,9 +481,9 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     for (const sub of dimensionRegionPaths(dim)) {
       const prefix = `${world}/${sub}`;
       for (const file of await worldStorage.list(prefix)) {
-        const match = REGION_RE.exec(file.path.split('/').pop() ?? '');
-        if (!match) continue;
-        regionFiles.push({ path: file.path, x: Number(match[1]), z: Number(match[2]) });
+        const item = parseRegionFileName(file.path.split('/').pop() ?? '');
+        if (!item) continue;
+        regionFiles.push({ path: file.path, ...item });
       }
     }
     const masks = await mapWithConcurrency(regionFiles, MAX_PARALLEL_STORAGE_READS, async (file) => {
@@ -515,6 +514,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
       const match = CHUNK_RE.exec(file.path.split('/').pop() ?? '');
       if (!match) continue;
       const item = { cx: Number(match[1]), cz: Number(match[2]) };
+      if (!isChunkCoordinate(item.cx) || !isChunkCoordinate(item.cz)) continue;
       out.set(`${item.cx},${item.cz}`, item);
     }
     return [...out.values()].sort((a, b) => a.cx - b.cx || a.cz - b.cz);
@@ -718,7 +718,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
   }
 
   async function saveRegionFile(world: string, dim: string, name: string, bytes: Uint8Array): Promise<void> {
-    if (!REGION_RE.test(name)) throw new Error('invalid region file name');
+    if (!parseRegionFileName(name)) throw new Error('invalid region file name');
     const dir = await regionDir(world, dim);
     const filePath = `${dir}/${name}`;
     await worldStorage.write(filePath, bytes, 'application/octet-stream');

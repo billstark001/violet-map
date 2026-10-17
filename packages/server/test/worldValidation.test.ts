@@ -123,12 +123,20 @@ test('world discovery skips malformed encoded directories and metadata while ret
     'valid/chunks/%E0%A4%A/c.0.0.nbt',
     'valid/chunks/custom%3Aother/c.0.0.nbt',
     'valid/chunks/..%3Abad/c.0.0.nbt',
+    'valid/chunks/custom%3Aother/c.999999999999999999.0.nbt',
+    'invalid/region/r.99999999999999999999999.0.mca',
+    'valid/dimensions/custom/region/inner/region/r.67108864.0.mca',
   ])
     await storage.write(file, new Uint8Array(8192));
   await storage.write(
     'valid/.violet-map/world.json',
     new TextEncoder().encode(JSON.stringify({ dimensions: ['..:bad', 'custom:valid'] })),
   );
+  assert.deepEqual(await services.worldStore.listRegions('valid', 'custom:region/inner'), [{ x: 0, z: 0 }]);
+  assert.deepEqual(await services.worldStore.listChunkSourceCoverage('valid', 'custom:other'), {
+    regions: [],
+    chunks: [{ cx: 0, cz: 0 }],
+  });
   assert.deepEqual(await services.worldStore.listWorlds(), [
     { id: 'valid', dimensions: ['custom:other', 'custom:region/inner', 'custom:valid'] },
   ]);

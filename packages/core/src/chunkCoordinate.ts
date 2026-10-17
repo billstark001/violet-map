@@ -10,3 +10,13 @@ export interface ChunkCoordinate {
 export function isChunkCoordinate(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= MIN_CHUNK_COORD && value <= MAX_CHUNK_COORD;
 }
+
+/** A region groups 32 signed-int chunk positions along each axis. */
+export function isRegionCoordinate(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= MIN_CHUNK_COORD >> 5 &&
+    value <= MAX_CHUNK_COORD >> 5
+  );
+}

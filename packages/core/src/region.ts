@@ -1,8 +1,20 @@
 import * as pako from 'pako';
+import { isRegionCoordinate } from './chunkCoordinate.js';
 
 const REGION_HEADER_BYTES = 8192;
 const REGION_SECTOR_BYTES = 4096;
 const REGION_SIDE_CHUNKS = 32;
+
+const REGION_FILE_NAME = /^r\.(-?\d+)\.(-?\d+)\.mca$/;
+
+/** Parse an Anvil basename within the signed-int chunk coordinate space. */
+export function parseRegionFileName(name: string): { x: number; z: number } | null {
+  const match = REGION_FILE_NAME.exec(name);
+  if (!match) return null;
+  const x = Number(match[1]),
+    z = Number(match[2]);
+  return isRegionCoordinate(x) && isRegionCoordinate(z) ? { x, z } : null;
+}
 
 export interface RegionChunkRecord {
   /** Anvil compression id: gzip, zlib or uncompressed NBT. */

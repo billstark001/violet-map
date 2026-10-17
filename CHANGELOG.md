@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Region discovery and uploads share bounded Anvil filename parsing; impossible region/chunk filenames no longer produce unsafe coverage coordinates.
+
 - Object synchronization hashes byte views directly instead of copying both complete objects before WebCrypto; shared backing remains supported with an explicit ordinary-buffer copy.
 
 - Chunk deletion validates the entire batch before touching storage, preventing malformed later entries from causing partial deletion followed by an error.
