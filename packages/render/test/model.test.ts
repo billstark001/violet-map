@@ -86,3 +86,24 @@ test('texture variables may use prototype names without breaking inheritance or 
     ['test:child_texture', 'test:parent_proto', MISSING_TEXTURE],
   );
 });
+
+test('registered models reuse baked variants across entity instances and block states', () => {
+  const bundle: AssetBundle = {
+    blockstates: { 'minecraft:test': { variants: { '': { model: 'minecraft:block/test' } } } },
+    models: {
+      'minecraft:block/test': {
+        elements: [{ from: [0, 0, 0], to: [8, 16, 16], faces: { up: { texture: 'minecraft:block/stone' } } }],
+      },
+    },
+  };
+  const baker = new ModelBaker(bundle);
+  const quads = baker.getModelQuads('block/test');
+  const original = quads[0].positions.slice();
+  assert.equal(baker.getModelQuads('minecraft:block/test'), quads);
+  assert.equal(baker.getQuads({ name: 'minecraft:test', properties: {} }, 0), quads);
+  const rotated = baker.getModelQuads('block/test', 90);
+  assert.notEqual(rotated, quads);
+  assert.equal(baker.getModelQuads('block/test', 90), rotated);
+  assert.notDeepEqual(rotated[0].positions, original);
+  assert.deepEqual(quads[0].positions, original);
+});

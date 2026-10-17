@@ -274,9 +274,9 @@ export class ModelBaker {
   }
 
   /** Bake a registered entity model using the block-model dialect. Rotations
-   * are quarter turns expressed in degrees. */
+   * are quarter turns expressed in degrees; returned quads share the cache. */
   getModelQuads(model: string, rotationY = 0, rotationX = 0, uvlock = false): BakedQuad[] {
-    return this.bake(normalizeId(model), (rotationX / 90) & 3, (rotationY / 90) & 3, uvlock);
+    return this.bakeVariant({ model: normalizeId(model), x: rotationX, y: rotationY, uvlock });
   }
 
   private build(state: BlockStateRef): WeightedQuads[] {
