@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readLimitedBody } from '../src/limitedBody.js';
+import { readLimitedBody } from '../src/http.js';
 
 test('body reader accepts the exact limit and rejects overflow without buffering the rest', async () => {
   const exact = new Request('http://localhost/', { method: 'POST', body: new Uint8Array([1, 2, 3]) });
@@ -32,5 +32,33 @@ test('declared oversized bodies are rejected before reading', async () => {
     headers: { 'content-length': '100' },
   });
   assert.equal(await readLimitedBody(request, 3), null);
-  assert.equal(request.bodyUsed, false);
+  assert.equal(request.bodyUsed, true);
+});
+
+test('response bodies share the limit, cancel on overflow and release failed readers', async () => {
+  let cancelled = 0;
+  const response = new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+      },
+      cancel() {
+        cancelled++;
+      },
+    }),
+  );
+  assert.equal(await readLimitedBody(response, 2), null);
+  assert.equal(cancelled, 1);
+  assert.equal(response.body!.locked, false);
+  const failed = new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.error(new Error('network disconnected'));
+      },
+    }),
+  );
+  await assert.rejects(readLimitedBody(failed, 2), /disconnected/);
+  assert.equal(failed.body!.locked, false);
+  assert.deepEqual(await readLimitedBody(new Response(null), 0), new Uint8Array());
+  await assert.rejects(readLimitedBody(new Response(null), -1), RangeError);
 });

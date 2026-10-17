@@ -105,6 +105,23 @@ test('media failures and download limits fail before optional loaders, preservin
     /download limit/,
   );
   assert.equal(requests, 1);
+  let cancelled = false;
+  globalThis.fetch = async () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(version.bytes + 1));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+    );
+  await assert.rejects(
+    loadOverlayMedia(version, '/api/maps/m/media/a/v', new AbortController().signal, 4096),
+    /digest\/size/,
+  );
+  assert.equal(cancelled, true);
   globalThis.fetch = async () => new Response(null, { status: 503 });
   await assert.rejects(
     loadOverlayMedia(version, '/api/maps/m/media/a/v', new AbortController().signal, 4096),

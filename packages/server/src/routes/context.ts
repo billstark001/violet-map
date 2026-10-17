@@ -7,7 +7,7 @@ import { decode, encode } from '@msgpack/msgpack';
 import { parseByteRange } from '../httpRange.js';
 import { ChunkReadLimiter, ChunkServiceBusyError } from '../chunkReadLimiter.js';
 import { isChunkCoordinate, parseChunkCoordinates } from '../chunkCoordinates.js';
-import { readLimitedBody } from '../limitedBody.js';
+import { readLimitedBody } from '@violet-map/core/http';
 import { isDimensionId } from '@violet-map/core/domain';
 import { REQUIRED_ROLE } from '../auth.js';
 import { cleanStoragePath } from '@violet-map/storage';

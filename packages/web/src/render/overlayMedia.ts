@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { MediaFeature, MediaVersion } from '@violet-map/core/overlays';
 import { resolveApiResourceUrl } from '../runtime';
 import type { DisposableOverlayResource } from './overlayResources';
+import { readLimitedBody } from '@violet-map/core/http';
 
 export interface OverlayMediaResource extends DisposableOverlayResource {
   instantiate(feature: MediaFeature): THREE.Object3D;
@@ -275,10 +276,12 @@ export async function loadOverlayMedia(
     redirect: 'error',
   });
   if (!response.ok) throw new Error(`media ${version.assetId}/${version.versionId}: HTTP ${response.status}`);
-  const buffer = await response.arrayBuffer();
+  const bytes = await readLimitedBody(response, version.bytes);
   abort(signal);
-  if (buffer.byteLength !== version.bytes || (await digest(buffer)) !== version.digest)
+  if (!bytes || bytes.byteLength !== version.bytes)
     throw new Error('media digest/size does not match its pinned version');
+  const buffer = bytes.buffer as ArrayBuffer;
+  if ((await digest(buffer)) !== version.digest) throw new Error('media digest/size does not match its pinned version');
   abort(signal);
   if (version.mediaType !== 'model/gltf-binary') return imageResource(buffer, version, signal, maxTextureSize);
   validateStaticGlb(buffer);

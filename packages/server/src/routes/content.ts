@@ -3,7 +3,7 @@ import { ContentValidationError, revisionTag } from '@violet-map/core/overlays';
 import { ContentError } from '../content.js';
 import type { ServerConfig } from '../configuration.js';
 import type { AppServices } from '../serviceTypes.js';
-import { readLimitedBody } from '../limitedBody.js';
+import { readLimitedBody } from '@violet-map/core/http';
 import { parseByteRange } from '../httpRange.js';
 import { createHash } from 'node:crypto';
 
