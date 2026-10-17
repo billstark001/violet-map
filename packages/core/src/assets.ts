@@ -1,5 +1,7 @@
 export type Direction = 'down' | 'up' | 'north' | 'south' | 'west' | 'east';
 
+export { applyBlockInfoOverrides, createBlockInfoMap, type BlockDefinition } from './blockInfo.js';
+
 export type RenderLayer =
   | 'opaque'
   | 'opaqueTiled'

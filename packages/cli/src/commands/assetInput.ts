@@ -1,3 +1,4 @@
+import { applyBlockInfoOverrides, createBlockInfoMap } from '@violet-map/core/assets';
 import { defaultDataUrl } from '@violet-map/core/defaults';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -161,34 +162,10 @@ export function loadMinecraftData(version = process.env.MC_DATA_VERSION ?? proce
   }
 }
 
-export function applyBlockInfoOverrides(map: BlockInfoMap, overrides: Record<string, Partial<BlockInfo>>) {
-  for (const [pattern, patch] of Object.entries(overrides)) {
-    if (pattern.includes('*')) {
-      const re = new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
-      for (const key of Object.keys(map)) if (re.test(key)) Object.assign(map[key], patch);
-    } else {
-      map[pattern] = {
-        ...(map[pattern] ?? { occludes: false, emit: 0, filter: 0, layer: 'cutout', tint: 'none' }),
-        ...patch,
-      };
-    }
-  }
-}
-
 export async function loadBlockInfo(file?: string): Promise<BlockInfoMap | undefined> {
   if (file) return JSON.parse(await fs.readFile(resolvePath(file), 'utf8')) as BlockInfoMap;
   const data = loadMinecraftData();
-  const map: BlockInfoMap = {};
-  for (const block of data.blocksArray) {
-    const transparent = block.transparent === true;
-    map[`minecraft:${block.name}`] = {
-      occludes: !transparent && block.boundingBox === 'block',
-      emit: block.emitLight ?? 0,
-      filter: block.filterLight ?? (transparent ? 0 : 15),
-      layer: transparent ? 'cutout' : 'opaque',
-      tint: 'none',
-    };
-  }
+  const map = createBlockInfoMap(data.blocksArray);
   const overrides = await readJsonFirst<Record<string, Partial<BlockInfo>>>(dataFileCandidates('block-overrides.json'));
   if (overrides) applyBlockInfoOverrides(map, overrides);
   return map;

@@ -7,7 +7,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import minecraftData from 'minecraft-data';
 import { BiomeMap, DimensionMap } from '@violet-map/core/domain';
-import { BlockInfo, BlockInfoMap } from '@violet-map/core/assets';
+import {
+  applyBlockInfoOverrides,
+  createBlockInfoMap,
+  type BlockInfo,
+  type BlockInfoMap,
+} from '@violet-map/core/assets';
 
 export function createGameDataService(config: ServerConfig, assets: AssetService, overrides?: AtomicObjectStorage) {
   const { buildAssetBundle } = assets;
@@ -138,29 +143,9 @@ export function createGameDataService(config: ServerConfig, assets: AssetService
       } catch {
         // Asset bundle is only used to pick a closer minecraft-data version.
       }
-      const map: BlockInfoMap = {};
-      for (const b of d.blocksArray) {
-        const transparent = b.transparent === true;
-        map[`minecraft:${b.name}`] = {
-          occludes: !transparent && b.boundingBox === 'block',
-          emit: b.emitLight ?? 0,
-          filter: b.filterLight ?? (transparent ? 0 : 15),
-          layer: transparent ? 'cutout' : 'opaque',
-          tint: 'none',
-        };
-      }
+      const map = createBlockInfoMap(d.blocksArray);
       const overrides = await readDataFile<Record<string, Partial<BlockInfo>>>('block-overrides.json');
-      for (const [pattern, patch] of Object.entries(overrides)) {
-        if (pattern.includes('*')) {
-          const re = new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
-          for (const key of Object.keys(map)) if (re.test(key)) Object.assign(map[key], patch);
-        } else {
-          map[pattern] = {
-            ...(map[pattern] ?? { occludes: false, emit: 0, filter: 0, layer: 'cutout', tint: 'none' }),
-            ...patch,
-          };
-        }
-      }
+      applyBlockInfoOverrides(map, overrides);
       if (generation === dataGeneration) blockInfoCache = map;
       return map;
     })();
