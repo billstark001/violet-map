@@ -19,7 +19,16 @@ class FakeEvents {
   }
 
   emit(type: string, event: Record<string, unknown> = {}) {
-    for (const handler of this.handlers.get(type) ?? []) handler({ type, ...event });
+    const dispatched = {
+      type,
+      defaultPrevented: false,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+      ...event,
+    };
+    for (const handler of this.handlers.get(type) ?? []) handler(dispatched);
+    return dispatched;
   }
 }
 
@@ -90,5 +99,50 @@ test('camera controls clear movement keys released over an input', () => {
       window: previousWindow,
       HTMLElement: previousElement,
     });
+  }
+});
+
+test('camera shortcuts prevent browser selection and scrolling without intercepting text editing', () => {
+  const previous = { document: globalThis.document, window: globalThis.window, HTMLElement: globalThis.HTMLElement };
+  const documentEvents = new FakeEvents();
+  const canvas = new FakeElement('CANVAS');
+  Object.assign(globalThis, {
+    document: Object.assign(documentEvents, { pointerLockElement: null }),
+    window: new FakeEvents(),
+    HTMLElement: FakeElement,
+  });
+  try {
+    for (const create of [
+      () => new FlyControls(canvas as unknown as HTMLElement, new THREE.PerspectiveCamera()),
+      () => new TopDownControls(canvas as unknown as HTMLElement, new THREE.OrthographicCamera()),
+    ]) {
+      const controls = create();
+      try {
+        for (const modifiers of [{ ctrlKey: true }, { shiftKey: true }, {}]) {
+          assert.equal(
+            documentEvents.emit('keydown', { code: 'KeyA', target: canvas, ...modifiers }).defaultPrevented,
+            true,
+          );
+        }
+        for (const tag of ['INPUT', 'TEXTAREA', 'SELECT', 'DIV']) {
+          const target = new FakeElement(tag);
+          if (tag === 'DIV') target.isContentEditable = true;
+          assert.equal(documentEvents.emit('keydown', { code: 'KeyA', target, ctrlKey: true }).defaultPrevented, false);
+        }
+        assert.equal(
+          documentEvents.emit('keydown', { code: 'KeyC', target: canvas, ctrlKey: true }).defaultPrevented,
+          false,
+        );
+        controls.setEnabled(false);
+        assert.equal(
+          documentEvents.emit('keydown', { code: 'KeyA', target: canvas, ctrlKey: true }).defaultPrevented,
+          false,
+        );
+      } finally {
+        controls.dispose();
+      }
+    }
+  } finally {
+    Object.assign(globalThis, previous);
   }
 });

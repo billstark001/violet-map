@@ -24,6 +24,10 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ## [Unreleased]
 
+### Fixed
+
+- Camera movement consumes browser selection/scroll shortcuts outside editable controls, including Ctrl+A on Windows; right Control and Shift now match their left-hand counterparts.
+
 ## [0.2.0] - 2026-10-17
 
 ### Added

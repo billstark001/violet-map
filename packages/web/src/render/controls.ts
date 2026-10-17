@@ -17,10 +17,27 @@ export interface TopView {
 
 export type TopDownCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 
+const HORIZONTAL_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD'];
+const FAST_KEYS = ['ControlLeft', 'ControlRight'];
+const FLY_KEYS = new Set([...HORIZONTAL_KEYS, ...FAST_KEYS, 'Space', 'ShiftLeft', 'ShiftRight']);
+const TOP_KEYS = new Set([...HORIZONTAL_KEYS, ...FAST_KEYS, 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName.toLowerCase();
   return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
+}
+
+/** Consume only camera keys, preserving editing shortcuts and clearing releases
+ * even when focus moved into an input while the key was held. */
+function handleMovementKey(e: KeyboardEvent, keys: Set<string>, supported: ReadonlySet<string>): void {
+  if (e.type === 'keyup') {
+    keys.delete(e.code);
+    return;
+  }
+  if (!supported.has(e.code) || isEditableTarget(e.target)) return;
+  e.preventDefault();
+  keys.add(e.code);
 }
 
 export function normalizeFlyYaw(yaw: number): number {
@@ -56,8 +73,7 @@ export class FlyControls {
   };
   private onKey = (e: KeyboardEvent) => {
     if (!this.enabled) return;
-    if (e.type === 'keyup') this.keys.delete(e.code);
-    else if (!isEditableTarget(e.target)) this.keys.add(e.code);
+    handleMovementKey(e, this.keys, FLY_KEYS);
   };
   private onClick = () => {
     if (this.enabled) this.dom.requestPointerLock();
@@ -85,7 +101,7 @@ export class FlyControls {
   update(dt: number) {
     if (!this.enabled) return;
     this.camera.rotation.set(this.pitch, this.yaw, 0);
-    const multiplier = this.keys.has('ControlLeft') ? this.fastMultiplier : 1;
+    const multiplier = this.keys.has('ControlLeft') || this.keys.has('ControlRight') ? this.fastMultiplier : 1;
     const speed = this.baseSpeed * multiplier;
     this.forward.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     this.right.set(-this.forward.z, 0, this.forward.x);
@@ -95,7 +111,7 @@ export class FlyControls {
     if (this.keys.has('KeyD')) this.move.add(this.right);
     if (this.keys.has('KeyA')) this.move.sub(this.right);
     if (this.keys.has('Space')) this.move.y += 1;
-    if (this.keys.has('ShiftLeft')) this.move.y -= 1;
+    if (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) this.move.y -= 1;
 
     if (!this.inertiaEnabled) {
       this.velocity.set(0, 0, 0);
@@ -176,8 +192,7 @@ export class TopDownControls {
   private readonly move = new THREE.Vector3();
   private readonly onKey = (e: KeyboardEvent) => {
     if (!this.enabled) return;
-    if (e.type === 'keyup') this.keys.delete(e.code);
-    else if (!isEditableTarget(e.target)) this.keys.add(e.code);
+    handleMovementKey(e, this.keys, TOP_KEYS);
   };
   private readonly onWheel = (e: WheelEvent) => {
     if (!this.enabled) return;
@@ -245,7 +260,7 @@ export class TopDownControls {
   update(dt: number) {
     if (!this.enabled) return;
     this.lockTopDown();
-    const multiplier = this.keys.has('ControlLeft') ? this.fastMultiplier : 1;
+    const multiplier = this.keys.has('ControlLeft') || this.keys.has('ControlRight') ? this.fastMultiplier : 1;
     this.move.set(0, 0, 0);
     if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) this.move.z -= 1;
     if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) this.move.z += 1;
