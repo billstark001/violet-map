@@ -33,3 +33,4 @@ export * from './world.js';
 export * from './dimensionId.js';
 export * from './worldName.js';
 export * from './chunkCoordinate.js';
+export { parseBiomeMap } from './biomes.js';

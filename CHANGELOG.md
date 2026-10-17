@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Biome edits validate finite climate values, complete RGB effects and supported modifiers before publication, and use bounded JSON reads; rejected edits leave the last usable data intact.
+
 - World sync diff JSON is bounded by the configured upload budget and validates every file entry/path before starting remote hashes; malformed requests return 400/413 without backend work.
 
 - Local storage adopts exclusive filesystem read buffers instead of copying large files twice; pooled and short-read buffers are trimmed to exact-size owned arrays.
