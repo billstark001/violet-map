@@ -70,7 +70,10 @@ export function mountContent(app: Hono, config: ServerConfig, services: AppServi
   routes.get('/api/maps/:id/overlays', async (c) => {
     const dimension = c.req.query('dimension');
     if (!dimension) throw new ContentValidationError('dimension is required');
-    const manifest = await content.manifest(c.req.param('id'), dimension);
+    const delivery = c.req.query('delivery') ?? 'proxy';
+    if (delivery !== 'proxy' && delivery !== 'public')
+      throw new ContentValidationError('delivery must be proxy or public');
+    const manifest = await content.manifest(c.req.param('id'), dimension, delivery);
     const body = JSON.stringify(manifest);
     const etag = `"${createHash('sha256').update(body).digest('hex')}"`;
     c.header('etag', etag);

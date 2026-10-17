@@ -18,6 +18,17 @@ test('configuration validates values, names, secrets, and authentication combina
   assert.throws(() => load({ AUTH_MODE: 'static', STATIC_API_TOKEN: 'secret' }), /conflicts/);
   assert.equal(load({ ADMIN_API_ENABLED: 'false' }).features.worldWrites, false);
   assert.throws(() => load({ DEPLOYMENT_PROFILE: 'toString' }), /public, sync, or full/);
+  assert.equal(
+    load({ MEDIA_PUBLIC_BASE_URL: 'https://media.example/blobs' }).content.mediaPublicBaseUrl,
+    'https://media.example/blobs',
+  );
+  for (const value of [
+    'file:///tmp/blobs',
+    '//media.example',
+    'https://user:password@media.example',
+    'https://media.example/?token=1',
+  ])
+    assert.throws(() => load({ MEDIA_PUBLIC_BASE_URL: value }));
 });
 
 test('YAML paths use the file directory, environment paths use cwd, aliases must agree', async (t) => {

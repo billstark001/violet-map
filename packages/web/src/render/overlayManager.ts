@@ -15,11 +15,11 @@ import {
   normalizeContentDimension,
   parseOverlayManifest,
   type CurveFeature,
-  type MediaVersion,
+  type OverlayMediaReference,
   type OverlayFeature,
   type OverlayManifest,
 } from '@violet-map/core/overlays';
-import { apiFetch } from '../runtime';
+import { apiFetch, mediaDelivery } from '../runtime';
 import { log } from '../logger';
 import type { SharedUniforms } from './materials';
 import { OverlayMask, createMaskMaterial } from './overlayMask';
@@ -79,7 +79,7 @@ export class OverlayManager {
   private readonly mask: OverlayMask;
   private readonly records = new Map<string, RecordBase>();
   private pool = new OverlayResourcePool<OverlayMediaResource>();
-  private media = new Map<string, { version: MediaVersion; url: string }>();
+  private media = new Map<string, OverlayMediaReference>();
   private readonly lights = new THREE.Group();
   private readonly hemisphere = new THREE.HemisphereLight(0xffffff, 0x888899, 1);
   private readonly sun = new THREE.DirectionalLight(0xffffff, 2);
@@ -145,7 +145,7 @@ export class OverlayManager {
     this.loading = true;
     try {
       const response = await (this.dependencies.manifest ?? apiFetch)(
-        `api/maps/${encodeURIComponent(mapId)}/overlays?dimension=${encodeURIComponent(dimension)}`,
+        `api/maps/${encodeURIComponent(mapId)}/overlays?dimension=${encodeURIComponent(dimension)}&delivery=${mediaDelivery.value}`,
         { signal: controller.signal, headers: this.etag ? { 'if-none-match': this.etag } : undefined },
       );
       if (controller.signal.aborted || generation !== this.generation || this.disposed) return;
@@ -438,8 +438,7 @@ export class OverlayManager {
       if (!item) throw new Error('unknown pinned media version');
       const lease = this.pool.acquire(`${feature.assetId}/${feature.versionId}`, (signal) =>
         (this.dependencies.media ?? loadOverlayMedia)(
-          item.version,
-          item.url,
+          mediaDelivery.value === 'public' ? item : { version: item.version, url: item.url },
           signal,
           renderer.capabilities.maxTextureSize,
         ),

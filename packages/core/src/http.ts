@@ -37,3 +37,13 @@ export async function readLimitedBody(
   }
   return bytes;
 }
+
+/** Validate an absolute HTTP(S) resource URL without credentials or a fragment. */
+export function publicResourceUrl(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 8192 || !/^https?:\/\//.test(value))
+    throw new TypeError('public resource URL must be absolute HTTP(S)');
+  const url = new URL(value);
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash)
+    throw new TypeError('public resource URL must not contain credentials or a fragment');
+  return url.href;
+}

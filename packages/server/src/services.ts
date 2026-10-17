@@ -3,7 +3,7 @@ import type { ServerConfig } from './configuration.js';
 import type { AppServices } from './serviceTypes.js';
 import { createStorageMounts } from './storage.js';
 import { ContentService } from './content.js';
-import { ScopedStorage } from '@violet-map/storage';
+import { ScopedStorage, createPublicObjectUrl } from '@violet-map/storage';
 import { createAssetService } from './assets.js';
 import { createGameDataService } from './gameData.js';
 import { createTopMapService } from './topMap.js';
@@ -20,7 +20,13 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
   const mounts = await createStorageMounts(config);
   const storage = mounts.worlds;
   const content =
-    mounts.content && mounts.blobs ? new ContentService(mounts.content, mounts.blobs, storage) : undefined;
+    mounts.content && mounts.blobs
+      ? new ContentService(mounts.content, mounts.blobs, storage, {
+          publicMediaUrl: config.content.mediaPublicBaseUrl
+            ? createPublicObjectUrl(config.content.mediaPublicBaseUrl)
+            : undefined,
+        })
+      : undefined;
   const assets = createAssetService(config);
   const gameData = createGameDataService(
     config,

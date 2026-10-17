@@ -108,6 +108,7 @@ export interface ServiceCapabilities {
 export interface FrontendRuntimeConfig {
   apiBaseUrl?: string;
   capabilityFallback?: 'legacy' | 'error';
+  mediaDelivery?: 'proxy' | 'public';
 }
 
 export function asCreatableRole(value: unknown): CreatableRole | undefined {
@@ -151,12 +152,14 @@ export function parseFrontendRuntimeConfig(value: unknown): FrontendRuntimeConfi
     throw new Error('runtime-config.json must be an object');
   const config = value as Record<string, unknown>;
   for (const key of Object.keys(config))
-    if (!['apiBaseUrl', 'capabilityFallback'].includes(key))
+    if (!['apiBaseUrl', 'capabilityFallback', 'mediaDelivery'].includes(key))
       throw new Error(`unknown runtime configuration field: ${key}`);
   if (config.apiBaseUrl !== undefined && typeof config.apiBaseUrl !== 'string')
     throw new Error('apiBaseUrl must be a string');
   if (config.capabilityFallback !== undefined && !['legacy', 'error'].includes(String(config.capabilityFallback)))
     throw new Error('capabilityFallback must be legacy or error');
+  if (config.mediaDelivery !== undefined && !['proxy', 'public'].includes(String(config.mediaDelivery)))
+    throw new Error('mediaDelivery must be proxy or public');
   return config as FrontendRuntimeConfig;
 }
 

@@ -24,6 +24,7 @@ async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
       WORLDS_DIR: path.join(root, 'worlds'),
       DATA_DIR: root,
       CACHE_PREWARM: 'false',
+      MEDIA_PUBLIC_BASE_URL: 'https://media.example/blobs/',
     },
     cwd: root,
   });
@@ -101,6 +102,13 @@ test('HTTP content lifecycle uses conditional revisions, public scope, restart a
   };
   await content.replaceLayer(doc.layerId, { ...doc, revision: 3, features: [feature] }, 2);
   const loaded = await content.manifest(map.mapId, 'overworld');
+  assert.equal(loaded.media[0].publicUrl, undefined);
+  const publicManifest = await (
+    await request(`/api/maps/${map.mapId}/overlays?dimension=overworld&delivery=public`)
+  ).json();
+  assert.equal(publicManifest.media[0].publicUrl, `https://media.example/blobs/${asset.version.blob}`);
+  assert.equal(publicManifest.media[0].url, loaded.media[0].url);
+  assert.equal((await request(`/api/maps/${map.mapId}/overlays?dimension=overworld&delivery=unknown`)).status, 400);
   const file = await request(loaded.media[0].url);
   assert.equal(file.status, 200);
   assert.equal(file.headers.get('content-type'), 'image/svg+xml');

@@ -92,13 +92,12 @@ test('media failures and download limits fail before optional loaders, preservin
     mediaType: 'image/png',
   } as MediaVersion;
   await assert.rejects(
-    loadOverlayMedia(version, '/api/maps/m/media/a/v', new AbortController().signal, 4096),
+    loadOverlayMedia({ version, url: '/api/maps/m/media/a/v' }, new AbortController().signal, 4096),
     /digest\/size/,
   );
   await assert.rejects(
     loadOverlayMedia(
-      { ...version, bytes: 100 * 1024 ** 2 },
-      '/api/maps/m/media/a/v',
+      { version: { ...version, bytes: 100 * 1024 ** 2 }, url: '/api/maps/m/media/a/v' },
       new AbortController().signal,
       4096,
     ),
@@ -118,13 +117,13 @@ test('media failures and download limits fail before optional loaders, preservin
       }),
     );
   await assert.rejects(
-    loadOverlayMedia(version, '/api/maps/m/media/a/v', new AbortController().signal, 4096),
+    loadOverlayMedia({ version, url: '/api/maps/m/media/a/v' }, new AbortController().signal, 4096),
     /digest\/size/,
   );
   assert.equal(cancelled, true);
   globalThis.fetch = async () => new Response(null, { status: 503 });
   await assert.rejects(
-    loadOverlayMedia(version, '/api/maps/m/media/a/v', new AbortController().signal, 4096),
+    loadOverlayMedia({ version, url: '/api/maps/m/media/a/v' }, new AbortController().signal, 4096),
     /HTTP 503/,
   );
 });

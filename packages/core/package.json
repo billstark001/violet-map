@@ -71,6 +71,11 @@
       "development": "./src/http.ts",
       "types": "./dist/http.d.ts",
       "default": "./dist/http.js"
+    },
+    "./overlays/types": {
+      "development": "./src/overlayTypes.ts",
+      "types": "./dist/overlayTypes.d.ts",
+      "default": "./dist/overlayTypes.js"
     }
   },
   "scripts": {

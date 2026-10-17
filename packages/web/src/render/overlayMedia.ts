@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import type { MediaFeature, MediaVersion } from '@violet-map/core/overlays';
+import type { MediaFeature, MediaVersion, OverlayMediaReference } from '@violet-map/core/overlays';
 import { resolveApiResourceUrl } from '../runtime';
 import type { DisposableOverlayResource } from './overlayResources';
-import { readLimitedBody } from '@violet-map/core/http';
+import { publicResourceUrl, readLimitedBody } from '@violet-map/core/http';
 
 export interface OverlayMediaResource extends DisposableOverlayResource {
   instantiate(feature: MediaFeature): THREE.Object3D;
@@ -263,25 +263,50 @@ async function imageResource(
   }
 }
 
+/** Fetch pinned bytes anonymously, retrying the API proxy if public delivery fails.
+ * Both transports share one timeout, size budget and digest verification. */
+export async function fetchOverlayMediaBytes(
+  reference: OverlayMediaReference,
+  signal: AbortSignal,
+): Promise<ArrayBuffer> {
+  const { version } = reference;
+  if (version.bytes > OVERLAY_LIMITS.downloadBytes) throw new Error('media exceeds the 64 MiB viewer download limit');
+  const downloadSignal = AbortSignal.any([signal, AbortSignal.timeout(30_000)]);
+  const fetchBytes = async (url: string) => {
+    abort(downloadSignal);
+    const response = await fetch(url, { signal: downloadSignal, credentials: 'omit', redirect: 'error' });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      throw new Error(`media ${version.assetId}/${version.versionId}: HTTP ${response.status}`);
+    }
+    const bytes = await readLimitedBody(response, version.bytes);
+    abort(downloadSignal);
+    if (!bytes || bytes.byteLength !== version.bytes)
+      throw new Error('media digest/size does not match its pinned version');
+    const buffer = bytes.buffer as ArrayBuffer;
+    if ((await digest(buffer)) !== version.digest)
+      throw new Error('media digest/size does not match its pinned version');
+    abort(downloadSignal);
+    return buffer;
+  };
+  if (reference.publicUrl) {
+    const publicUrl = publicResourceUrl(reference.publicUrl);
+    try {
+      return await fetchBytes(publicUrl);
+    } catch {
+      abort(downloadSignal);
+    }
+  }
+  return fetchBytes(resolveApiResourceUrl(reference.url));
+}
+
 export async function loadOverlayMedia(
-  version: MediaVersion,
-  url: string,
+  reference: OverlayMediaReference,
   signal: AbortSignal,
   maxTextureSize: number,
 ): Promise<OverlayMediaResource> {
-  if (version.bytes > OVERLAY_LIMITS.downloadBytes) throw new Error('media exceeds the 64 MiB viewer download limit');
-  const response = await fetch(resolveApiResourceUrl(url), {
-    signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
-    credentials: 'omit',
-    redirect: 'error',
-  });
-  if (!response.ok) throw new Error(`media ${version.assetId}/${version.versionId}: HTTP ${response.status}`);
-  const bytes = await readLimitedBody(response, version.bytes);
-  abort(signal);
-  if (!bytes || bytes.byteLength !== version.bytes)
-    throw new Error('media digest/size does not match its pinned version');
-  const buffer = bytes.buffer as ArrayBuffer;
-  if ((await digest(buffer)) !== version.digest) throw new Error('media digest/size does not match its pinned version');
+  const { version } = reference;
+  const buffer = await fetchOverlayMediaBytes(reference, signal);
   abort(signal);
   if (version.mediaType !== 'model/gltf-binary') return imageResource(buffer, version, signal, maxTextureSize);
   validateStaticGlb(buffer);

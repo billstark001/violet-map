@@ -1,4 +1,11 @@
-import type { AreaFeature, CurveFeature, MediaFeature, MediaVersion, Vec2, Vec3 } from '@violet-map/core/overlays';
+import type {
+  AreaFeature,
+  CurveFeature,
+  MediaFeature,
+  MediaVersion,
+  Vec2,
+  Vec3,
+} from '@violet-map/core/overlays/types';
 
 export interface OverlayBounds {
   min: Vec3;

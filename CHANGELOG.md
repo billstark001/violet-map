@@ -48,6 +48,7 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 ### Added
 
 - A shared weighted LRU cache in `core/cache`, with entry/weight limits and oversized-value bypass, for consistent memory accounting across packages.
+- Opt-in public media object URLs alongside API proxies: configure `MEDIA_PUBLIC_BASE_URL`, request `delivery=public`, and verify pinned size/digest on either path. The viewer falls back to the proxy on public delivery failures; runtime `mediaDelivery: proxy` forces proxy use. Original manifest requests retain their wire format.
 
 ## [0.2.0] - 2026-10-17
 

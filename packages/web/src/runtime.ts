@@ -12,6 +12,7 @@ import {
 const origin = typeof location === 'undefined' ? 'http://localhost' : location.origin;
 const baseUrl = signal(normalizeApiBaseUrl('/', origin));
 export const capabilities = signal<ServiceCapabilities | undefined>(undefined);
+export const mediaDelivery = signal<'proxy' | 'public'>('public');
 
 export function apiUrl(path: string): string {
   return resolveApiUrl(baseUrl.value, path);
@@ -43,6 +44,7 @@ export async function initializeRuntime(options: { staticBase?: string; fallback
   });
   if (response.status !== 404 && !response.ok) throw new Error(`runtime-config.json: HTTP ${response.status}`);
   const config = response.status === 404 ? {} : parseFrontendRuntimeConfig(await response.json());
+  mediaDelivery.value = config.mediaDelivery ?? 'public';
   baseUrl.value = normalizeApiBaseUrl(
     config.apiBaseUrl ?? options.fallbackApi ?? import.meta.env?.VITE_API_BASE_URL ?? '/',
     currentOrigin,

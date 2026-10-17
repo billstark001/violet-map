@@ -5,6 +5,7 @@ import { findYamlConfig, type YamlValue } from './configYaml.js';
 import type { DatabaseOptions } from './db/connection.js';
 import type { RootOptions } from './users.js';
 import type { CreatableRole, ServiceCapabilities } from '@violet-map/core/contracts';
+import { createPublicObjectUrl } from '@violet-map/storage';
 
 export interface ConfigurationOptions {
   env?: NodeJS.ProcessEnv;
@@ -44,6 +45,7 @@ const fields = [
   'features.diagnostics',
   'features.contentReads',
   'features.contentWrites',
+  'content.mediaPublicBaseUrl',
   'auth.mode',
   'auth.staticRole',
   'cache.regionBytes',
@@ -255,9 +257,12 @@ export function loadServerConfig(options: ConfigurationOptions = {}) {
     },
   };
   const resolvedStorage = resolveStorage(setting, legacyStorage, features.contentReads, dataDir);
+  const mediaPublicBaseUrl = string('MEDIA_PUBLIC_BASE_URL', '', 'content.mediaPublicBaseUrl');
+  if (mediaPublicBaseUrl) createPublicObjectUrl(mediaPublicBaseUrl);
   return {
     deployment: { profile: profile as keyof typeof presets },
     features,
+    content: { mediaPublicBaseUrl: mediaPublicBaseUrl || undefined },
     server: {
       port: number('PORT', 3300, 1, 65535, 'port', 'server.port'),
       cors: { origins },

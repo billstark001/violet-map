@@ -86,6 +86,7 @@ export class ContentService {
     private readonly content: AtomicObjectStorage,
     private readonly blobs: AtomicObjectStorage,
     private readonly worlds: ObjectReader,
+    private readonly options: { publicMediaUrl?: (blob: string) => string } = {},
   ) {}
   private mutate<T>(operation: () => Promise<T>): Promise<T> {
     const next = this.pending.then(operation);
@@ -400,7 +401,7 @@ export class ContentService {
         await this.content.replace(`assets/${id}/head.json`, encode({ ...head, deleted: true }), 'application/json');
     });
   }
-  async manifest(id: string, dimension: string): Promise<OverlayManifest> {
+  async manifest(id: string, dimension: string, delivery: 'proxy' | 'public' = 'proxy'): Promise<OverlayManifest> {
     const map = await this.getMap(id);
     const dim = normalizeContentDimension(dimension);
     const sourceStatus = await this.sourceStatus(map);
@@ -434,6 +435,9 @@ export class ContentService {
     result.media = [...versions.values()].map((version) => ({
       version,
       url: `/api/maps/${id}/media/${version.assetId}/${version.versionId}?dimension=${encodeURIComponent(dim)}`,
+      ...(delivery === 'public' && this.options.publicMediaUrl
+        ? { publicUrl: this.options.publicMediaUrl(version.blob) }
+        : {}),
     }));
     return result;
   }
