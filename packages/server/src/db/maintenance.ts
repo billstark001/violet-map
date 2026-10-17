@@ -1,4 +1,4 @@
-import { readAdminConfig } from '../configuration.js';
+import { readAdminConfig } from '../adminConfiguration.js';
 import { connectDatabase, withMigrationLock } from './connection.js';
 import { baselineDatabase, databaseStatus, migrateDatabase } from './migrations.js';
 

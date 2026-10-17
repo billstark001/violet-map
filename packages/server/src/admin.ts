@@ -2,8 +2,8 @@ import { openApplicationDatabase } from './db/application.js';
 import type { DatabaseOptions } from './db/connection.js';
 import { createUserService, type RootOptions } from './users.js';
 
-export { readAdminConfig } from './configuration.js';
-export type { ConfigurationOptions } from './configuration.js';
+export { readAdminConfig } from './adminConfiguration.js';
+export type { ConfigurationOptions } from './configurationSettings.js';
 export type { DatabaseOptions } from './db/connection.js';
 export type { RootOptions } from './users.js';
 
