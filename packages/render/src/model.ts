@@ -1,11 +1,11 @@
 import {
-  AssetBundle,
-  BlockModelJson,
-  BlockStateVariantJson,
-  Direction,
-  ModelElementJson,
+  type AssetBundle,
+  type BlockModelJson,
+  type BlockStateVariantJson,
+  type Direction,
+  type ModelElementJson,
 } from '@violet-map/core/assets';
-import { BlockStateRef, normalizeId } from '@violet-map/core/domain';
+import { type BlockStateRef, normalizeId } from '@violet-map/core/domain';
 
 export interface BakedQuad {
   /** 4 顶点 × xyz，单位为方块（0..1，可越界）。 */

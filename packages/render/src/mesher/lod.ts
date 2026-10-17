@@ -1,7 +1,7 @@
-import { AIR, AIR_NAMES, ChunkColumn } from '@violet-map/core/domain';
-import { BlockInfo, Direction, DIR_VEC } from '@violet-map/core/assets';
-import { BlockStateRef } from '@violet-map/core/domain';
-import { MeshBuffers } from '@violet-map/render';
+import { AIR, AIR_NAMES, type ChunkColumn } from '@violet-map/core/domain';
+import { type BlockInfo, type Direction, DIR_VEC } from '@violet-map/core/assets';
+import { type BlockStateRef } from '@violet-map/core/domain';
+import { type MeshBuffers } from '@violet-map/render';
 import type { Rgb } from '../colors.js';
 import { Float32Writer, Uint32Writer } from '../utils.js';
 

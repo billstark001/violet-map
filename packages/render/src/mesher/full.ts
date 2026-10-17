@@ -1,17 +1,17 @@
-import { ModelBaker, BakedQuad, MISSING_TEXTURE } from '../model.js';
-import { AIR, AIR_NAMES, ChunkColumn } from '@violet-map/core/domain';
+import { type ModelBaker, type BakedQuad, MISSING_TEXTURE } from '../model.js';
+import { AIR, AIR_NAMES, type ChunkColumn } from '@violet-map/core/domain';
 import {
-  AtlasIndex,
-  AtlasRect,
-  BlockInfo,
-  Direction,
+  type AtlasIndex,
+  type AtlasRect,
+  type BlockInfo,
+  type Direction,
   DIR_VEC,
-  RenderLayer,
-  TextureAlphaMap,
-  TintType,
+  type RenderLayer,
+  type TextureAlphaMap,
+  type TintType,
 } from '@violet-map/core/assets';
-import { BlockStateRef } from '@violet-map/core/domain';
-import { MeshBuffers, SectionMeshes } from '@violet-map/render';
+import { type BlockStateRef } from '@violet-map/core/domain';
+import { type MeshBuffers, type SectionMeshes } from '@violet-map/render';
 import type { Rgb } from '../colors.js';
 import { Float32Writer, Uint16Writer, Uint32Writer } from '../utils.js';
 

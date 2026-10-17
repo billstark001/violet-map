@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { ChunkColumn, parseChunkColumn, dimensionRegionPaths } from '@violet-map/core/domain';
+import { type ChunkColumn, parseChunkColumn, dimensionRegionPaths } from '@violet-map/core/domain';
 import { parseNbt } from '@violet-map/core/nbt';
 import { iterateRegionChunks, parseRegionFileName } from '@violet-map/core/region';
 import { isMissingPath, resolvePath } from './paths.js';

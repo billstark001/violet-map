@@ -1,4 +1,4 @@
-import { BiomeDef, BiomeMap } from '@violet-map/core/domain';
+import { type BiomeDef, type BiomeMap } from '@violet-map/core/domain';
 
 export type Rgb = readonly [number, number, number];
 

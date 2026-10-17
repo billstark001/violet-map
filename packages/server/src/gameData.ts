@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import minecraftData from 'minecraft-data';
-import { BiomeMap, DimensionMap } from '@violet-map/core/domain';
+import { type BiomeMap, type DimensionMap } from '@violet-map/core/domain';
 import {
   applyBlockInfoOverrides,
   createBlockInfoMap,

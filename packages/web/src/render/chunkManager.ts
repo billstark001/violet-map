@@ -6,7 +6,13 @@ import type { RenderLayer } from '@violet-map/core/assets';
 import { fetchChunkHashes, fetchChunks, fetchChunkSourceCoverage } from '../api';
 import { type ChunkHashPayload, type ChunkPayload, type ChunkCoverage } from '@violet-map/core/contracts';
 import { debugLog, isDebugLoggingEnabled } from '../logger';
-import { chunkKey, type SectionMeshMsg, WorkerInit, WorkerRequest, WorkerResponse } from '../worker/protocol';
+import {
+  chunkKey,
+  type SectionMeshMsg,
+  type WorkerInit,
+  type WorkerRequest,
+  type WorkerResponse,
+} from '../worker/protocol';
 import { getCachedFull, getCachedLod, putCachedFull, putCachedLod, type MeshCacheKeyParts } from '../meshCache';
 import type { TerrainMaterials } from './materials';
 import {

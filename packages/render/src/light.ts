@@ -1,4 +1,4 @@
-import { ChunkColumn } from '@violet-map/core/domain';
+import { type ChunkColumn } from '@violet-map/core/domain';
 
 const SECTION_VOLUME = 16 ** 3;
 

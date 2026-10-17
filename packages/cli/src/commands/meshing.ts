@@ -1,14 +1,14 @@
 import { loadCapability } from '../capabilities.js';
-import { ChunkColumn, type BlockStateRef } from '@violet-map/core/domain';
+import { type ChunkColumn, type BlockStateRef } from '@violet-map/core/domain';
 import type { ChunkNeighborhood, MesherResources, Rgb } from '@violet-map/render';
 
 const render = await loadCapability('@violet-map/render');
 const { computeColumnLight, meshLodChunk, meshSection } = render;
 
 import { type AssetBundle, type AtlasIndex, type BlockInfo } from '@violet-map/core/assets';
-import { ColumnEntry } from './worldInput.js';
+import { type ColumnEntry } from './worldInput.js';
 import { tintOf } from './colorInput.js';
-import { MeshStats, meshStats, sectionStats, addStats } from './report.js';
+import { type MeshStats, meshStats, sectionStats, addStats } from './report.js';
 
 export const DEFAULT_RECT = { u0: 0, v0: 0, u1: 1, v1: 1 };
 export const fakeAtlas = new Proxy(Object.create(null), {

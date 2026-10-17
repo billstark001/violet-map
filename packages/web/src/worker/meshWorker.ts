@@ -1,11 +1,16 @@
 /// <reference lib="webworker" />
-import { BlockInfo, type RendererDefinitions, type RendererModelDef, type TintType } from '@violet-map/core/assets';
-import { ChunkColumn, appendChunkEntities, parseChunkColumn } from '@violet-map/core/domain';
+import {
+  type BlockInfo,
+  type RendererDefinitions,
+  type RendererModelDef,
+  type TintType,
+} from '@violet-map/core/assets';
+import { type ChunkColumn, appendChunkEntities, parseChunkColumn } from '@violet-map/core/domain';
 import {
   ChunkNeighborhood,
   SECTION_VISIBILITY_ALL,
-  MeshBuffers,
-  MesherResources,
+  type MeshBuffers,
+  type MesherResources,
   ModelBaker,
   computeColumnLight,
   hexToRgb,

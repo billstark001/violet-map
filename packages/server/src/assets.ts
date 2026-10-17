@@ -5,12 +5,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  AssetBundle,
-  AtlasAnimation,
-  AtlasFrameRect,
-  AtlasIndex,
-  TextureAlphaMap,
-  TextureAnimationDef,
+  type AssetBundle,
+  type AtlasAnimation,
+  type AtlasFrameRect,
+  type AtlasIndex,
+  type TextureAlphaMap,
+  type TextureAnimationDef,
 } from '@violet-map/core/assets';
 import { normalizeId } from '@violet-map/core/domain';
 import { PNG } from 'pngjs';

@@ -1,4 +1,4 @@
-import { Hono, type Context } from 'hono';
+import { type Hono, type Context } from 'hono';
 
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';

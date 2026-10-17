@@ -1,5 +1,5 @@
 import { TOP_MAP_MISSING_HEIGHT, type PreparedTopMapTile } from '@violet-map/core/formats/top-map';
-import { MeshBuffers } from '@violet-map/render';
+import { type MeshBuffers } from '@violet-map/render';
 import { Float32Writer, Uint32Writer } from '../utils.js';
 
 export const TOP_MAP_POSITION_SCALE = [512, 4096, 512] as const;
