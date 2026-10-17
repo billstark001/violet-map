@@ -1,3 +1,4 @@
+import { ContentValidationError } from './contentValidation.js';
 import { isDimensionId } from './dimensionId.js';
 import { isWorldName } from './worldName.js';
 import { publicResourceUrl } from './http.js';
@@ -13,15 +14,8 @@ import type {
 } from './overlayTypes.js';
 
 export type * from './overlayTypes.js';
-
-export class ContentValidationError extends Error {
-  readonly code: 'INVALID_CONTENT' | 'UNSUPPORTED_FORMAT';
-  constructor(message: string, code: 'INVALID_CONTENT' | 'UNSUPPORTED_FORMAT' = 'INVALID_CONTENT') {
-    super(message);
-    this.name = 'ContentValidationError';
-    this.code = code;
-  }
-}
+export { ContentValidationError } from './contentValidation.js';
+export { parseStaticGlb } from './formats/staticGlb.js';
 
 function cloneDocument<T>(value: T): T {
   if (Array.isArray(value)) return value.map((item) => cloneDocument(item)) as T;

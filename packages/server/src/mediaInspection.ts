@@ -2,7 +2,13 @@ import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { DOMParser } from '@xmldom/xmldom';
-import { ContentValidationError, parseMediaVersion, type MediaVersion, type Vec3 } from '@violet-map/core/overlays';
+import {
+  ContentValidationError,
+  parseMediaVersion,
+  parseStaticGlb,
+  type MediaVersion,
+  type Vec3,
+} from '@violet-map/core/overlays';
 
 function invalid(message: string): never {
   throw new ContentValidationError(message);
@@ -132,19 +138,13 @@ type GltfNode = {
   translation?: number[];
   rotation?: number[];
   scale?: number[];
-  skin?: number;
 };
 
 interface Gltf {
-  asset: { version: string };
-  animations?: unknown[];
-  skins?: unknown[];
-  buffers?: { uri?: string }[];
-  images?: { uri?: string; bufferView?: number; mimeType?: string }[];
   nodes?: GltfNode[];
   scenes?: { nodes?: number[] }[];
   scene?: number;
-  meshes?: { primitives: { attributes: Record<string, number>; targets?: unknown[] }[] }[];
+  meshes?: { primitives: { attributes: Record<string, number> }[] }[];
   accessors?: { min?: number[]; max?: number[] }[];
 }
 
@@ -184,46 +184,7 @@ function matrix(node: GltfNode): number[] {
 }
 
 async function glbBounds(bytes: Uint8Array): Promise<{ min: Vec3; max: Vec3 }> {
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (
-    bytes.length < 20 ||
-    view.getUint32(0, true) !== 0x46546c67 ||
-    view.getUint32(4, true) !== 2 ||
-    view.getUint32(8, true) !== bytes.length ||
-    view.getUint32(16, true) !== 0x4e4f534a ||
-    20 + view.getUint32(12, true) > bytes.length
-  )
-    invalid('invalid GLB 2.0 container');
-  const raw: unknown = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + view.getUint32(12, true))));
-  const checkExtensions = (value: unknown): void => {
-    if (!value || typeof value !== 'object') return;
-    for (const [key, child] of Object.entries(value)) {
-      if (
-        (key === 'extensions' || key === 'extensionsUsed' || key === 'extensionsRequired') &&
-        child &&
-        Object.keys(child).length
-      )
-        unsupported('GLB extensions, including compression, are unsupported in schema 1');
-      checkExtensions(child);
-    }
-  };
-  checkExtensions(raw);
-  const gltf = raw as Gltf;
-  if (
-    gltf.animations?.length ||
-    gltf.skins?.length ||
-    gltf.nodes?.some((n) => n.skin !== undefined) ||
-    gltf.meshes?.some((m) => m.primitives.some((p) => p.targets?.length))
-  )
-    unsupported('GLB must be static without animation, skins or morph targets');
-  if (
-    gltf.buffers?.some((b) => b.uri !== undefined) ||
-    gltf.images?.some(
-      (i) =>
-        i.uri !== undefined || i.bufferView === undefined || !['image/png', 'image/jpeg'].includes(i.mimeType ?? ''),
-    )
-  )
-    unsupported('GLB dependencies must be embedded PNG/JPEG buffer views');
+  const gltf = parseStaticGlb(bytes) as Gltf;
   const { validateBytes } = createRequire(import.meta.url)('gltf-validator') as {
     validateBytes(
       bytes: Uint8Array,

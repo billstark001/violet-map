@@ -93,6 +93,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Changed
 
+- Server imports and viewer decoding share one static GLB support-policy parser; deep metadata traversal no longer depends on recursive JavaScript calls. Full glTF validation remains a server publication check.
+
 - Server region, chunk, texture and manifest caches share bounded LRU accounting; oversized region/chunk buffers bypass retention without flushing useful residents. Texture-path and world-directory lookups are also bounded.
 - A 32 MiB / 64-entry CPU mesh cache reuses immutable full/LOD buffers before IndexedDB cloning. Disabling or clearing the mesh cache releases these references as well.
 - Server chunk/entity decoding uses Node's asynchronous native zlib codecs, sharing Anvil validation with core. Cached decoded buffers own their exact backing allocation, and uploaded chunks are decompressed only once before parsing and storage.

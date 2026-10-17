@@ -1,35 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as THREE from 'three';
-import { loadOverlayMedia, modelResource, validateStaticGlb } from '../src/render/overlayMedia.js';
+import { loadOverlayMedia, modelResource } from '../src/render/overlayMedia.js';
 import type { MediaFeature, MediaVersion } from '@violet-map/core/overlays';
-
-function glb(json: unknown) {
-  const text = new TextEncoder().encode(JSON.stringify(json));
-  const bytes = new Uint8Array(20 + text.length);
-  const view = new DataView(bytes.buffer);
-  view.setUint32(0, 0x46546c67, true);
-  view.setUint32(4, 2, true);
-  view.setUint32(8, bytes.length, true);
-  view.setUint32(12, text.length, true);
-  view.setUint32(16, 0x4e4f534a, true);
-  bytes.set(text, 20);
-  return bytes.buffer;
-}
-
-test('static GLB guard rejects unsupported extensions and dependencies, while allowing harmless metadata URLs', () => {
-  validateStaticGlb(glb({ asset: { version: '2.0' }, extras: { uri: 'https://credit.example', targets: ['credit'] } }));
-  for (const json of [
-    { extensionsUsed: ['KHR_draco_mesh_compression'] },
-    { extensionsUsed: ['EXT_meshopt_compression'] },
-    { images: [{ uri: 'outside.png' }] },
-    { buffers: [{ uri: 'data:application/octet-stream;base64,AA==' }] },
-    { animations: [{}] },
-    { skins: [{}] },
-    { meshes: [{ primitives: [{ targets: [{}] }] }] },
-  ])
-    assert.throws(() => validateStaticGlb(glb(json)), /GLB/);
-});
 
 test('GLB instances share immutable GPU data and close shared image bitmaps exactly once', () => {
   let closed = 0,

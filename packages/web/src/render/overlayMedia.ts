@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { parseStaticGlb } from '@violet-map/core/overlays';
 import type { MediaFeature, MediaVersion, OverlayMediaReference } from '@violet-map/core/overlays';
 import { resolveApiResourceUrl } from '../runtime';
 import type { DisposableOverlayResource } from './overlayResources';
@@ -18,56 +19,6 @@ async function digest(bytes: ArrayBuffer) {
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (byte) =>
     byte.toString(16).padStart(2, '0'),
   ).join('');
-}
-
-export function validateStaticGlb(buffer: ArrayBuffer): void {
-  const view = new DataView(buffer);
-  if (
-    buffer.byteLength < 20 ||
-    view.getUint32(0, true) !== 0x46546c67 ||
-    view.getUint32(4, true) !== 2 ||
-    view.getUint32(8, true) !== buffer.byteLength ||
-    view.getUint32(16, true) !== 0x4e4f534a ||
-    20 + view.getUint32(12, true) > buffer.byteLength
-  )
-    throw new Error('invalid GLB 2.0 container');
-  const json: unknown = JSON.parse(
-    new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(buffer, 20, view.getUint32(12, true))),
-  );
-  const visit = (value: unknown): void => {
-    if (!value || typeof value !== 'object') return;
-    for (const [key, child] of Object.entries(value)) {
-      if (['extensions', 'extensionsUsed', 'extensionsRequired'].includes(key) && child && Object.keys(child).length)
-        throw new Error(`unsupported static GLB ${key}`);
-      visit(child);
-    }
-  };
-  visit(json);
-  const model = json as {
-    animations?: unknown[];
-    skins?: unknown[];
-    buffers?: { uri?: string }[];
-    images?: { uri?: string; bufferView?: number; mimeType?: string }[];
-    nodes?: { skin?: number }[];
-    meshes?: { primitives: { targets?: unknown[] }[] }[];
-  };
-  if (
-    model.animations?.length ||
-    model.skins?.length ||
-    model.nodes?.some((node) => node.skin !== undefined) ||
-    model.meshes?.some((mesh) => mesh.primitives.some((p) => p.targets?.length))
-  )
-    throw new Error('GLB animation, skins and morph targets are unsupported');
-  if (
-    model.buffers?.some((buffer) => buffer.uri !== undefined) ||
-    model.images?.some(
-      (image) =>
-        image.uri !== undefined ||
-        image.bufferView === undefined ||
-        !['image/png', 'image/jpeg'].includes(image.mimeType ?? ''),
-    )
-  )
-    throw new Error('GLB dependencies must be embedded PNG/JPEG buffer views');
 }
 
 function textureSet(materials: Iterable<THREE.Material>): Set<THREE.Texture> {
@@ -309,7 +260,7 @@ export async function loadOverlayMedia(
   const buffer = await fetchOverlayMediaBytes(reference, signal);
   abort(signal);
   if (version.mediaType !== 'model/gltf-binary') return imageResource(buffer, version, signal, maxTextureSize);
-  validateStaticGlb(buffer);
+  parseStaticGlb(new Uint8Array(buffer));
   const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
   abort(signal);
   const textures = new Set<THREE.Texture>();
