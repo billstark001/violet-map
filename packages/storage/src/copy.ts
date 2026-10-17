@@ -1,13 +1,17 @@
 import type { ObjectStorage } from '@violet-map/core/storage';
 
 async function sha256(bytes: Uint8Array): Promise<string> {
-  const hash = await globalThis.crypto.subtle.digest(
-    'SHA-256',
-    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
-  );
+  // WebCrypto snapshots an ArrayBuffer view itself. Only shared backing needs
+  // an owned copy because it is not a valid BufferSource for digest().
+  const input =
+    bytes.buffer instanceof ArrayBuffer
+      ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      : new Uint8Array(bytes);
+  const hash = await globalThis.crypto.subtle.digest('SHA-256', input);
   return Array.from(new Uint8Array(hash), (value) => value.toString(16).padStart(2, '0')).join('');
 }
 
+/** Compare size and SHA-256; return source bytes already read for reuse by a copy. */
 export async function compareObjectContent(
   source: ObjectStorage,
   target: ObjectStorage,
@@ -23,6 +27,8 @@ export async function compareObjectContent(
   return { same: sourceHash === targetHash, sourceBytes: from };
 }
 
+/** Copy changed objects in listing order, optionally mirroring deletions. Exclusions
+ * are exact relative keys; progress follows each completed or dry-run operation. */
 export async function copyObjects(
   source: ObjectStorage,
   target: ObjectStorage,

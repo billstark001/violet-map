@@ -7,7 +7,7 @@ import { LocalStorage } from '../src/local.js';
 import { ScopedStorage } from '../src/prefixed.js';
 import { CachedStorage } from '../src/cached.js';
 import { S3Storage } from '../src/s3.js';
-import { copyObjects } from '../src/copy.js';
+import { copyObjects, compareObjectContent } from '../src/copy.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
 
@@ -158,4 +158,26 @@ test('S3 normalizes root-equivalent prefixes and reports per-object bulk errors'
   assert.ok(prefixes.every((prefix) => prefix === 'physical/'));
   fail = true;
   await assert.rejects(storage.deletePrefix(''), AggregateError);
+});
+
+test('content comparison hashes only the supplied view and accepts shared backing', async () => {
+  const source = new Uint8Array([99, 1, 2, 3, 88]).subarray(1, 4);
+  const target = new Uint8Array([55, 1, 2, 3, 66]).subarray(1, 4);
+  const shared = new Uint8Array(new SharedArrayBuffer(3));
+  shared.set(source);
+  const storage = (bytes: Uint8Array) =>
+    ({
+      stat: async () => ({ path: 'object', size: bytes.length }),
+      read: async () => bytes,
+    }) as Parameters<typeof compareObjectContent>[0];
+  assert.equal((await compareObjectContent(storage(source), storage(target), 'object', 3)).same, true);
+  assert.equal((await compareObjectContent(storage(source), storage(shared), 'object', 3)).same, true);
+  assert.equal(
+    (await compareObjectContent(storage(source), storage(Buffer.from(shared.buffer)), 'object', 3)).same,
+    true,
+  );
+  shared[2] = 4;
+  const changed = await compareObjectContent(storage(source), storage(shared), 'object', 3);
+  assert.equal(changed.same, false);
+  assert.equal(changed.sourceBytes, source);
 });

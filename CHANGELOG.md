@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Object synchronization hashes byte views directly instead of copying both complete objects before WebCrypto; shared backing remains supported with an explicit ordinary-buffer copy.
+
 - Chunk deletion validates the entire batch before touching storage, preventing malformed later entries from causing partial deletion followed by an error.
 
 - Dimension validation rejects `.`/`..` namespaces; malformed encoded archive directories no longer break world discovery. CLI and server share dimension paths, including custom paths containing a `region` segment.
