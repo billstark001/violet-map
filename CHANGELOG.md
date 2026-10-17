@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Viewer disposal cancels bootstrap metadata, atlas and colormap requests, plus late sky-texture loads; aborted atlas work no longer starts the individual-texture fallback. Image completion and failure detach handlers.
+
 - Fallback atlas identities include UV placement, texture alpha classification and LOD average colors, avoiding stale meshes when packs change under the same texture names or packing order changes.
 
 - Mesh resource identities include biome definitions and dimension lighting rules, preventing stale IndexedDB meshes from retaining old tint/light after configuration edits and reloads.

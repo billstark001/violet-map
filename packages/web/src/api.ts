@@ -22,13 +22,13 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const fetchWorlds = (signal?: AbortSignal) => json<WorldInfo[]>('api/worlds', { signal });
 
-export const fetchBundle = () => json<AssetBundle>('api/assets/bundle');
+export const fetchBundle = (signal?: AbortSignal) => json<AssetBundle>('api/assets/bundle', { signal });
 
-export const fetchBlockInfo = () => json<BlockInfoMap>('api/data/blocks');
+export const fetchBlockInfo = (signal?: AbortSignal) => json<BlockInfoMap>('api/data/blocks', { signal });
 
-export const fetchBiomes = () => json<BiomeMap>('api/data/biomes');
+export const fetchBiomes = (signal?: AbortSignal) => json<BiomeMap>('api/data/biomes', { signal });
 
-export const fetchDimensions = () => json<DimensionMap>('api/data/dimensions');
+export const fetchDimensions = (signal?: AbortSignal) => json<DimensionMap>('api/data/dimensions', { signal });
 
 async function fetchChunkBatch<T>(
   endpoint: 'chunk-hashes' | 'chunks',
@@ -69,8 +69,9 @@ export function fetchChunks(
   return fetchChunkBatch('chunks', world, dim, chunks, signal);
 }
 
-export const fetchTextureAtlas = (ids: string[]) =>
+export const fetchTextureAtlas = (ids: string[], signal?: AbortSignal) =>
   json<TextureAtlasManifest>('api/assets/atlas', {
+    signal,
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ ids }),

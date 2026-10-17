@@ -1,3 +1,4 @@
+import { loadBrowserImage } from './browserImage';
 import { hashString32 } from '@violet-map/core/hash';
 import { resolveApiResourceUrl } from './runtime';
 import { normalizeId } from '@violet-map/core/domain';
@@ -157,16 +158,6 @@ export function collectTextureIds(bundle: AssetBundle, blockInfo: BlockInfoMap):
   return [...ids];
 }
 
-function loadImage(url: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error(`failed: ${url}`));
-    img.src = url;
-  });
-}
-
 /** Identify mesh-relevant fallback output, including UV placement, LOD colors
  * and alpha classification. Texture names alone cannot identify changed packs. */
 export function fallbackAtlasKey(
@@ -185,10 +176,15 @@ export function fallbackTextureSize(width: number, height: number, animated: boo
 }
 
 /** 构建纹理图集。动画贴图（竖长条）只取第一帧。 */
-export async function buildAtlas(ids: string[], animatedIds: ReadonlySet<string> = new Set()): Promise<BuiltAtlas> {
+export async function buildAtlas(
+  ids: string[],
+  animatedIds: ReadonlySet<string> = new Set(),
+  signal?: AbortSignal,
+): Promise<BuiltAtlas> {
+  signal?.throwIfAborted();
   try {
-    const manifest = await fetchTextureAtlas(ids);
-    const img = await loadImage(resolveApiResourceUrl(manifest.image));
+    const manifest = await fetchTextureAtlas(ids, signal);
+    const img = await loadBrowserImage(resolveApiResourceUrl(manifest.image), signal);
     const canvas = document.createElement('canvas');
     canvas.width = manifest.width;
     canvas.height = manifest.height;
@@ -204,14 +200,16 @@ export async function buildAtlas(ids: string[], animatedIds: ReadonlySet<string>
       animations: textureAnimationData(manifest.index),
     };
   } catch (e) {
+    signal?.throwIfAborted();
     console.warn('batched texture atlas failed; falling back to individual textures', e);
   }
 
   const PAD = 8;
   const results = await mapWithConcurrency(ids, MAX_PARALLEL_FALLBACK_TEXTURE_LOADS, async (id) => {
     try {
-      return await loadImage(textureUrl(id));
+      return await loadBrowserImage(textureUrl(id), signal);
     } catch {
+      signal?.throwIfAborted();
       return null;
     }
   });
@@ -331,15 +329,16 @@ export async function buildAtlas(ids: string[], animatedIds: ReadonlySet<string>
 }
 
 /** 载入原版 colormap（256×256 RGBA）。 */
-export async function loadColormap(id: string): Promise<Uint8Array | null> {
+export async function loadColormap(id: string, signal?: AbortSignal): Promise<Uint8Array | null> {
   try {
-    const img = await loadImage(textureUrl(id));
+    const img = await loadBrowserImage(textureUrl(id), signal);
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 256;
     const ctx = canvas.getContext('2d')!;
     ctx.drawImage(img, 0, 0, 256, 256);
     return new Uint8Array(ctx.getImageData(0, 0, 256, 256).data.buffer);
   } catch {
+    signal?.throwIfAborted();
     return null;
   }
 }

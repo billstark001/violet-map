@@ -1,3 +1,4 @@
+import { loadBrowserImage } from '../browserImage';
 import { buildRenderKey } from './resourceKey';
 import * as THREE from 'three';
 import type { BiomeMap, DimensionMap } from '@violet-map/core/domain';
@@ -295,18 +296,19 @@ function dimensionDefinition(dimensions: DimensionMap, dimension: string): Viewe
   return dimensions[dimension] ?? DEFAULT_DIMENSION_DEF;
 }
 
-async function loadViewerResources(): Promise<ViewerResources> {
+async function loadViewerResources(signal: AbortSignal): Promise<ViewerResources> {
   const [bundle, blockInfo, biomes, dimensions, grassMap, foliageMap] = await Promise.all([
-    fetchBundle(),
-    fetchBlockInfo(),
-    fetchBiomes(),
-    fetchDimensions(),
-    loadColormap('minecraft:colormap/grass'),
-    loadColormap('minecraft:colormap/foliage'),
+    fetchBundle(signal),
+    fetchBlockInfo(signal),
+    fetchBiomes(signal),
+    fetchDimensions(signal),
+    loadColormap('minecraft:colormap/grass', signal),
+    loadColormap('minecraft:colormap/foliage', signal),
   ]);
   const atlas = await buildAtlas(
     collectTextureIds(bundle, blockInfo),
     new Set(Object.keys(bundle.textureAnimations ?? {})),
+    signal,
   );
   return {
     bundle,
@@ -376,31 +378,33 @@ function makeCelestialFallback(kind: 'sun' | 'moon'): HTMLCanvasElement {
 function loadCanvasBackedTexture(
   fallback: HTMLCanvasElement,
   candidates: { id: string; cropMoonSheet?: boolean }[],
+  signal: AbortSignal,
 ): THREE.Texture {
   const texture = configurePixelTexture(new THREE.CanvasTexture(fallback));
   const tryLoad = (index: number) => {
     const candidate = candidates[index];
-    if (!candidate) return;
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      if (candidate.cropMoonSheet && img.width > img.height) {
-        const frameW = Math.floor(img.width / 4);
-        const frameH = Math.floor(img.height / 2);
-        const canvas = document.createElement('canvas');
-        canvas.width = frameW;
-        canvas.height = frameH;
-        const ctx = canvas.getContext('2d')!;
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(img, 0, 0, frameW, frameH, 0, 0, frameW, frameH);
-        texture.image = canvas;
-      } else {
-        texture.image = img;
-      }
-      texture.needsUpdate = true;
-    };
-    img.onerror = () => tryLoad(index + 1);
-    img.src = textureUrl(candidate.id);
+    if (!candidate || signal.aborted) return;
+    void loadBrowserImage(textureUrl(candidate.id), signal)
+      .then((img) => {
+        if (signal.aborted) return;
+        if (candidate.cropMoonSheet && img.width > img.height) {
+          const frameW = Math.floor(img.width / 4);
+          const frameH = Math.floor(img.height / 2);
+          const canvas = document.createElement('canvas');
+          canvas.width = frameW;
+          canvas.height = frameH;
+          const ctx = canvas.getContext('2d')!;
+          ctx.imageSmoothingEnabled = false;
+          ctx.drawImage(img, 0, 0, frameW, frameH, 0, 0, frameW, frameH);
+          texture.image = canvas;
+        } else {
+          texture.image = img;
+        }
+        texture.needsUpdate = true;
+      })
+      .catch(() => {
+        if (!signal.aborted) tryLoad(index + 1);
+      });
   };
   tryLoad(0);
   return texture;
@@ -464,6 +468,7 @@ function createSkyDomeMaterial(): THREE.ShaderMaterial {
 }
 
 function createSkyObjects(scene: THREE.Scene): SkyObjects {
+  const textures = new AbortController();
   const group = new THREE.Group();
   const domeMaterial = createSkyDomeMaterial();
   const domeGeometry = new THREE.SphereGeometry(1200, 32, 16);
@@ -472,14 +477,19 @@ function createSkyObjects(scene: THREE.Scene): SkyObjects {
   dome.renderOrder = -1000;
   group.add(dome);
 
-  const sunTexture = loadCanvasBackedTexture(makeCelestialFallback('sun'), [
-    { id: 'minecraft:environment/celestial/sun' },
-    { id: 'minecraft:environment/sun' },
-  ]);
-  const moonTexture = loadCanvasBackedTexture(makeCelestialFallback('moon'), [
-    { id: 'minecraft:environment/celestial/moon/full_moon' },
-    { id: 'minecraft:environment/moon_phases', cropMoonSheet: true },
-  ]);
+  const sunTexture = loadCanvasBackedTexture(
+    makeCelestialFallback('sun'),
+    [{ id: 'minecraft:environment/celestial/sun' }, { id: 'minecraft:environment/sun' }],
+    textures.signal,
+  );
+  const moonTexture = loadCanvasBackedTexture(
+    makeCelestialFallback('moon'),
+    [
+      { id: 'minecraft:environment/celestial/moon/full_moon' },
+      { id: 'minecraft:environment/moon_phases', cropMoonSheet: true },
+    ],
+    textures.signal,
+  );
   const celestialGeometry = new THREE.PlaneGeometry(1, 1);
   const sun = new THREE.Mesh(celestialGeometry, createCelestialMaterial(sunTexture));
   const moon = new THREE.Mesh(celestialGeometry, createCelestialMaterial(moonTexture));
@@ -528,6 +538,7 @@ function createSkyObjects(scene: THREE.Scene): SkyObjects {
     moon,
     stars,
     dispose() {
+      textures.abort();
       scene.remove(group);
       domeGeometry.dispose();
       domeMaterial.dispose();
@@ -1054,6 +1065,7 @@ export class ViewerController {
   private capabilityGeneration = 0;
   private capabilityRequest: AbortController | null = null;
   private disposed = false;
+  private readonly resourceRequest = new AbortController();
   private onResize: (() => void) | null = null;
   private frameState: FrameState | null = null;
 
@@ -1071,7 +1083,7 @@ export class ViewerController {
   private async initialize(): Promise<void> {
     try {
       THREE.ColorManagement.enabled = false;
-      const resources = await loadViewerResources();
+      const resources = await loadViewerResources(this.resourceRequest.signal);
       if (this.disposed) return;
       const props = this.props;
       const engine = createEngine(
@@ -1101,6 +1113,7 @@ export class ViewerController {
       );
       this.onReady?.();
     } catch (error) {
+      this.resourceRequest.abort();
       if (!this.disposed) this.onError(error instanceof Error ? error.message : String(error));
     }
   }
@@ -1199,6 +1212,7 @@ export class ViewerController {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.resourceRequest.abort();
     this.capabilityGeneration++;
     this.capabilityRequest?.abort();
     this.capabilityRequest = null;
