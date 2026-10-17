@@ -13,6 +13,7 @@ export interface ResolvedBiomeColors {
   fog: Rgb;
 }
 
+/** Expand packed 0xRRGGBB to normalized channels without color-space conversion. */
 export function hexToRgb(hex: number): Rgb {
   return [((hex >> 16) & 0xff) / 255, ((hex >> 8) & 0xff) / 255, (hex & 0xff) / 255];
 }
@@ -43,13 +44,15 @@ function grassColorOf(def: BiomeDef, map: Uint8Array | null): number {
   return c;
 }
 
-/** 预先解析每个群系的实际颜色，供网格化时逐顶点使用。 */
+/** Precompute biome tint channels for repeated vertex lookup. Colormaps are
+ * 256² RGBA bytes; missing/truncated maps use the standard foliage fallback.
+ * The returned dictionary supports arbitrary keys without inherited entries. */
 export function resolveBiomeColors(
   biomes: BiomeMap,
   grassMap: Uint8Array | null,
   foliageMap: Uint8Array | null,
 ): Record<string, ResolvedBiomeColors> {
-  const out: Record<string, ResolvedBiomeColors> = {};
+  const out: Record<string, ResolvedBiomeColors> = Object.create(null);
   for (const [name, def] of Object.entries(biomes)) {
     out[name] = {
       grass: hexToRgb(grassColorOf(def, grassMap)),
