@@ -1,6 +1,6 @@
 # Overlay release acceptance and recovery
 
-The `0.2.0` development release completes phases 1–7. Package metadata advances together under the workspace 0.x policy; content documents and snapshot manifests retain their independent schema version 1, and the HTTP capabilities protocol remains 1. This does not publish npm packages or create a Git tag. Existing public world-storage APIs remain deprecated rather than removed. No user-database migration is introduced by overlays.
+The `0.2.0` development release completes phases 1–7. Package metadata advances together under the workspace 0.x policy; content documents and snapshot manifests retain their independent schema version 1, and the HTTP capabilities protocol remains 1. This does not publish npm packages or create a Git tag. The `0.3.0` follow-up removes the world-storage APIs deprecated in `0.2.0`; use object-storage names and `services.mounts.worlds` (the distinct remote `ServerWorldStorage` protocol remains supported). No user-database migration is introduced by overlays.
 
 ## Reproduce the gate
 

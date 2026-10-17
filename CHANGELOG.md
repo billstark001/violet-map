@@ -24,130 +24,38 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ## [Unreleased]
 
-### Fixed
-
-- Persistent mesh identities advance after model and coordinate corrections, so previously incorrect derived geometry is rebuilt on reload.
-
-- Chunk neighborhoods preserve the parser's signed-int chunk range instead of wrapping world block coordinates through a 32-bit shift and treating far chunks as air.
-
-- Precomputed biome-color dictionaries preserve arbitrary keys without inheriting prototype entries or treating them as fallback colors.
-
-- Storage metadata caches invalidate after failed mutation attempts as well, so a partially completed backend write/deletion cannot leave stale stat/list results until TTL expiry.
-
-- CLI `overlay manifest` supports public read-only servers without requiring an admin capability or login; its anonymous requests omit saved/injected credentials.
-
-- Restricted browser history no longer interrupts camera targeting or animation; URL persistence tolerates sandbox restrictions and history rate limits, independently of local-storage persistence.
-
-- Model texture variables such as `constructor`, `toString` and `__proto__` resolve through normal inheritance; missing variables use the fallback instead of inherited JavaScript prototype values.
-
-- Content metadata mutations reserve configurable bounded capacity before buffering JSON; queued requests keep bodies unread and excess traffic gets retryable `CONTENT_BUSY`, independently of media imports.
-
-- Small valid overlay regions near the world border no longer fail zero-area validation because large absolute-coordinate products cancel; either winding remains supported.
-
-- Published map/layer/media metadata must match its object-key identity and revision; misplaced but otherwise valid JSON reports `CORRUPT_CONTENT` instead of serving another publication. Map discovery matches literal `.json` suffixes.
-
-- Mesh cache and pending-clone budgets count complete retained buffers instead of only attribute views, deduplicating shared attribute backing. The derived IndexedDB cache rebuilds once to remove obsolete byte accounting.
-
-- Another page blocking an IndexedDB upgrade no longer stalls terrain work: cache operations fail promptly and recover when the old connection closes. New cache connections yield to later schema upgrades.
-
-- Overlay manifest requests time out after 30 seconds, allowing retries after stalled connections while retaining the last valid same-context content.
-
-- Remote uploads accept shared-backed byte arrays and preserve subarray boundaries without an extra full-file JavaScript copy for ordinary buffers.
-
-- S3-compatible range reads also handle full 200 responses correctly; object bodies use the SDK's typed stream conversion instead of a separate hand-written compatibility collector.
-
-- Disposed camera controls stop held-key motion and release pointer ownership; lost pointer capture ends top-view dragging, and denied/unsupported pointer lock does not create unhandled errors.
-
-- Weighted LRU insertion evicts before adding weights, avoiding an infinite eviction loop when finite weights overflow their sum; unbounded totals recover after deletion.
-
-- Remote storage range reads honor the requested slice when a server/proxy legally ignores Range and returns a full 200 response; returned slices do not retain the full response buffer.
-
-- Failed media reads no longer attach the original asset length, MIME type or validators to a JSON error, avoiding truncated/hanging HTTP responses. Conditional cross-origin HEAD is included in CORS methods.
-
-- Media imports reserve configurable bounded capacity before reading uploads or decoding assets, limiting concurrent memory pressure; an exhausted queue returns retryable 503 without buffering another upload.
-
-- Viewer disposal cancels bootstrap metadata, atlas and colormap requests, plus late sky-texture loads; aborted atlas work no longer starts the individual-texture fallback. Image completion and failure detach handlers.
-
-- Fallback atlas identities include UV placement, texture alpha classification and LOD average colors, avoiding stale meshes when packs change under the same texture names or packing order changes.
-
-- Mesh resource identities include biome definitions and dimension lighting rules, preventing stale IndexedDB meshes from retaining old tint/light after configuration edits and reloads.
-
-- Local game-data overrides now use the same atomic object replacement as mounted overrides; failed publication preserves the previous complete JSON file and cleans temporary files.
-
-- Biome edits validate finite climate values, complete RGB effects and supported modifiers before publication, and use bounded JSON reads; rejected edits leave the last usable data intact.
-
-- World sync diff JSON is bounded by the configured upload budget and validates every file entry/path before starting remote hashes; malformed requests return 400/413 without backend work.
-
-- Local storage adopts exclusive filesystem read buffers instead of copying large files twice; pooled and short-read buffers are trimmed to exact-size owned arrays.
-
-- Curve sampling and area-mask layout reject nonfinite budgets and inverted bounds before generating invalid GPU dimensions; public geometry helpers document coordinate units and ownership.
-
-- Area triangulation uses Earcut with local coordinates and an area-deviation guard, improving large concave overlays while preserving original vertex indices and winding.
-
-- Fallback lighting copies contiguous section channels in bulk while preserving independent section buffers and untouched channels; real-world output digests remain unchanged.
-
-- Region discovery and uploads share bounded Anvil filename parsing; impossible region/chunk filenames no longer produce unsafe coverage coordinates.
-
-- Object synchronization hashes byte views directly instead of copying both complete objects before WebCrypto; shared backing remains supported with an explicit ordinary-buffer copy.
-
-- Chunk deletion validates the entire batch before touching storage, preventing malformed later entries from causing partial deletion followed by an error.
-
-- Dimension validation rejects `.`/`..` namespaces; malformed encoded archive directories no longer break world discovery. CLI and server share dimension paths, including custom paths containing a `region` segment.
-
-- Overlay resource pools reject invalid budgets/concurrency immediately, preventing NaN limits from disabling bounds and zero concurrency from leaving promises pending forever.
-
-- Chunk parsing rejects out-of-range/duplicate section coordinates, oversized palettes and invalid chunk coordinates before height-dependent work, avoiding runaway loops on malformed archives. Resource namespace normalization and signed chunk-coordinate validation now have one shared implementation.
-
-- Media proxy responses evaluate conditional requests, HEAD, and unsatisfiable ranges before blob I/O; satisfiable ranges read only the requested bytes. Weak/list ETags and strong If-Range validators are handled correctly.
-
-- Database maintenance and direct admin imports retain their small runtime dependency set when media URL configuration is enabled; relocated maintenance artifacts no longer require storage or AWS packages.
-
-- Camera movement consumes browser selection/scroll shortcuts outside editable controls, including Ctrl+A on Windows; right Control and Shift now match their left-hand counterparts.
-- Glass and ice remove touching internal faces through explicit block metadata, while leaves and different glass colors retain theirs. Inset/rotated model faces no longer cull neighbors solely by their projected bounding box. Existing mesh cache entries are invalidated.
-- Disconnected tunnels now union section-visibility connections correctly; duplicate connections previously carried into other bits and could hide reachable terrain.
-- Visibility traversal tracks section entrances separately, preserving reachable independent tunnels, while zero-connectivity solid boundaries stop traversal. Scratch queues release section references after use; worker/viewer share the mesher's full-connectivity constant.
-- Storage metadata caches now bound retained keys and aggregate list items, including negative lookups; long-running read-only servers no longer retain every path ever probed.
-- Legacy overworld entity sidecars resolve to `entities/` rather than rereading terrain from `region/`. Warm chunk reads reuse entity NBT and hashes, and world deletion releases cached region/header bytes immediately.
-- Unavailable or failing IndexedDB now falls back to worker meshing instead of repeatedly retrying a failed cache read with missing terrain.
-- Partial camera/look-at URLs retain unspecified coordinates instead of turning them into zero; restricted browser storage no longer prevents viewer initialization.
-- Overlay media downloads cancel as soon as their pinned byte budget is exceeded, including responses without Content-Length. Upload/download readers share the same bounded streaming helper.
-- Admin actions report HTTP/network failures without unhandled promises, serialize duplicate submissions and cancel stale panel reads. Restricted browser storage is tolerated during language/session initialization.
-- World names reject `.` and `..` before storage access; `.` previously normalized to the entire worlds mount during direct deletion/synchronization. Server, CLI and content registration share this validation. Invalid creation metadata is rejected before partial writes, and encoded world names no longer shift uploaded file paths.
-- Local filesystem-root mounts now resolve children correctly; S3 listings normalize root-equivalent prefixes consistently. Metadata caches reuse canonical paths instead of retaining duplicate spellings.
-- Disposing/switching a world aborts chunk/coverage/hash requests and suppresses late IO callbacks. Capability requests are also cancelled on world changes. Malformed batch payloads fail explicitly instead of marking valid terrain absent.
-- Canonical Java `Heightmaps.WORLD_SURFACE` data is used instead of being ignored because of a tag-case typo. Packing and vertical offsets are checked against scanned samples, including light-only boundary sections; malformed/stale samples fall back to scanning. Height queries wrap local coordinates consistently.
-
-### Changed
-
-- Overlay contour validation skips disjoint edge pairs before orientation tests, reducing typical large-ring validation cost while preserving inclusive touch rejection.
-
-- Media inspection and its native/XML decoder dependencies load on the first media import, avoiding their startup memory cost for read-only or content-disabled servers.
-
-- Registered entity models reuse the same baked-variant cache as block models, avoiding repeated base-geometry baking for each instance while keeping transforms independent.
-
-- Binary HTTP responses reuse exact ordinary byte views across media, textures, top-map, storage and MessagePack routes, avoiding redundant whole-payload copies and using Hono Node's typed-array response path. Shared backing is copied before delivery.
-
-- Content mutations reuse repeated layer/media reference reads within that mutation, while checking each instance's placement and rechecking publication state on the next operation.
-
-- Server imports and viewer decoding share one static GLB support-policy parser; deep metadata traversal no longer depends on recursive JavaScript calls. Full glTF validation remains a server publication check.
-
-- Server region, chunk, texture and manifest caches share bounded LRU accounting; oversized region/chunk buffers bypass retention without flushing useful residents. Texture-path and world-directory lookups are also bounded.
-- A 32 MiB / 64-entry CPU mesh cache reuses immutable full/LOD buffers before IndexedDB cloning. Disabling or clearing the mesh cache releases these references as well.
-- Server chunk/entity decoding uses Node's asynchronous native zlib codecs, sharing Anvil validation with core. Cached decoded buffers own their exact backing allocation, and uploaded chunks are decompressed only once before parsing and storage.
-- WebGL initialization, camera controls, world changes and disposal now live in an independent viewer controller. The frame timer uses page visibility to avoid movement jumps after background tabs resume.
-- Web uses native Preact, signals-backed translations and accessible native form/tab controls, removing React, Radix and react-i18next from the viewer. React aliases/compat are disabled and checked by the package-boundary tooling. Admin continues to use React.
-- Viewer UI is split into view/settings/diagnostic panels and camera fields with CSS Modules. Shared world loading, capabilities, settings and diagnostics use signals; the canvas lives outside the UI tree. World-list failures can be retried, URL overrides remain session-local, and blank camera inputs no longer silently become zero.
-- Removed deprecated `WorldReader`/`WorldStorage`, world-named local/S3/cache/scope class aliases, `createWorldStorage`, and `AppServices.storage`. Consumers now use object-storage names and `services.mounts.worlds`; the distinct remote `ServerWorldStorage` protocol remains supported.
-- Admin is split into a small application shell, independent panels and shared async/session controls. Account menus show verified identity/role, check sessions and revoke user credentials on logout; destructive actions use retryable confirmation dialogs.
-- S3 prefix deletion uses up to four concurrent SDK `DeleteObjects` batches of at most 1000 keys, rather than one request per object. Per-object errors in HTTP-success responses reject the operation explicitly.
-- Region-only chunk batches avoid one missing override-object stat/HEAD per coordinate. A shared directory probe discovers whether overrides exist, and normal writes invalidate that probe immediately.
-- Packed block/biome/height indices up to 32 bits decode through endian-aware zero-copy word views, avoiding BigInt operations per value. Wider public bit widths retain their Number semantics; all 64 widths are checked against BigInt extraction.
-- CLI and server share neutral block-info construction and ordered wildcard overrides through `core/assets`; dictionary overrides cannot replace the map prototype.
+## [0.3.0] - 2026-10-18
 
 ### Added
 
-- A shared weighted LRU cache in `core/cache`, with entry/weight limits and oversized-value bypass, for consistent memory accounting across packages.
-- Opt-in public media object URLs alongside API proxies: configure `MEDIA_PUBLIC_BASE_URL`, request `delivery=public`, and verify pinned size/digest on either path. The viewer falls back to the proxy on public delivery failures; runtime `mediaDelivery: proxy` forces proxy use. Original manifest requests retain their wire format.
+- Opt-in public media URLs alongside API proxies via `MEDIA_PUBLIC_BASE_URL` and `delivery=public`, with pinned size/digest verification and automatic proxy fallback. Existing manifest responses remain unchanged; runtime `mediaDelivery: proxy` forces proxy delivery.
+- Shared weighted LRU caching, targeted performance benchmarks, and broader storage, rendering, browser and lifecycle regression coverage.
+
+### Changed
+
+- Web uses native Preact/signals without React compat, split panels and CSS Modules. The canvas and viewer controller live outside the UI tree; loading, settings and diagnostics use signals. Admin retains React.
+- Admin uses shared session/async controls, verified account menus, logout/revocation and retryable confirmation dialogs; stale requests and duplicate submissions no longer overwrite current state.
+- Server caches have bounded retention, oversized-buffer bypass and reusable chunk/entity results. Region-only batches avoid redundant override probes; native asynchronous zlib, packed-index decoding and bulk lighting writeback reduce chunk-processing overhead.
+- Full/LOD meshes reuse a bounded CPU cache before IndexedDB. Entity models share baked variants, and mesh packing uses native typed-array conversion. Cache budgets count complete retained allocations and invalidate obsolete results.
+- Storage reads, hashing, uploads and binary HTTP responses avoid redundant whole-buffer copies while preserving view boundaries and shared-buffer safety. S3 deletion uses bounded batches and reports per-object failures.
+- Overlay triangulation uses Earcut with local coordinates and area checks; contour validation skips disjoint edge pairs. Server/viewer share static GLB policy parsing, and optional media decoders load on first import.
+- Shared resource/path validation and block metadata replace duplicated implementations. OXC enforces top-level spacing and type-only imports; benchmark scripts participate in lint/type checks with scoped spacing allowances.
+
+### Fixed
+
+- Flying consumes browser selection shortcuts, including Windows Ctrl+A, while editable controls retain normal selection. Left/right modifiers, pointer-lock failures, lost capture and disposal now have consistent behavior.
+- Glass/ice cull touching internal faces while leaves and different glass colors retain theirs. Model coverage, disconnected-tunnel visibility, far-coordinate lookups, texture-variable inheritance and biome-color dictionaries render correctly; affected mesh caches rebuild.
+- Stored `Heightmaps.WORLD_SURFACE` data and entity sidecars are read correctly, with packing/offset validation and safe height-scan fallback. Malformed section coordinates, palettes and region filenames fail before unbounded work.
+- IndexedDB failures or blocked upgrades fall back to meshing and recover when available. Resource identities include biome/dimension rules and fallback-atlas layout/colors; world switches and disposal cancel pending loads and release resources.
+- Partial camera URLs preserve unspecified coordinates; restricted storage/history, background-tab resumes and stalled manifest requests no longer interrupt viewer operation.
+- Media HTTP handling supports HEAD, conditional requests, Range/If-Range and CORS without unnecessary blob reads. Errors use consistent response headers; bounded downloads and remote/S3 range reads handle overflow and ignored Range responses correctly.
+- Content imports and metadata writes reserve bounded capacity before buffering bodies. Published metadata must match its storage identity/revision; reference reads are reused within each mutation and checked afresh on later operations.
+- World/path validation and complete batch checks prevent malformed sync/deletion requests from causing partial changes. Storage roots and cache keys normalize consistently; failed mutations invalidate metadata, and local game-data publication is atomic with validated biome edits.
+- Public CLI `overlay manifest` works without login and omits credentials. Relocated maintenance/CLI artifacts retain isolated dependencies; acceptance startup handles colored/fragmented output, bounded diagnostics and timeouts.
+
+### Removed
+
+- Deprecated `WorldReader`/`WorldStorage`, world-named local/S3/cache/scope aliases, `createWorldStorage` and `AppServices.storage`. Use object-storage names and `services.mounts.worlds`; the distinct remote `ServerWorldStorage` protocol and existing HTTP world/sync behavior remain supported.
 
 ## [0.2.0] - 2026-10-17
 
