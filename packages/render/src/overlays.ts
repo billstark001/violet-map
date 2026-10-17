@@ -1,3 +1,4 @@
+import earcut, { deviation } from 'earcut';
 import type {
   AreaFeature,
   CurveFeature,
@@ -150,53 +151,32 @@ export function pointInRing(point: Vec2, ring: readonly Vec2[]): boolean {
   return inside;
 }
 
-/** Simple single-ring ear clipping; collinear boundary points are removed without moving the contour. */
+const MAX_AREA_RING_POINTS = 2048;
+const MAX_TRIANGULATION_DEVIATION = 1e-8;
+
+/** Triangulate an already validated simple single ring. Return original vertex
+ * indices and preserve its winding; holes/self-intersections remain unsupported.
+ * Local coordinates avoid cancellation when a small region is far from origin. */
 export function triangulateRing(ring: readonly Vec2[]): Uint32Array {
-  if (ring.length < 3 || ring.length > 2048) throw new Error('invalid area ring size');
+  if (ring.length < 3 || ring.length > MAX_AREA_RING_POINTS) throw new Error('invalid area ring size');
+  const coordinates = new Float64Array(ring.length * 2);
+  for (let index = 0; index < ring.length; index++) {
+    coordinates[index * 2] = ring[index][0] - ring[0][0];
+    coordinates[index * 2 + 1] = ring[index][1] - ring[0][1];
+  }
   let area = 0;
-  for (let i = 0; i < ring.length; i++) {
-    const a = ring[i],
-      b = ring[(i + 1) % ring.length];
-    area += (a[0] - ring[0][0]) * (b[1] - ring[0][1]) - (b[0] - ring[0][0]) * (a[1] - ring[0][1]);
+  for (let index = 0; index < ring.length; index++) {
+    const next = (index + 1) % ring.length;
+    area += coordinates[index * 2] * coordinates[next * 2 + 1] - coordinates[next * 2] * coordinates[index * 2 + 1];
   }
-  const sign = Math.sign(area);
-  if (!sign) throw new Error('degenerate area');
-  const active = Array.from({ length: ring.length }, (_, i) => i);
-  const indices: number[] = [];
-  let cursor = 0,
-    stalled = 0;
-  while (active.length > 3) {
-    const count = active.length,
-      i = cursor % count,
-      a = active[(i + count - 1) % count],
-      b = active[i],
-      c = active[(i + 1) % count];
-    const turn = cross(ring[a], ring[b], ring[c]) * sign;
-    let ear = turn >= 0;
-    if (turn > 0)
-      for (const p of active) {
-        if (p === a || p === b || p === c) continue;
-        const q = ring[p];
-        if (
-          cross(ring[a], ring[b], q) * sign >= 0 &&
-          cross(ring[b], ring[c], q) * sign >= 0 &&
-          cross(ring[c], ring[a], q) * sign >= 0
-        ) {
-          ear = false;
-          break;
-        }
-      }
-    if (ear) {
-      if (turn > 0) indices.push(a, b, c);
-      active.splice(i, 1);
-      cursor = Math.max(0, i - 1);
-      stalled = 0;
-    } else {
-      cursor++;
-      if (++stalled > count) throw new Error('area cannot be triangulated');
-    }
-  }
-  if (active.length === 3 && cross(ring[active[0]], ring[active[1]], ring[active[2]]) !== 0) indices.push(...active);
+  if (!Number.isFinite(area) || area === 0) throw new Error('degenerate area');
+  const indices = earcut(coordinates);
+  const error = deviation(coordinates, null, 2, indices);
+  if (!indices.length || !Number.isFinite(error) || error > MAX_TRIANGULATION_DEVIATION)
+    throw new Error('area cannot be triangulated');
+  if (area < 0)
+    for (let index = 0; index < indices.length; index += 3)
+      [indices[index + 1], indices[index + 2]] = [indices[index + 2], indices[index + 1]];
   return new Uint32Array(indices);
 }
 

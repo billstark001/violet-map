@@ -62,7 +62,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@violet-map/core": "workspace:*"
+    "@violet-map/core": "workspace:*",
+    "earcut": "^3.2.4"
   },
   "devDependencies": {
     "typescript": "^6.0.3"

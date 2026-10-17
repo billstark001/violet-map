@@ -305,6 +305,9 @@ importers:
       '@violet-map/core':
         specifier: workspace:*
         version: link:../core
+      earcut:
+        specifier: ^3.2.4
+        version: 3.2.4
     devDependencies:
       typescript:
         specifier: ^6.0.3
@@ -2872,6 +2875,9 @@ packages:
         optional: true
       sqlite3:
         optional: true
+
+  earcut@3.2.4:
+    resolution: {integrity: sha512-FHc6yNpnTORB0tM5kmZ03iD2mDuNakDE2lvf4Hw1XkfxtEHIGVi01B/GqUSwx+NcC1WGjidAfpTXzeALtPtfpg==}
 
   electron-to-chromium@1.5.458:
     resolution: {integrity: sha512-/hIH2gRSmxrf4/X4Nw/t/Wc8PVS22l8/3HnWjWTWsTOM5dsnMUPZF/+u+yr3LqweNuTBJE1rq6qAQzKkZVwMfA==}
@@ -5764,6 +5770,8 @@ snapshots:
       '@electric-sql/pglite': 0.5.4
       '@types/pg': 8.20.0
       pg: 8.22.0
+
+  earcut@3.2.4: {}
 
   electron-to-chromium@1.5.458: {}
 

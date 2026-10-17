@@ -161,3 +161,50 @@ test('media bounds include anchor, intrinsic orientation, scale, Euler rotations
   const billboard = mediaBounds({ ...f, placement: 'billboard' }, {} as MediaVersion);
   assert.ok(billboard.min[0] < 10 && billboard.max[0] > 30);
 });
+
+test('triangulation preserves winding and area for large concave rings far from origin', () => {
+  const ring: [number, number][] = Array.from({ length: 2048 }, (_, index) => {
+    const angle = (index * Math.PI * 2) / 2048;
+    const radius = index % 2 ? 60 : 100;
+    return [30_000_000 + Math.cos(angle) * radius, -30_000_000 + Math.sin(angle) * radius];
+  });
+  for (const points of [ring, [...ring].reverse()]) {
+    const indices = triangulateRing(points);
+    assert.equal(indices.length, (points.length - 2) * 3);
+    let area = 0,
+      triangles = 0;
+    for (let index = 0; index < points.length; index++) {
+      const a = points[index],
+        b = points[(index + 1) % points.length],
+        origin = points[0];
+      area += (a[0] - origin[0]) * (b[1] - origin[1]) - (b[0] - origin[0]) * (a[1] - origin[1]);
+    }
+    for (let index = 0; index < indices.length; index += 3) {
+      const a = points[indices[index]],
+        b = points[indices[index + 1]],
+        c = points[indices[index + 2]];
+      const triangle = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+      assert.equal(Math.sign(triangle), Math.sign(area));
+      triangles += triangle;
+    }
+    assert.ok(Math.abs(triangles / area - 1) < 1e-10);
+  }
+  assert.throws(
+    () =>
+      triangulateRing([
+        [0, 0],
+        [1, 0],
+        [2, 0],
+      ]),
+    /degenerate/,
+  );
+  assert.throws(
+    () =>
+      triangulateRing([
+        [0, 0],
+        [NaN, 1],
+        [2, 0],
+      ]),
+    /degenerate/,
+  );
+});

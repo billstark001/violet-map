@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Area triangulation uses Earcut with local coordinates and an area-deviation guard, improving large concave overlays while preserving original vertex indices and winding.
+
 - Fallback lighting copies contiguous section channels in bulk while preserving independent section buffers and untouched channels; real-world output digests remain unchanged.
 
 - Region discovery and uploads share bounded Anvil filename parsing; impossible region/chunk filenames no longer produce unsafe coverage coordinates.
