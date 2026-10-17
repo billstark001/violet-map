@@ -101,6 +101,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Changed
 
+- Content mutations reuse repeated layer/media reference reads within that mutation, while checking each instance's placement and rechecking publication state on the next operation.
+
 - Server imports and viewer decoding share one static GLB support-policy parser; deep metadata traversal no longer depends on recursive JavaScript calls. Full glTF validation remains a server publication check.
 
 - Server region, chunk, texture and manifest caches share bounded LRU accounting; oversized region/chunk buffers bypass retention without flushing useful residents. Texture-path and world-directory lookups are also bounded.

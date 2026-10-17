@@ -282,6 +282,62 @@ test('stored publication IDs and revisions must match their object keys', async 
   assert.equal((await service.listMaps()).length, 1, 'only actual .json files are map documents');
 });
 
+test('repeated layer and media references reuse metadata only within the current mutation', async (t) => {
+  const { content } = await fixture(t);
+  const asset = await content.importMedia(
+    new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>'),
+    'image/svg+xml',
+    'marker',
+  );
+  const feature = {
+    kind: 'media',
+    assetId: asset.document.assetId,
+    versionId: asset.version.versionId,
+    position: [0, 0, 0],
+    rotation: [0, 0, 0],
+    scale: [1, 1, 1],
+    views: ['top'],
+    placement: 'plane',
+    size: [1, 1],
+    anchor: [0, 0],
+  };
+  const features = Array.from({ length: 100 }, (_, i) => ({ ...feature, featureId: `instance-${i}` }));
+  const media = t.mock.method(content, 'getMedia');
+  const versions = t.mock.method(content, 'getMediaVersion');
+  const document = await content.createLayer({ ...layer, features });
+  assert.equal(media.mock.callCount(), 1);
+  assert.equal(versions.mock.callCount(), 1);
+  const getLayer = t.mock.method(content, 'getLayer');
+  await content.createMap({
+    name: 'map',
+    worldKey: 'world',
+    bindings: Array.from({ length: 100 }, (_, i) => ({
+      bindingId: `binding-${i}`,
+      layerId: document.layerId,
+      dimension: 'overworld',
+      enabled: true,
+      order: i,
+    })),
+  });
+  assert.equal(getLayer.mock.callCount(), 1);
+  await content.replaceLayer(document.layerId, { ...document, revision: 2 }, 1);
+  assert.equal(media.mock.callCount(), 2, 'each mutation rechecks current publication state');
+  assert.equal(versions.mock.callCount(), 2);
+  const { size: _size, anchor: _anchor, ...model } = feature;
+  await assert.rejects(
+    content.replaceLayer(
+      document.layerId,
+      {
+        ...document,
+        revision: 3,
+        features: [features[0], { ...model, featureId: 'wrong-placement', placement: 'model' }],
+      },
+      2,
+    ),
+    /placement does not match/,
+  );
+});
+
 test('content routes are absent when disabled, read-only never exposes mutations, permission and CORS hold', async (t) => {
   const { config, services, app } = await fixture(t);
   for (const features of [

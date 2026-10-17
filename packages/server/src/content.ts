@@ -181,12 +181,23 @@ export class ContentService {
     }
   }
   private async checkReferences(document: LayerDocument): Promise<void> {
+    const assets = new Map<string, MediaDocument>();
+    const versions = new Map<string, MediaVersion>();
     for (const feature of document.features)
       if (feature.kind === 'media') {
-        const asset = await this.reference(() => this.getMedia(feature.assetId));
+        let asset = assets.get(feature.assetId);
+        if (!asset) {
+          asset = await this.reference(() => this.getMedia(feature.assetId));
+          assets.set(feature.assetId, asset);
+        }
         if (!asset.versions.includes(feature.versionId))
           throw new ContentError('REFERENCE_CONFLICT', 409, 'asset version is not published');
-        const version = await this.reference(() => this.getMediaVersion(feature.assetId, feature.versionId));
+        const key = `${feature.assetId}/${feature.versionId}`;
+        let version = versions.get(key);
+        if (!version) {
+          version = await this.reference(() => this.getMediaVersion(feature.assetId, feature.versionId));
+          versions.set(key, version);
+        }
         if ((version.mediaType === 'model/gltf-binary') !== (feature.placement === 'model'))
           throw new ContentValidationError('media placement does not match asset type');
       }
@@ -264,7 +275,8 @@ export class ContentService {
     return archive && map.expectedArchiveId ? 'verified' : 'unverified';
   }
   private async checkBindings(map: MapDocument): Promise<void> {
-    for (const binding of map.bindings) await this.reference(() => this.getLayer(binding.layerId));
+    for (const layerId of new Set(map.bindings.map((binding) => binding.layerId)))
+      await this.reference(() => this.getLayer(layerId));
   }
   createMap(input: unknown): Promise<MapDocument> {
     return this.mutate(async () => {
