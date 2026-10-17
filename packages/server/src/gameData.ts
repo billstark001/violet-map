@@ -1,3 +1,4 @@
+import { LocalStorage } from '@violet-map/storage/local';
 import type { AtomicObjectStorage } from '@violet-map/core/storage';
 import type { ServerConfig } from './configuration.js';
 import type { AssetService } from './assets.js';
@@ -16,6 +17,7 @@ import {
 
 export function createGameDataService(config: ServerConfig, assets: AssetService, overrides?: AtomicObjectStorage) {
   const { buildAssetBundle } = assets;
+  const writableData: AtomicObjectStorage = overrides ?? new LocalStorage(config.data.dir);
 
   const defaultsDir = path.dirname(fileURLToPath(defaultDataUrl('biomes.json')));
   const dataFileCache = new Map<string, unknown>();
@@ -74,13 +76,13 @@ export function createGameDataService(config: ServerConfig, assets: AssetService
       if (dataFileInflight.get(name) === load) dataFileInflight.delete(name);
     }
   }
-  /** Write a root data file and invalidate readers that started before the write. */
+  /** Atomically publish a root data file, then invalidate earlier readers.
+   * Undefined/non-JSON values fail before storage changes; local files keep their
+   * readable indentation and mounted object overrides retain compact encoding. */
   async function writeDataFile(name: string, value: unknown): Promise<void> {
-    if (overrides) await overrides.replace(name, new TextEncoder().encode(JSON.stringify(value)), 'application/json');
-    else {
-      await fs.mkdir(config.data.dir, { recursive: true });
-      await fs.writeFile(path.join(config.data.dir, name), JSON.stringify(value, null, 2));
-    }
+    const json = JSON.stringify(value, null, overrides ? undefined : 2);
+    if (json === undefined) throw new TypeError('data file must contain a JSON value');
+    await writableData.replace(name, new TextEncoder().encode(json), 'application/json');
     dataGeneration++;
     dataFileCache.delete(name);
     dataFileInflight.delete(name);

@@ -42,3 +42,19 @@ test('writing a data file invalidates a cached value', async (t) => {
   await writeDataFile('biomes.json', { second: {} });
   assert.deepEqual(await readBiomes(), { second: {} });
 });
+
+test('failed local data publication retains the previous complete file and leaves no temporary objects', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-data-atomic-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const config = loadServerConfig({ env: { DEPLOYMENT_PROFILE: 'public', DATA_DIR: dir }, cwd: dir });
+  const data = createGameDataService(config, createAssetService(config));
+  await data.writeDataFile('biomes.json', { old: {} });
+  t.mock.method(fs, 'rename', async () => {
+    throw new Error('injected publication failure');
+  });
+  await assert.rejects(data.writeDataFile('biomes.json', { changed: {} }), /injected publication failure/);
+  await assert.rejects(data.writeDataFile('biomes.json', undefined), /JSON value/);
+  data.clearGameDataCaches();
+  assert.deepEqual(await data.readBiomes(), { old: {} });
+  assert.deepEqual(await fs.readdir(dir), ['biomes.json']);
+});
