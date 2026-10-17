@@ -68,6 +68,8 @@ test('remote authorization fails before creating source identity or trying anoth
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-sync-auth-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const context = await loadContext({ cliHome: path.join(root, 'cli'), serverUrl: 'https://example.test' }, {});
+  for (const world of ['.', '..'])
+    await assert.rejects(runWorldSync({ ...base, from: root, world }, context), /--world/);
   await assert.rejects(runWorldSync({ ...base, from: root, target: 'server' }, context), /No login/);
   await assert.rejects(fs.stat(path.join(root, '.violet-map/identity.json')), { code: 'ENOENT' });
 });

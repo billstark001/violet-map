@@ -1,6 +1,9 @@
 import type { RouteContext } from './context.js';
+import { validateWorldName } from '../worldValidation.js';
 
 export function mountWorldAdmin(context: RouteContext) {
+  context.app.use('/api/admin/worlds/:world/*', validateWorldName);
+  context.app.use('/api/admin/worlds/:world', validateWorldName);
   const {
     app,
     worldStorage,

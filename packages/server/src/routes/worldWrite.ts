@@ -1,5 +1,6 @@
 import { bodyLimit } from 'hono/body-limit';
-import { isDimensionId } from '@violet-map/core/domain';
+import { isDimensionId, isWorldName } from '@violet-map/core/domain';
+import { isWorldCreateInput } from '../worldValidation.js';
 import type { RouteContext } from './context.js';
 
 export function mountWorldWrite(context: RouteContext) {
@@ -53,8 +54,9 @@ export function mountWorldWrite(context: RouteContext) {
     async (c) => {
       const dimension = c.req.param('dim');
       if (dimension && !isDimensionId(dimension)) return c.json({ error: 'invalid dimension id' }, 400);
-      const body = await c.req.json<{ world?: string; levelName?: string; dimensions?: string[] }>();
-      if (!body.world) return c.json({ error: 'missing world' }, 400);
+      const body: unknown = await c.req.json().catch(() => null);
+      if (!isWorldCreateInput(body) || !isWorldName(body.world))
+        return c.json({ error: 'invalid world creation input' }, 400);
       return c.json(await createWorld(body.world, body.dimensions, body.levelName));
     },
   );
@@ -65,9 +67,14 @@ export function mountWorldWrite(context: RouteContext) {
     async (c) => {
       const dimension = c.req.param('dim');
       if (dimension && !isDimensionId(dimension)) return c.json({ error: 'invalid dimension id' }, 400);
-      const body: { levelName?: string; dimensions?: string[] } = await c.req
-        .json<{ levelName?: string; dimensions?: string[] }>()
-        .catch(() => ({}));
+      const raw = await c.req.text();
+      let body: unknown = {};
+      try {
+        if (raw.trim()) body = JSON.parse(raw);
+      } catch {
+        return c.json({ error: 'invalid JSON' }, 400);
+      }
+      if (!isWorldCreateInput(body)) return c.json({ error: 'invalid world creation input' }, 400);
       return c.json(await createWorld(c.req.param('world'), body.dimensions, body.levelName));
     },
   );
@@ -79,8 +86,7 @@ export function mountWorldWrite(context: RouteContext) {
       const dimension = c.req.param('dim');
       if (dimension && !isDimensionId(dimension)) return c.json({ error: 'invalid dimension id' }, 400);
       const world = c.req.param('world');
-      const prefix = `/api/admin/worlds/${world}/files/`;
-      const relativePath = decodeURIComponent(c.req.path.slice(prefix.length));
+      const relativePath = decodeURIComponent(c.req.path.replace(/^\/api\/admin\/worlds\/[^/]+\/files\//, ''));
       const bytes = new Uint8Array(await c.req.arrayBuffer());
       return c.json(await saveWorldFile(world, relativePath, bytes));
     },

@@ -1,4 +1,5 @@
 import { loadCapability } from '../capabilities.js';
+import { isWorldName } from '@violet-map/core/domain';
 
 import type { StorageOptions, S3StorageOptions } from '@violet-map/storage/types';
 
@@ -114,8 +115,10 @@ export async function targetStorage(options: WorldSyncOptions, context: CliConte
 
 export async function runWorldSync(options: WorldSyncOptions, context: CliContext): Promise<void> {
   if (!options.from) throw new Error('--from must not be empty');
-  if (!/^[A-Za-z0-9_.-]+$/.test(options.world))
-    throw new Error('--world may only contain letters, numbers, dot, dash, and underscore');
+  if (!isWorldName(options.world))
+    throw new Error(
+      '--world must be a directory name containing letters, numbers, dot, dash, or underscore (not . or ..)',
+    );
   const storageOptions = await targetStorage(options, context);
   const { checkWorldIdentity, ensureWorldIdentity, ScopedStorage, syncWorld } =
     await loadCapability('@violet-map/storage');

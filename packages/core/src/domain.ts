@@ -33,3 +33,4 @@ export function normalizeId(id: string): string {
 
 export * from './world.js';
 export * from './dimensionId.js';
+export * from './worldName.js';

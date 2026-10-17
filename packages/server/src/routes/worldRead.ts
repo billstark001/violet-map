@@ -1,6 +1,8 @@
 import type { RouteContext } from './context.js';
+import { validateWorldName } from '../worldValidation.js';
 
 export function mountWorldRead(context: RouteContext) {
+  context.app.use('/api/worlds/:world/*', validateWorldName);
   const {
     app,
     getTopMapManifest,

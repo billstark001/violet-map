@@ -4,10 +4,10 @@ import type { ObjectReader } from '@violet-map/core/storage';
 import type { WorldCapabilities } from '@violet-map/core/contracts';
 import { cleanStoragePath } from '@violet-map/storage';
 import { LruCache } from '@violet-map/core/cache';
+import { assertWorldName, isWorldName } from '@violet-map/core/domain';
 import { type TopMapManifest } from '@violet-map/core/formats/top-map';
 
 export function createTopMapService(worldStorage: ObjectReader, config: ServerConfig) {
-  const WORLD_RE = /^[A-Za-z0-9_.-]+$/;
   const TOP_MAP_ROOT = '.violet-map/top-map';
 
   interface ManifestCacheEntry {
@@ -24,10 +24,6 @@ export function createTopMapService(worldStorage: ObjectReader, config: ServerCo
   function invalidateTopMapManifest(world: string): void {
     manifestGeneration++;
     manifestCache.delete(world);
-  }
-
-  function assertWorldName(world: string) {
-    if (!WORLD_RE.test(world)) throw new Error('invalid world name');
   }
 
   function manifestPath(world: string): string {
@@ -110,7 +106,7 @@ export function createTopMapService(worldStorage: ObjectReader, config: ServerCo
 
   async function warmTopMapManifests(): Promise<void> {
     for (const world of await worldStorage.listDirectories()) {
-      if (!WORLD_RE.test(world)) continue;
+      if (!isWorldName(world)) continue;
       await getTopMapManifest(world);
     }
   }

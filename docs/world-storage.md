@@ -2,6 +2,8 @@
 
 [Back to README](../README.md)
 
+World names are single directory segments containing ASCII letters, numbers, dot, dash or underscore; `.` and `..` are rejected. This is shared by server operations, CLI world synchronization and overlay registrations so a world cannot normalize to the mount root. Creation validates level names and every dimension before any write; malformed JSON/metadata returns HTTP 400 without leaving a partial world.
+
 `ObjectReader`, `ObjectStorage`, and `AtomicObjectStorage` interfaces live in `@violet-map/core/storage`. Install the CLI optional peer `@violet-map/storage` alongside the CLI to synchronize worlds. The implementations have separate entries:
 
 1. `@violet-map/storage/local` — a filesystem root.

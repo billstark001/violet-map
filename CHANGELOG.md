@@ -35,6 +35,7 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 - Partial camera/look-at URLs retain unspecified coordinates instead of turning them into zero; restricted browser storage no longer prevents viewer initialization.
 - Overlay media downloads cancel as soon as their pinned byte budget is exceeded, including responses without Content-Length. Upload/download readers share the same bounded streaming helper.
 - Admin actions report HTTP/network failures without unhandled promises, serialize duplicate submissions and cancel stale panel reads. Restricted browser storage is tolerated during language/session initialization.
+- World names reject `.` and `..` before storage access; `.` previously normalized to the entire worlds mount during direct deletion/synchronization. Server, CLI and content registration share this validation. Invalid creation metadata is rejected before partial writes, and encoded world names no longer shift uploaded file paths.
 
 ### Changed
 

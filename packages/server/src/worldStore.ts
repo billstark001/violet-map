@@ -3,7 +3,7 @@ import type { ObjectStorage } from '@violet-map/core/storage';
 import type { TopMapService } from './topMap.js';
 import type { WorldInfo, WorldFileManifestEntry, ChunkCoverage, ChunkHashPayload } from '@violet-map/core/contracts';
 import { createHash } from 'node:crypto';
-import { assertDimensionId } from '@violet-map/core/domain';
+import { assertDimensionId, assertWorldName, isWorldName } from '@violet-map/core/domain';
 import { mapWithConcurrency } from '@violet-map/core/async';
 import { LruCache } from '@violet-map/core/cache';
 import { parseNbt } from '@violet-map/core/nbt';
@@ -37,7 +37,6 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     'minecraft:the_end': ['DIM1/region', 'dimensions/minecraft/the_end/region'],
   };
   const DEFAULT_DIMS = ['minecraft:overworld'];
-  const WORLD_RE = /^[A-Za-z0-9_.-]+$/;
   const REGION_RE = /^r\.(-?\d+)\.(-?\d+)\.mca$/;
   const CHUNK_RE = /^c\.(-?\d+)\.(-?\d+)\.nbt$/;
 
@@ -97,10 +96,6 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
   const WORLD_LIST_CACHE_MS = config.cache.worldListMs;
   let worldListCache: { expiresAt: number; worlds: WorldInfo[] } | null = null;
   let worldListInflight: Promise<WorldInfo[]> | null = null;
-
-  function assertWorldName(world: string) {
-    if (!WORLD_RE.test(world)) throw new Error('invalid world name');
-  }
 
   function invalidateWorldList(): void {
     worldListCache = null;
@@ -173,7 +168,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     const separator = clean.indexOf('/');
     if (separator < 1) return;
     const world = clean.slice(0, separator);
-    if (!WORLD_RE.test(world)) return;
+    if (!isWorldName(world)) return;
     const relative = clean.slice(separator + 1);
     invalidateWorldList();
     if (relative === '.violet-map/top-map/manifest.json') invalidateTopMapManifest(world);
@@ -381,6 +376,9 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
 
   async function ensureLevelDat(world: string, levelName = world, dimensions = DEFAULT_DIMS): Promise<void> {
     assertWorldName(world);
+    if (typeof levelName !== 'string') throw new Error('invalid level name');
+    if (!Array.isArray(dimensions)) throw new Error('invalid dimensions');
+    for (const dimension of dimensions) assertDimensionId(dimension);
     if (!(await worldStorage.stat(levelDatPath(world)))) {
       await worldStorage.write(
         levelDatPath(world),
@@ -414,7 +412,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
   async function listWorldsUncached(): Promise<WorldInfo[]> {
     const byWorld = new Map<string, Set<string>>();
     for (const world of await worldStorage.listDirectories()) {
-      if (!WORLD_RE.test(world)) continue;
+      if (!isWorldName(world)) continue;
       const dims = new Set<string>();
       const meta = await readJson<WorldMeta>(worldMetaPath(world));
       for (const dim of meta?.dimensions ?? []) dims.add(dim);

@@ -1,4 +1,5 @@
 import { isDimensionId } from './dimensionId.js';
+import { isWorldName } from './worldName.js';
 import { publicResourceUrl } from './http.js';
 import type {
   OverlayFeature,
@@ -249,11 +250,7 @@ export function parseMapDocument(value: unknown): MapDocument {
   contentId(d.mapId);
   integer(d.revision, 1);
   text(d.name);
-  if (
-    d.worldKey !== null &&
-    (typeof d.worldKey !== 'string' || !/^[\w.-]+$/.test(d.worldKey) || ['.', '..'].includes(d.worldKey))
-  )
-    fail('worldKey must be a world directory name or null');
+  if (d.worldKey !== null && !isWorldName(d.worldKey)) fail('worldKey must be a world directory name or null');
   if (d.expectedArchiveId !== undefined) contentId(d.expectedArchiveId);
   const bindings = array(d.bindings, 0, 10000).map(parseBinding);
   unique(bindings, 'bindingId');
