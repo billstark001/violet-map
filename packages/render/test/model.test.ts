@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ModelBaker } from '../src/model.js';
+import { MISSING_TEXTURE, ModelBaker } from '../src/model.js';
 import type { AssetBundle, ModelElementJson } from '@violet-map/core/assets';
 
 test('malformed model faces and perpendicular rescale do not produce invalid geometry', () => {
@@ -54,4 +54,35 @@ test('empty weighted variants and malformed multipart entries do not abort meshi
   const baker = new ModelBaker(bundle);
   assert.deepEqual(baker.getQuads({ name: 'minecraft:empty', properties: {} }, 0), []);
   assert.equal(baker.getQuads({ name: 'minecraft:mixed', properties: {} }, 0).length, 1);
+});
+
+test('texture variables may use prototype names without breaking inheritance or missing fallback', () => {
+  const bundle: AssetBundle = {
+    blockstates: { 'test:block': { variants: { '': { model: 'test:child' } } } },
+    models: {
+      'test:parent': {
+        textures: JSON.parse('{"constructor":"test:parent_texture","__proto__":"test:parent_proto"}'),
+        elements: [
+          {
+            from: [0, 0, 0],
+            to: [16, 16, 16],
+            faces: {
+              up: { texture: '#constructor' },
+              north: { texture: '#__proto__' },
+              south: { texture: '#hasOwnProperty' },
+            },
+          },
+        ],
+      },
+      'test:child': {
+        parent: 'test:parent',
+        textures: JSON.parse('{"constructor":"#toString","toString":"test:child_texture"}'),
+      },
+    },
+  };
+  const quads = new ModelBaker(bundle).getQuads({ name: 'test:block', properties: {} }, 0);
+  assert.deepEqual(
+    quads.map((quad) => quad.texture),
+    ['test:child_texture', 'test:parent_proto', MISSING_TEXTURE],
+  );
 });

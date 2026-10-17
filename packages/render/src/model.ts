@@ -239,7 +239,8 @@ const MISSING_CUBE_MODEL: BlockModelJson = {
   ],
 };
 
-/** 将 blockstate + 模型 JSON 烘焙为四边形列表，带缓存。 */
+/** Bake Java blockstate/model resources. Treat the bundle and returned cached
+ * quads as immutable; create a new baker when resource definitions change. */
 export class ModelBaker {
   private byRef = new WeakMap<BlockStateRef, WeightedQuads[]>();
   private byKey = new Map<string, WeightedQuads[]>();
@@ -247,6 +248,8 @@ export class ModelBaker {
 
   constructor(private bundle: AssetBundle) {}
 
+  /** Resolve a stable block state with a nonnegative integer variant seed.
+   * Positions use block units; missing models use the missing-texture cube. */
   getQuads(state: BlockStateRef, seed: number): BakedQuad[] {
     let variants = this.byRef.get(state);
     if (!variants) {
@@ -270,8 +273,8 @@ export class ModelBaker {
     return variants[0].quads;
   }
 
-  /** Bake a resource-registered block-entity/entity model directly. These use
-   * the exact same Java model JSON dialect as ordinary block models. */
+  /** Bake a registered entity model using the block-model dialect. Rotations
+   * are quarter turns expressed in degrees. */
   getModelQuads(model: string, rotationY = 0, rotationX = 0, uvlock = false): BakedQuad[] {
     return this.bake(normalizeId(model), (rotationX / 90) & 3, (rotationY / 90) & 3, uvlock);
   }
@@ -320,7 +323,7 @@ export class ModelBaker {
     ao: boolean;
     textureSize: [number, number];
   } {
-    const textures: Record<string, string> = {};
+    const textures: Record<string, string> = Object.create(null);
     let elements: ModelElementJson[] | undefined;
     let ao: boolean | undefined;
     let textureSize: [number, number] | undefined;

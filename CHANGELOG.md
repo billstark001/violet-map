@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Model texture variables such as `constructor`, `toString` and `__proto__` resolve through normal inheritance; missing variables use the fallback instead of inherited JavaScript prototype values.
+
 - Content metadata mutations reserve configurable bounded capacity before buffering JSON; queued requests keep bodies unread and excess traffic gets retryable `CONTENT_BUSY`, independently of media imports.
 
 - Small valid overlay regions near the world border no longer fail zero-area validation because large absolute-coordinate products cancel; either winding remains supported.
