@@ -164,6 +164,8 @@ export function loadServerConfig(options: ConfigurationOptions = {}) {
       uploadBytes: number('UPLOAD_BYTES', 256 * 1024 ** 2, 1, Number.MAX_SAFE_INTEGER, 'limits.uploadBytes'),
       atlasBuilds: number('ATLAS_BUILD_CONCURRENCY', 1, 1, 1024, 'limits.atlasBuilds'),
       atlasQueue: number('ATLAS_BUILD_QUEUE', 16, 0, 65536, 'limits.atlasQueue'),
+      mediaImports: number('MEDIA_IMPORT_CONCURRENCY', 1, 1, 1024, 'limits.mediaImports'),
+      mediaQueue: number('MEDIA_IMPORT_QUEUE', 8, 0, 65536, 'limits.mediaQueue'),
     },
   };
 }

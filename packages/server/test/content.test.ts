@@ -355,3 +355,52 @@ test('failed revision/version publication never exposes orphan files or protects
   await assert.rejects(service.getMediaVersion(asset2.document.assetId, digest), { code: 'CONTENT_NOT_FOUND' });
   assert.equal((await service.getMedia(asset2.document.assetId)).revision, 1);
 });
+
+test('media import capacity is reserved before reading queued bodies; excess requests receive retryable 503', async (t) => {
+  const { config, services, content } = await fixture(t);
+  const app = createApp({ ...config, limits: { ...config.limits, mediaImports: 1, mediaQueue: 1 } }, services);
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><path d="M0 0h1v1H0z"/></svg>');
+  const published = await content.importMedia(svg, 'image/svg+xml', 'fixture');
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  const imports = t.mock.method(content, 'importMedia', async () => {
+    await gate;
+    return published;
+  });
+  const reads = [0, 0, 0];
+  const request = (index: number) =>
+    app.request('/api/admin/media?name=queued', {
+      method: 'POST',
+      headers: { authorization: 'Bearer test', 'content-type': 'image/svg+xml' },
+      body: new ReadableStream(
+        {
+          pull(controller) {
+            reads[index]++;
+            controller.enqueue(svg);
+            controller.close();
+          },
+        },
+        { highWaterMark: 0 },
+      ),
+      duplex: 'half',
+    } as RequestInit);
+  const active = request(0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(imports.mock.callCount(), 1);
+  const queued = request(1);
+  const rejected = await request(2);
+  assert.equal(rejected.status, 503);
+  assert.equal(rejected.headers.get('retry-after'), '1');
+  assert.equal((await rejected.json()).code, 'CONTENT_BUSY');
+  assert.deepEqual(reads, [1, 0, 0]);
+  release();
+  assert.deepEqual(
+    (await Promise.all([active, queued])).map((response) => response.status),
+    [201, 201],
+  );
+  assert.deepEqual(reads, [1, 1, 0]);
+  assert.equal(imports.mock.callCount(), 2);
+});

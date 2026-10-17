@@ -7,6 +7,7 @@ import { readLimitedBody } from '@violet-map/core/http';
 import { parseByteRange } from '../httpRange.js';
 import { createHash } from 'node:crypto';
 import fresh from 'fresh';
+import { WorkLimiter } from '@violet-map/core/async';
 
 function condition(c: Context): number | undefined {
   const value = c.req.header('if-match');
@@ -68,7 +69,10 @@ export function mountContent(app: Hono, config: ServerConfig, services: AppServi
   routes.onError((error, c) => {
     if (error instanceof ContentValidationError)
       return c.json({ code: error.code, error: error.message }, error.code === 'UNSUPPORTED_FORMAT' ? 415 : 400);
-    if (error instanceof ContentError) return c.json({ code: error.code, error: error.message }, error.status);
+    if (error instanceof ContentError) {
+      if (error.code === 'CONTENT_BUSY') c.header('retry-after', '1');
+      return c.json({ code: error.code, error: error.message }, error.status);
+    }
     // Backend errors may include endpoint URLs and credentials. Never reflect them.
     return c.json({ code: 'CONTENT_BACKEND_UNAVAILABLE', error: 'content backend is unavailable' }, 503);
   });
@@ -183,22 +187,30 @@ export function mountContent(app: Hono, config: ServerConfig, services: AppServi
         await content.deleteLayer(c.req.param('id'), condition(c));
         return c.json({ ok: true });
       });
+      const imports = new WorkLimiter(
+        config.limits.mediaImports,
+        config.limits.mediaQueue,
+        () => new ContentError('CONTENT_BUSY', 503, 'media import capacity is exhausted'),
+      );
       const upload = async (c: Context, id?: string) => {
         const expected = condition(c);
         if (id && expected === undefined) throw new ContentError('PRECONDITION_REQUIRED', 428, 'If-Match is required');
-        const bytes = await readLimitedBody(c.req.raw, config.limits.uploadBytes);
-        if (!bytes) return c.json({ code: 'PAYLOAD_TOO_LARGE', error: 'media exceeds upload limit' }, 413);
         const name = c.req.query('name');
         if (!name) throw new ContentValidationError('media name is required');
-        const result = await content.importMedia(
-          bytes,
-          c.req.header('content-type')?.split(';')[0] ?? '',
-          name,
-          id,
-          expected,
-        );
-        c.header('etag', revisionTag(result.document.revision));
-        return c.json(result, id ? 200 : 201);
+        // Reserve capacity before buffering the request or decoding pixels/GLB.
+        return imports.run(async () => {
+          const bytes = await readLimitedBody(c.req.raw, config.limits.uploadBytes);
+          if (!bytes) return c.json({ code: 'PAYLOAD_TOO_LARGE', error: 'media exceeds upload limit' }, 413);
+          const result = await content.importMedia(
+            bytes,
+            c.req.header('content-type')?.split(';')[0] ?? '',
+            name,
+            id,
+            expected,
+          );
+          c.header('etag', revisionTag(result.document.revision));
+          return c.json(result, id ? 200 : 201);
+        });
       };
       routes.post('/api/admin/media', (c) => upload(c));
       routes.post('/api/admin/media/:id/versions', (c) => upload(c, c.req.param('id')));

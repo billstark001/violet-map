@@ -83,24 +83,28 @@ Auth defaults to users when users is enabled, static when users is disabled unde
 
 These documented external settings remain supported; they are not ServerConfig code aliases. Two names supplied by the same YAML file must agree even if ENV overrides them. Booleans must be YAML booleans or ENV true/false/1/0. Numbers must be safe integers in their allowed range; empty strings, fractions and malformed values are rejected. Port is 1–65535. Zero disables cache capacity/TTL or queuing where listed below; active-work limits and request byte limits must be positive.
 
-| YAML                     | Environment             | Default      |
-| ------------------------ | ----------------------- | ------------ |
-| cache.regionBytes        | REGION_CACHE_BYTES      | 268435456    |
-| cache.chunkNbtBytes      | CHUNK_NBT_CACHE_BYTES   | 134217728    |
-| cache.textureBytes       | TEXTURE_CACHE_BYTES     | 33554432     |
-| cache.storageStatMs      | STORAGE_STAT_CACHE_MS   | 1000         |
-| cache.storageListMs      | STORAGE_LIST_CACHE_MS   | 2000         |
-| cache.manifestMs         | MANIFEST_CACHE_MS       | 5000         |
-| cache.worldListMs        | WORLD_LIST_CACHE_MS     | 15000        |
-| cache.prewarm            | CACHE_PREWARM           | true         |
-| limits.chunkReads        | CHUNK_READ_CONCURRENCY  | 8 (1–1024)   |
-| limits.chunkQueue        | CHUNK_READ_QUEUE        | 64 (0–65536) |
-| limits.atlasBuilds       | ATLAS_BUILD_CONCURRENCY | 1 (1–1024)   |
-| limits.atlasQueue        | ATLAS_BUILD_QUEUE       | 16 (0–65536) |
-| limits.chunkRequestBytes | CHUNK_REQUEST_BYTES     | 65536        |
-| limits.atlasRequestBytes | ATLAS_REQUEST_BYTES     | 131072       |
-| limits.diagnosticBytes   | DIAGNOSTIC_BYTES        | 2097152      |
-| limits.uploadBytes       | UPLOAD_BYTES            | 268435456    |
+| YAML                     | Environment              | Default      |
+| ------------------------ | ------------------------ | ------------ |
+| cache.regionBytes        | REGION_CACHE_BYTES       | 268435456    |
+| cache.chunkNbtBytes      | CHUNK_NBT_CACHE_BYTES    | 134217728    |
+| cache.textureBytes       | TEXTURE_CACHE_BYTES      | 33554432     |
+| cache.storageStatMs      | STORAGE_STAT_CACHE_MS    | 1000         |
+| cache.storageListMs      | STORAGE_LIST_CACHE_MS    | 2000         |
+| cache.manifestMs         | MANIFEST_CACHE_MS        | 5000         |
+| cache.worldListMs        | WORLD_LIST_CACHE_MS      | 15000        |
+| cache.prewarm            | CACHE_PREWARM            | true         |
+| limits.chunkReads        | CHUNK_READ_CONCURRENCY   | 8 (1–1024)   |
+| limits.chunkQueue        | CHUNK_READ_QUEUE         | 64 (0–65536) |
+| limits.atlasBuilds       | ATLAS_BUILD_CONCURRENCY  | 1 (1–1024)   |
+| limits.atlasQueue        | ATLAS_BUILD_QUEUE        | 16 (0–65536) |
+| limits.mediaImports      | MEDIA_IMPORT_CONCURRENCY | 1 (1–1024)   |
+| limits.mediaQueue        | MEDIA_IMPORT_QUEUE       | 8 (0–65536)  |
+| limits.chunkRequestBytes | CHUNK_REQUEST_BYTES      | 65536        |
+| limits.atlasRequestBytes | ATLAS_REQUEST_BYTES      | 131072       |
+| limits.diagnosticBytes   | DIAGNOSTIC_BYTES         | 2097152      |
+| limits.uploadBytes       | UPLOAD_BYTES             | 268435456    |
+
+Media import capacity is reserved before reading request bytes, decoding images/GLB or publishing blobs. Queued requests retain their unread stream rather than a full buffered upload; an exhausted queue returns 503 `CONTENT_BUSY` with `Retry-After: 1`. The upload byte limit remains per request, so choose active concurrency for the available memory.
 
 Cache and byte limits are bounded by safe integers. Protocol constants such as batch sizes remain in code. Limits/caches belong to instances, so applications in the same process do not share state.
 

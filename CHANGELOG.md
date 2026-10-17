@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Media imports reserve configurable bounded capacity before reading uploads or decoding assets, limiting concurrent memory pressure; an exhausted queue returns retryable 503 without buffering another upload.
+
 - Viewer disposal cancels bootstrap metadata, atlas and colormap requests, plus late sky-texture loads; aborted atlas work no longer starts the individual-texture fallback. Image completion and failure detach handlers.
 
 - Fallback atlas identities include UV placement, texture alpha classification and LOD average colors, avoiding stale meshes when packs change under the same texture names or packing order changes.

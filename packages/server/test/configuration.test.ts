@@ -13,6 +13,10 @@ test('configuration validates values, names, secrets, and authentication combina
   for (const value of ['', 'no', '2']) assert.throws(() => load({ USERS_ENABLED: value }), /boolean/);
   for (const value of ['', 'bad', '0', '65536', '1.2']) assert.throws(() => load({ PORT: value }), /integer/);
   assert.equal(load({ REGION_CACHE_BYTES: '0' }).cache.regionBytes, 0);
+  assert.equal(load({}).limits.mediaImports, 1);
+  assert.equal(load({ MEDIA_IMPORT_QUEUE: '0' }).limits.mediaQueue, 0);
+  assert.throws(() => load({ MEDIA_IMPORT_CONCURRENCY: '0' }), /MEDIA_IMPORT_CONCURRENCY/);
+  assert.throws(() => load({ MEDIA_IMPORT_QUEUE: '-1' }), /MEDIA_IMPORT_QUEUE/);
   assert.throws(() => load({ DEPLOYMENT_PROFILE: 'sync' }), /STATIC_API_TOKEN/);
   assert.throws(() => load({ USERS_ENABLED: 'false' }), /require authentication/);
   assert.throws(() => load({ AUTH_MODE: 'static', STATIC_API_TOKEN: 'secret' }), /conflicts/);

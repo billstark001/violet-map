@@ -58,6 +58,8 @@ const fields = [
   'limits.uploadBytes',
   'limits.atlasBuilds',
   'limits.atlasQueue',
+  'limits.mediaImports',
+  'limits.mediaQueue',
 ];
 
 export function configurationSettings(options: ConfigurationOptions & { env: NodeJS.ProcessEnv }) {
