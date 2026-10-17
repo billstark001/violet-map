@@ -139,6 +139,11 @@ test(
     }
     assert.deepEqual(lifetimes.at(-1), lifetimes[0]);
     assert.equal(lifetimes[0].status.materials, 1);
+    const pointSize = await page.evaluate(() => window.transparencyHarness.pointSize());
+    for (const result of pointSize) {
+      assert.ok(result.reference >= 60 && result.reference <= 70, JSON.stringify(result));
+      assert.ok(Math.abs(result.reference - result.actual) <= 2, JSON.stringify(result));
+    }
     const disposed = await page.evaluate(() => window.transparencyHarness.dispose());
     assert.equal(disposed.geometries, 0);
     // MeshStandardMaterial's renderer-owned BRDF LUT survives until renderer.dispose().
@@ -173,6 +178,7 @@ test(
           large,
           small,
           lifetimes,
+          pointSize,
           disposed,
           errors,
         },

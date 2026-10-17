@@ -37,7 +37,7 @@ Targets retain aspect ratio and are capped at 3,145,728 pixels: 192 MiB before d
 
 ## Rendering acceptance
 
-Run `pnpm test:transparency`. An isolated production build writes screenshots and `results.json` to `LOCAL_render_acceptance/transparency/`. Ordinary production builds exclude fixtures. `pnpm test:overlays` uses this renderer for API-delivered images, GLB, masks, walls and curves. CI runs both.
+After `pnpm build`, run `pnpm test:transparency`. An isolated production build writes screenshots and `results.json` to `LOCAL_render_acceptance/transparency/`. Ordinary production builds exclude fixtures. `pnpm test:overlays` uses this renderer for API-delivered images, GLB, masks, walls and curves. CI runs both.
 
 The synthetic world uses the real `ModelBaker` and `meshSection`: four sections, 1,924 blocks and 2,472 triangles. Ground, red/blue glass crossing chunk boundaries, water, a rotated special translucent model and a green overlay wall exercise intersecting materials.
 
@@ -49,6 +49,7 @@ The suite verifies:
 - A generated alpha-blended GLB is decoded by the real GLTFLoader and rendered with MeshStandardMaterial.
 - Opaque color matches a direct-render reference. A failing material callback restores object and renderer state.
 - High-resolution allocation obeys the pixel/byte limit, shrinking releases the larger allocation, and repeated world load/unload cycles return to the same baseline. Renderer-owned lookup textures are accounted separately from pipeline ownership.
+- Background point sprites retain their screen size when the scene target is downscaled, with or without perspective size attenuation.
 - Missing float-blend support reports an explicit capability error without starting another rendering path.
 
 Inspect the generated perspective and orthographic PNGs for missing surfaces, overlap colors and seams at chunk boundaries. The JSON records browser/GPU identity, pixel differences, allocation estimates, lifecycle counts and CPU submission timings. Record hardware, viewport and DPR when comparing reports. CPU submission time is not GPU time or FPS; this small world validates correctness and ownership rather than large-world throughput.

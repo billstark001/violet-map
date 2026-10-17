@@ -150,6 +150,11 @@ export class TransparencyRenderer {
     pass.onBeforeRender = (renderer, scene, camera, geometry, object, group) => {
       source.onBeforeRender(renderer, scene, camera, geometry, object, group);
       pass.opacity = source.opacity;
+      if (source instanceof THREE.PointsMaterial && pass instanceof THREE.PointsMaterial) {
+        // Three sizes points using the canvas, even for an offscreen target.
+        // Compensate before the bounded scene buffer is upscaled to the canvas.
+        pass.size = (source.size * this.base.height) / Math.max(1, this.size.y);
+      }
       if (pass instanceof THREE.ShaderMaterial) pass.uniformsNeedUpdate = true;
     };
     for (const key of ['color', 'emissive', 'specular'] as const) {

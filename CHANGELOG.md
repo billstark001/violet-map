@@ -30,6 +30,7 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 - Web renders terrain, special transparent models and depth-tested overlay walls, curves, images and GLB through a shared sixteen-bin order-independent transparency pipeline. Intersecting glass/water/overlays no longer depend on mesh or triangle submission order. The previous sorted-transparency path is removed; ordered terrain masks and explicitly depth-disabled annotations retain their semantics.
 - Transparency uses bounded, aspect-preserving render targets (192 MiB attachment limit), shared live material uniforms, explicit GPU capability/allocation errors and deterministic resource disposal. The viewer requires WebGL2 float render targets, float blending and four color attachments, without a legacy fallback. Finite depth bins remain an approximation and can mix colors at nearby depths.
+- Background point sprites retain their screen size when the bounded scene buffer is upscaled, including perspective size attenuation.
 
 ### Added
 

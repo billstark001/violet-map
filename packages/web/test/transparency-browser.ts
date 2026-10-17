@@ -283,6 +283,39 @@ const harness = {
     draw();
     return transparency.diagnosticSnapshot();
   },
+  pointSize() {
+    clear();
+    renderer.setSize(3840, 2160);
+    camera = perspective;
+    camera.position.set(0, 0, 10);
+    camera.lookAt(0, 0, 0);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
+    const material = new THREE.PointsMaterial({ color: 0xffffff, size: 64, sizeAttenuation: false });
+    const points = new THREE.Points(geometry, material);
+    points.userData.oitBackground = true;
+    scene.add(points);
+    owned.push(geometry, material);
+    const measure = () => {
+      const gl = renderer.getContext();
+      const row = new Uint8Array(256 * 4);
+      gl.readPixels(1920 - 128, 1080, 256, 1, gl.RGBA, gl.UNSIGNED_BYTE, row);
+      let width = 0;
+      for (let x = 0; x < 256; x++) if (row[x * 4] > 128) width++;
+      return width;
+    };
+    const results = [];
+    for (const attenuated of [false, true]) {
+      material.sizeAttenuation = attenuated;
+      material.size = attenuated ? 0.6 : 64;
+      material.needsUpdate = true;
+      renderer.render(scene, camera);
+      const reference = measure();
+      draw();
+      results.push({ attenuated, reference, actual: measure() });
+    }
+    return results;
+  },
   dispose() {
     clear();
     transparency.dispose();
