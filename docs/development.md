@@ -16,6 +16,14 @@
 
 ## Validation
 
+Oxlint loads the maintained `@stylistic/padding-line-between-statements` rule
+through its JS plugin support. Top-level functions (including assigned arrow
+functions), classes and module sections require a blank line. Consecutive
+imports, reexports and ordinary variable declarations may remain grouped;
+function bodies are unaffected. Run `pnpm exec oxlint --fix packages`, then
+`pnpm format` to apply spacing and formatting together. `pnpm lint` checks this
+in CI, and a fixture test verifies both the required and exempt cases.
+
 ```bash
 pnpm typecheck
 pnpm version:check
