@@ -1,3 +1,4 @@
+import { hashString32 } from '@violet-map/core/hash';
 import { resolveApiResourceUrl } from './runtime';
 import { normalizeId } from '@violet-map/core/domain';
 import { mapWithConcurrency } from '@violet-map/core/async';
@@ -166,15 +167,6 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
-function simpleHash(input: string): string {
-  let h = 2166136261;
-  for (let i = 0; i < input.length; i++) {
-    h ^= input.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (h >>> 0).toString(36);
-}
-
 /** The fallback atlas freezes declared vertical sprite sheets at their first square frame. */
 export function fallbackTextureSize(width: number, height: number, animated: boolean): [number, number] {
   return [width, animated && height > width ? width : height];
@@ -316,7 +308,7 @@ export async function buildAtlas(ids: string[], animatedIds: ReadonlySet<string>
     hasAlpha[e.id] = alpha;
   });
   const ret: BuiltAtlas = {
-    cacheKey: `client-native-v1:${simpleHash(ids.slice().sort().join('\n'))}`,
+    cacheKey: `client-native-v1:${hashString32(ids.slice().sort().join('\n')).toString(36)}`,
     canvas,
     index,
     avgColors,

@@ -1,3 +1,4 @@
+import { hashString32 } from '@violet-map/core/hash';
 import { loadCapability } from '../capabilities.js';
 import { AIR_NAMES, normalizeId, type BiomeMap, type BlockStateRef } from '@violet-map/core/domain';
 import type { ResolvedBiomeColors, Rgb } from '@violet-map/render';
@@ -24,11 +25,7 @@ export function localName(name: string): string {
 }
 
 export function hashColor(id: string): Rgb {
-  let h = 2166136261;
-  for (let i = 0; i < id.length; i++) {
-    h ^= id.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
+  const h = hashString32(id);
   const r = 0.35 + ((h & 0xff) / 255) * 0.45;
   const g = 0.35 + (((h >>> 8) & 0xff) / 255) * 0.45;
   const b = 0.35 + (((h >>> 16) & 0xff) / 255) * 0.45;

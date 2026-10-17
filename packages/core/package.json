@@ -76,6 +76,11 @@
       "development": "./src/overlayTypes.ts",
       "types": "./dist/overlayTypes.d.ts",
       "default": "./dist/overlayTypes.js"
+    },
+    "./hash": {
+      "development": "./src/hash.ts",
+      "types": "./dist/hash.d.ts",
+      "default": "./dist/hash.js"
     }
   },
   "scripts": {
