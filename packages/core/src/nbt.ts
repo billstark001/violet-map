@@ -26,7 +26,9 @@ export function decompress(data: Uint8Array): Uint8Array {
   return data;
 }
 
-/** 解析 NBT 为 simplify 后的普通 JS 对象。 */
+/** Parse raw/gzip/zlib Java NBT through prismarine-nbt's simplified representation.
+ * Parsing is synchronous and malformed data throws. Tag structure is removed;
+ * array values retain the library's representations for downstream decoding. */
 export function parseNbt(data: Uint8Array): any {
   const raw = decompress(data);
   const parsed = nbt.parseUncompressed(Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength));

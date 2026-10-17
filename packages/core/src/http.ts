@@ -11,7 +11,7 @@ export function nonSharedByteView(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
 export async function readLimitedBody(
   message: Pick<Request | Response, 'headers' | 'body'>,
   maxBytes: number,
-): Promise<Uint8Array | null> {
+): Promise<Uint8Array<ArrayBuffer> | null> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError('invalid body limit');
   const declared = Number(message.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > maxBytes) {

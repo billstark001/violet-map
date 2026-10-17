@@ -234,7 +234,7 @@ export async function fetchOverlayMediaBytes(
     abort(downloadSignal);
     if (!bytes || bytes.byteLength !== version.bytes)
       throw new Error('media digest/size does not match its pinned version');
-    const buffer = bytes.buffer as ArrayBuffer;
+    const buffer = bytes.buffer;
     if ((await digest(buffer)) !== version.digest)
       throw new Error('media digest/size does not match its pinned version');
     abort(downloadSignal);
