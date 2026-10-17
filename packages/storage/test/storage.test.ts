@@ -136,6 +136,28 @@ test('remote range reads slice ignored 200 responses and retain only requested b
   }
 });
 
+test('remote uploads use exact byte views and copy shared backing before fetch', async (t) => {
+  let input!: Uint8Array;
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    const body = init?.body;
+    assert.ok(body instanceof Uint8Array);
+    assert.ok(body.buffer instanceof ArrayBuffer);
+    assert.equal(body.buffer === input.buffer, input.buffer instanceof ArrayBuffer);
+    const request = new Request(url, init);
+    const snapshot = [...input];
+    input.fill(9);
+    assert.deepEqual([...new Uint8Array(await request.arrayBuffer())], snapshot);
+    return new Response(null, { status: 204 });
+  });
+  const storage = new ServerWorldStorage({ url: 'https://example.test', token: 'test' });
+  const shared = new SharedArrayBuffer(5);
+  for (const bytes of [new Uint8Array(5), new Uint8Array(shared), Buffer.from(shared)]) {
+    bytes.set([99, 1, 2, 3, 88]);
+    input = bytes.subarray(1, 4);
+    await storage.write('world/file', input);
+  }
+});
+
 test('sync reuses source bytes when a same-size target file differs', async () => {
   const sourceBytes = new Uint8Array([1, 2, 3]);
   let sourceReads = 0;

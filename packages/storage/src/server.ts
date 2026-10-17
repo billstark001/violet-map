@@ -2,6 +2,7 @@ import { normalizeApiBaseUrl, apiUrl } from '@violet-map/core/contracts';
 import { cleanStoragePath } from './paths.js';
 import { validateReadRange } from './range.js';
 import { storageRequest } from './http.js';
+import { nonSharedView } from './bytes.js';
 import { forEachConcurrent } from '@violet-map/core/async';
 import type { ServerStorageOptions } from '@violet-map/storage/types';
 import type { StoredFileInfo, ObjectStorage } from '@violet-map/core/storage';
@@ -60,7 +61,7 @@ export class ServerWorldStorage implements ObjectStorage {
       await storageRequest(this.url(`files/${encodeURIComponent(cleanStoragePath(filePath))}`), {
         method: 'PUT',
         headers: this.headers({ 'content-type': contentType }),
-        body: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+        body: nonSharedView(bytes),
       }),
     );
   }

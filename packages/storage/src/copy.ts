@@ -1,13 +1,10 @@
 import type { ObjectReader, ObjectStorage } from '@violet-map/core/storage';
+import { nonSharedView } from './bytes.js';
 
 async function sha256(bytes: Uint8Array): Promise<string> {
   // WebCrypto snapshots an ArrayBuffer view itself. Only shared backing needs
   // an owned copy because it is not a valid BufferSource for digest().
-  const input =
-    bytes.buffer instanceof ArrayBuffer
-      ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-      : new Uint8Array(bytes);
-  const hash = await globalThis.crypto.subtle.digest('SHA-256', input);
+  const hash = await globalThis.crypto.subtle.digest('SHA-256', nonSharedView(bytes));
   return Array.from(new Uint8Array(hash), (value) => value.toString(16).padStart(2, '0')).join('');
 }
 

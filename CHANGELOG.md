@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Remote uploads accept shared-backed byte arrays and preserve subarray boundaries without an extra full-file JavaScript copy for ordinary buffers.
+
 - Disposed camera controls stop held-key motion and release pointer ownership; lost pointer capture ends top-view dragging, and denied/unsupported pointer lock does not create unhandled errors.
 
 - Weighted LRU insertion evicts before adding weights, avoiding an infinite eviction loop when finite weights overflow their sum; unbounded totals recover after deletion.
