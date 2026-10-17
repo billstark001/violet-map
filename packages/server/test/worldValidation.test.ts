@@ -47,6 +47,7 @@ test('invalid world names and create inputs fail before any backend access', asy
   await assert.rejects(world.ensureLevelDat('valid', 3 as unknown as string), /invalid level name/);
   await assert.rejects(world.deleteChunks('valid', 'overworld', [{ cx: 0, cz: 0 }, null as never]), /invalid chunk/);
   await assert.rejects(world.deleteChunks('valid', '..:bad', []), /invalid dimension/);
+  await assert.rejects(world.diffWorldManifest('valid', [{ path: '../bad' }]), /invalid world manifest/);
   assert.equal(calls, 0);
 });
 
@@ -62,6 +63,7 @@ test('world HTTP mutations reject malformed input without partial worlds and pre
     },
     cwd: root,
   });
+  config.limits.uploadBytes = 256;
   const services = await createServices(config);
   t.after(() => services.close());
   const app = createApp(config, services);
@@ -98,6 +100,24 @@ test('world HTTP mutations reject malformed input without partial worlds and pre
       ).status,
       400,
     );
+  for (const body of [
+    null,
+    [],
+    { files: [null] },
+    { files: [{ path: 1 }] },
+    { files: [{ path: '../bad' }] },
+    { files: [{ path: 'ok', size: -1 }] },
+  ])
+    assert.equal(
+      (await app.request('/api/admin/worlds/foo/diff', { method: 'POST', headers, body: JSON.stringify(body) })).status,
+      400,
+    );
+  assert.equal((await app.request('/api/admin/worlds/foo/diff', { method: 'POST', headers, body: '{' })).status, 400);
+  assert.equal(
+    (await app.request('/api/admin/worlds/foo/diff', { method: 'POST', headers, body: ' '.repeat(257) })).status,
+    413,
+  );
+  assert.equal((await app.request('/api/admin/worlds/foo/diff', { method: 'POST', headers, body: '{}' })).status, 200);
   const uploaded = await app.request('/api/admin/worlds/%66oo/files/test.bin', {
     method: 'PUT',
     headers,

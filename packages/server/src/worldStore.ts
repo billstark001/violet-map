@@ -1,3 +1,4 @@
+import { isWorldDiffInput } from './worldValidation.js';
 import type { ServerConfig } from './configuration.js';
 import type { ObjectStorage } from '@violet-map/core/storage';
 import type { TopMapService } from './topMap.js';
@@ -854,6 +855,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     world: string,
     files: { path: string; hash?: string; size?: number }[],
   ): Promise<{ upload: string[]; same: string[]; remoteExtra: string[] }> {
+    if (!isWorldDiffInput({ files })) throw new Error('invalid world manifest');
     const remote = await worldManifest(world);
     const remoteByPath = new Map(remote.map((f) => [f.path, f]));
     const wanted = new Set<string>();
