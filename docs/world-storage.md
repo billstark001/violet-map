@@ -32,3 +32,5 @@ pnpm violet-map world sync \
 The server exposes its shared storage adapter under protected `/api/admin/storage/*` endpoints. This is what makes remote CLI sync work, while regular Admin uploads and world edits use the same adapter directly.
 
 Remote storage accepts an API prefix such as `https://api.example.com/violet/` and requires enabled admin/world-write capabilities for synchronization. A sync deployment uses a static Bearer service credential without a user database. The storage root entry exports decorators and synchronization only; local/HTTP operations do not load the AWS SDK.
+
+See [external overlays and named storage mounts](overlays.md) for the phase 1–4 object storage, content API, CLI, configuration and persistence contract.

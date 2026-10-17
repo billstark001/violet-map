@@ -124,3 +124,5 @@ data:
 ```
 
 For sync use `deployment.profile: sync` and supply `STATIC_API_TOKEN` in ENV. For independent artifacts, static runtime config, containers and database maintenance, see [deployment](deployment.md).
+
+See [external overlays and named storage mounts](overlays.md) for the phase 1–4 object storage, content API, CLI, configuration and persistence contract.

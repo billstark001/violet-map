@@ -72,6 +72,7 @@ export interface DiagnosticUploadResponse {
 export interface WorldInfo {
   id: string;
   dimensions: string[];
+  mapIds?: string[];
 }
 export interface WorldFileManifestEntry {
   path: string;
@@ -91,6 +92,8 @@ export interface ServiceCapabilities {
   worldWrites: boolean;
   dataWrites: boolean;
   diagnostics: boolean;
+  contentReads?: boolean;
+  contentWrites?: boolean;
   authMode: 'none' | 'static' | 'users';
 }
 export interface FrontendRuntimeConfig {
@@ -155,7 +158,14 @@ export function parseServiceCapabilities(value: unknown): ServiceCapabilities {
     )
   )
     throw new Error('invalid service capabilities');
-  return capabilities;
+  for (const key of ['contentReads', 'contentWrites'] as const)
+    if (capabilities[key] !== undefined && typeof capabilities[key] !== 'boolean')
+      throw new Error('invalid service capabilities');
+  return {
+    ...capabilities,
+    contentReads: capabilities.contentReads ?? false,
+    contentWrites: capabilities.contentWrites ?? false,
+  };
 }
 export const LEGACY_SERVICE_CAPABILITIES: ServiceCapabilities = {
   protocolVersion: 1,

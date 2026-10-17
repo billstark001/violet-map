@@ -115,12 +115,15 @@ export async function runWorldSync(options: WorldSyncOptions, context: CliContex
   if (!/^[A-Za-z0-9_.-]+$/.test(options.world))
     throw new Error('--world may only contain letters, numbers, dot, dash, and underscore');
   const storageOptions = await targetStorage(options, context);
-  const { checkWorldIdentity, ensureWorldIdentity, PrefixedWorldStorage, syncWorld } =
+  const { checkWorldIdentity, ensureWorldIdentity, ScopedStorage, syncWorld } =
     await loadCapability('@violet-map/storage');
-  const { createWorldStorage } = await loadCapability('@violet-map/storage/factory');
-  const { LocalWorldStorage } = await loadCapability('@violet-map/storage/local');
-  const source = new LocalWorldStorage(path.resolve(options.from));
-  const target = new PrefixedWorldStorage(await createWorldStorage(storageOptions), options.world);
+  const { createWorldStorage, createObjectStorage } = await loadCapability('@violet-map/storage/factory');
+  const { LocalStorage } = await loadCapability('@violet-map/storage/local');
+  const source = new LocalStorage(path.resolve(options.from));
+  const target = new ScopedStorage(
+    await (storageOptions.kind === 'server' ? createWorldStorage(storageOptions) : createObjectStorage(storageOptions)),
+    options.world,
+  );
   const sourceIdentity = await ensureWorldIdentity(source, !!options.dryRun);
   const check = await checkWorldIdentity(source, target);
   console.log(`World identity: ${check.status} (${check.message})`);

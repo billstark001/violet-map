@@ -12,6 +12,7 @@ import { mountWorldWrite } from './routes/worldWrite.js';
 import { mountAssets } from './routes/assets.js';
 import { mountData } from './routes/data.js';
 import { mountDataWrite } from './routes/dataWrite.js';
+import { mountContent } from './routes/content.js';
 import { mountDiagnostics } from './routes/diagnostics.js';
 export function serviceCapabilities(config: ServerConfig): ServiceCapabilities {
   return { protocolVersion: 1, ...config.features, authMode: config.auth.mode };
@@ -28,7 +29,7 @@ export function createApp(config: ServerConfig, services: AppServices) {
             ? origin
             : undefined,
       allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowHeaders: ['Authorization', 'Content-Type', 'Accept', 'Range', 'If-None-Match'],
+      allowHeaders: ['Authorization', 'Content-Type', 'Accept', 'Range', 'If-None-Match', 'If-Match'],
       exposeHeaders: ['ETag', 'Content-Range', 'Accept-Ranges', 'Retry-After'],
       credentials: false,
     }),
@@ -36,6 +37,7 @@ export function createApp(config: ServerConfig, services: AppServices) {
   app.get('/api/capabilities', (c) => c.json(serviceCapabilities(config)));
   const context = createRouteContext(app, config, services);
   mountWorldRead(context);
+  mountContent(app, config, services);
   mountAssets(context);
   mountData(context);
   if (config.features.adminApi) mountWorldAdmin(context);

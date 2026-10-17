@@ -1,4 +1,4 @@
-import type { StoredFileInfo, WorldStorage } from '@violet-map/core/storage';
+import type { StoredFileInfo, ObjectStorage } from '@violet-map/core/storage';
 
 export interface StorageCacheOptions {
   /** Cache metadata probes; defaults are intentionally short to tolerate external writers. */
@@ -16,8 +16,8 @@ interface CacheEntry<T> {
  * stat/list calls without caching world bytes. Writes clear every metadata entry
  * so normal server mutations are visible immediately.
  */
-export class CachedWorldStorage implements WorldStorage {
-  readonly kind: WorldStorage['kind'];
+export class CachedStorage implements ObjectStorage {
+  readonly kind: ObjectStorage['kind'];
   private readonly statTtlMs: number;
   private readonly listTtlMs: number;
   private readonly stats = new Map<string, CacheEntry<StoredFileInfo | null>>();
@@ -27,7 +27,7 @@ export class CachedWorldStorage implements WorldStorage {
   private generation = 0;
 
   constructor(
-    private readonly storage: WorldStorage,
+    private readonly storage: ObjectStorage,
     options: StorageCacheOptions = {},
   ) {
     this.kind = storage.kind;
@@ -80,6 +80,12 @@ export class CachedWorldStorage implements WorldStorage {
     await this.storage.write(filePath, bytes, contentType);
     this.clearMetadata();
   }
+  async replace(filePath: string, bytes: Uint8Array, contentType?: string): Promise<void> {
+    const backend = this.storage as Partial<import('@violet-map/core/storage').AtomicObjectStorage>;
+    if (!backend.replace) throw new Error('storage does not support atomic replacement');
+    await backend.replace(filePath, bytes, contentType);
+    this.clearMetadata();
+  }
   async delete(filePath: string): Promise<void> {
     await this.storage.delete(filePath);
     this.clearMetadata();
@@ -99,3 +105,6 @@ export class CachedWorldStorage implements WorldStorage {
     return this.cached(this.directories, prefix, this.listTtlMs, () => this.storage.listDirectories(prefix));
   }
 }
+
+/** @deprecated Use CachedStorage. Retained as a public package API. */
+export class CachedWorldStorage extends CachedStorage {}

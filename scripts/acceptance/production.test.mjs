@@ -144,6 +144,12 @@ test('server production deployment is self-contained; public/sync/full and start
       ROOT_USERNAME: 'operator',
       ROOT_PASSWORD: 'production-root-password',
     };
+    if (profile === 'public') {
+      env.STATIC_DIR = path.join(root, 'static');
+      await fs.mkdir(path.join(env.STATIC_DIR, 'admin'), { recursive: true });
+      await fs.writeFile(path.join(env.STATIC_DIR, 'index.html'), '<html>viewer</html>');
+      await fs.writeFile(path.join(env.STATIC_DIR, 'admin/index.html'), '<html>admin</html>');
+    }
     if (profile === 'full') {
       await assert.rejects(boot(artifact, env, work), /Run server db:migrate/);
       await assert.rejects(fs.stat(env.DATABASE_DIR + '.lock'), { code: 'ENOENT' });
@@ -165,6 +171,14 @@ test('server production deployment is self-contained; public/sync/full and start
     if (profile !== 'full') {
       await assert.rejects(fs.stat(env.DATABASE_DIR), { code: 'ENOENT' });
       assert.equal((await request('/api/auth/login', { method: 'POST' })).status, 404);
+    }
+    if (profile === 'public') {
+      const viewer = await request('/');
+      assert.equal(viewer.status, 200);
+      assert.match(await viewer.text(), /viewer/);
+      assert.equal(viewer.headers.get('cache-control'), 'no-store');
+      assert.equal((await request('/admin/')).status, 200);
+      assert.equal((await request('/api/does-not-exist')).status, 404);
     }
     if (profile === 'public') {
       assert.equal(

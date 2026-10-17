@@ -1,3 +1,4 @@
+import type { AtomicObjectStorage } from '@violet-map/core/storage';
 import type { ServerConfig } from './configuration.js';
 import type { AssetService } from './assets.js';
 import { defaultDataUrl } from '@violet-map/core/defaults';
@@ -7,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import minecraftData from 'minecraft-data';
 import { BiomeMap, DimensionMap } from '@violet-map/core/domain';
 import { BlockInfo, BlockInfoMap } from '@violet-map/core/assets';
-export function createGameDataService(config: ServerConfig, assets: AssetService) {
+export function createGameDataService(config: ServerConfig, assets: AssetService, overrides?: AtomicObjectStorage) {
   const { buildAssetBundle } = assets;
 
   const defaultsDir = path.dirname(fileURLToPath(defaultDataUrl('biomes.json')));
@@ -25,6 +26,16 @@ export function createGameDataService(config: ServerConfig, assets: AssetService
     if (pending) return pending as Promise<T>;
     const generation = dataGeneration;
     const load = (async () => {
+      if (overrides) {
+        for (const key of [`versions/${config.minecraft.version}/${name}`, name]) {
+          const bytes = await overrides.read(key);
+          if (bytes) {
+            const value = JSON.parse(new TextDecoder().decode(bytes)) as T;
+            if (generation === dataGeneration) dataFileCache.set(name, value);
+            return value;
+          }
+        }
+      }
       const candidates = [
         path.join(config.data.dir, 'versions', config.minecraft.version, name),
         path.join(config.data.dir, name),
@@ -59,8 +70,11 @@ export function createGameDataService(config: ServerConfig, assets: AssetService
   }
   /** Write a root data file and invalidate readers that started before the write. */
   async function writeDataFile(name: string, value: unknown): Promise<void> {
-    await fs.mkdir(config.data.dir, { recursive: true });
-    await fs.writeFile(path.join(config.data.dir, name), JSON.stringify(value, null, 2));
+    if (overrides) await overrides.replace(name, new TextEncoder().encode(JSON.stringify(value)), 'application/json');
+    else {
+      await fs.mkdir(config.data.dir, { recursive: true });
+      await fs.writeFile(path.join(config.data.dir, name), JSON.stringify(value, null, 2));
+    }
     dataGeneration++;
     dataFileCache.delete(name);
     dataFileInflight.delete(name);

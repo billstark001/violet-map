@@ -1,0 +1,72 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { LocalStorage } from '../src/local.js';
+import { ScopedStorage } from '../src/prefixed.js';
+import { CachedStorage } from '../src/cached.js';
+import { S3Storage } from '../src/s3.js';
+import { copyObjects } from '../src/copy.js';
+const bytes = (s: string) => new TextEncoder().encode(s);
+test('scopes, descendant prefixes, atomic replacement and copy share the object contract', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-objects-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const storage = new LocalStorage(root);
+  const nested = new CachedStorage(new ScopedStorage(new ScopedStorage(storage, 'a'), 'nested'));
+  await storage.write('a/sibling', bytes('untouched'));
+  await storage.write('ab/file', bytes('untouched'));
+  await storage.write('a/nested/same', bytes('same-name object'));
+  await nested.write('folder/file', bytes('one'));
+  assert.deepEqual(
+    (await nested.list()).map((f) => f.path),
+    ['folder/file', 'same'],
+  );
+  assert.equal((await nested.stat('folder/file'))?.path, 'folder/file');
+  assert.deepEqual(await nested.listDirectories(), ['folder']);
+  assert.throws(() => nested.read('../sibling'));
+  assert.equal(await nested.deletePrefix('same'), 0);
+  assert.ok(await nested.read('same'));
+  const old = JSON.stringify({ data: 'old'.repeat(10000) }),
+    next = JSON.stringify({ data: 'new'.repeat(10000) });
+  await nested.replace('document', bytes(old));
+  await Promise.all([
+    nested.replace('document', bytes(next)),
+    ...Array.from({ length: 30 }, async () => {
+      const value = new TextDecoder().decode((await nested.read('document'))!);
+      assert.ok(value === old || value === next);
+      JSON.parse(value);
+    }),
+  ]);
+  const target = new ScopedStorage(storage, 'copy');
+  const result = await copyObjects(nested, target);
+  assert.equal(result.copied.length, 3);
+  assert.equal((await copyObjects(nested, target)).skipped.length, 3);
+  await nested.deletePrefix('folder');
+  assert.ok(await storage.read('ab/file'));
+  assert.ok(await storage.read('a/sibling'));
+});
+test('S3 directory prefixes never list or delete same-name or sibling objects; writes publish one PUT', async () => {
+  const storage = new S3Storage({ bucket: 'test', prefix: 'physical' });
+  const calls: { name: string; input: Record<string, unknown> }[] = [];
+  const fake = storage as unknown as {
+    client: { send: (command: { constructor: { name: string }; input: Record<string, unknown> }) => Promise<unknown> };
+  };
+  fake.client = {
+    send: async (command) => {
+      calls.push({ name: command.constructor.name, input: command.input });
+      return command.constructor.name === 'ListObjectsV2Command'
+        ? { Contents: [{ Key: 'physical/a/file', Size: 2 }] }
+        : {};
+    },
+  };
+  await storage.deletePrefix('a');
+  assert.equal(calls[0].input.Prefix, 'physical/a/');
+  assert.equal(calls[1].input.Key, 'physical/a/file');
+  calls.length = 0;
+  await storage.replace('head', bytes('{}'), 'application/json');
+  assert.deepEqual(
+    calls.map((c) => c.name),
+    ['PutObjectCommand'],
+  );
+});

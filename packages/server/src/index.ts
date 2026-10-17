@@ -29,7 +29,24 @@ function shutdown() {
 process.once('SIGINT', shutdown);
 process.once('SIGTERM', shutdown);
 try {
-  httpServer = serve({ fetch: createApp(config, services).fetch, port: config.server.port });
+  const application = createApp(config, services);
+  if (config.server.staticDir) {
+    const { serveStatic } = await import('@hono/node-server/serve-static');
+    application.get('/api/*', (c) => c.notFound());
+    application.get('/admin', (c) => c.redirect('/admin/'));
+    application.use('*', async (c, next) => {
+      if (
+        c.req.path.endsWith('/index.html') ||
+        c.req.path.endsWith('/runtime-config.json') ||
+        c.req.path === '/' ||
+        c.req.path === '/admin/'
+      )
+        c.header('cache-control', 'no-store');
+      await next();
+    });
+    application.get('*', serveStatic({ root: config.server.staticDir }));
+  }
+  httpServer = serve({ fetch: application.fetch, port: config.server.port });
   await new Promise<void>((resolve, reject) => {
     httpServer!.once('error', reject);
     httpServer!.once('listening', resolve);

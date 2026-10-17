@@ -10,7 +10,7 @@ import { cleanStoragePath } from './paths.js';
 import { validateReadRange } from './range.js';
 import { forEachConcurrent } from '@violet-map/core/async';
 import type { S3StorageOptions } from '@violet-map/storage/types';
-import type { StoredFileInfo, WorldStorage } from '@violet-map/core/storage';
+import type { StoredFileInfo, ObjectStorage } from '@violet-map/core/storage';
 
 function isMissingObject(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
@@ -38,7 +38,7 @@ async function bodyToBytes(body: unknown): Promise<Uint8Array> {
 }
 
 /** S3 and S3-compatible implementation. */
-export class S3WorldStorage implements WorldStorage {
+export class S3Storage implements ObjectStorage {
   readonly kind = 's3' as const;
   private readonly client: S3Client;
   private readonly bucket: string;
@@ -103,6 +103,9 @@ export class S3WorldStorage implements WorldStorage {
     await this.client.send(
       new PutObjectCommand({ Bucket: this.bucket, Key: this.key(filePath), Body: bytes, ContentType: contentType }),
     );
+  }
+  replace(filePath: string, bytes: Uint8Array, contentType?: string): Promise<void> {
+    return this.write(filePath, bytes, contentType);
   }
   async delete(filePath: string): Promise<void> {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: this.key(filePath) }));
@@ -173,3 +176,6 @@ export class S3WorldStorage implements WorldStorage {
 export async function profileCredentials(options: { profile: string }) {
   return (await import('@aws-sdk/credential-providers')).fromIni(options)();
 }
+
+/** @deprecated Use S3Storage. Retained as a public package API. */
+export class S3WorldStorage extends S3Storage {}

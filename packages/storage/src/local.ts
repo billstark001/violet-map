@@ -1,10 +1,11 @@
 import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import path from 'node:path';
 import { mapWithConcurrency } from '@violet-map/core/async';
 import { cleanStoragePath } from './paths.js';
 import { validateReadRange } from './range.js';
-import type { StoredFileInfo, WorldStorage } from '@violet-map/core/storage';
+import type { StoredFileInfo, ObjectStorage } from '@violet-map/core/storage';
 
 function isMissingPath(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
@@ -13,7 +14,7 @@ function isMissingPath(error: unknown): boolean {
 }
 
 /** Node filesystem implementation. `root` is never exposed through storage paths. */
-export class LocalWorldStorage implements WorldStorage {
+export class LocalStorage implements ObjectStorage {
   readonly kind = 'local' as const;
   private readonly root: string;
 
@@ -63,6 +64,18 @@ export class LocalWorldStorage implements WorldStorage {
     await fs.writeFile(file, bytes);
   }
 
+  async replace(filePath: string, bytes: Uint8Array): Promise<void> {
+    const file = this.abs(filePath);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const temporary = path.join(path.dirname(file), `.violet-tmp-${randomUUID()}`);
+    try {
+      await fs.writeFile(temporary, bytes, { flag: 'wx' });
+      await fs.rename(temporary, file);
+    } finally {
+      await fs.rm(temporary, { force: true });
+    }
+  }
+
   async delete(filePath: string): Promise<void> {
     await fs.rm(this.abs(filePath), { force: true });
   }
@@ -70,7 +83,12 @@ export class LocalWorldStorage implements WorldStorage {
   async deletePrefix(prefix: string): Promise<number> {
     const clean = cleanStoragePath(prefix);
     const files = await this.list(clean);
-    await fs.rm(this.abs(clean), { recursive: true, force: true });
+    try {
+      if ((await fs.lstat(this.abs(clean))).isDirectory())
+        await fs.rm(this.abs(clean), { recursive: true, force: true });
+    } catch (error) {
+      if (!isMissingPath(error)) throw error;
+    }
     return files.length;
   }
 
@@ -98,7 +116,7 @@ export class LocalWorldStorage implements WorldStorage {
       for (const entry of entries) {
         const file = path.join(directory, entry.name);
         if (entry.isDirectory()) await walk(file);
-        else if (entry.isFile()) paths.push(file);
+        else if (entry.isFile() && !entry.name.startsWith('.violet-tmp-')) paths.push(file);
       }
     };
     await walk(base);
@@ -131,3 +149,6 @@ export class LocalWorldStorage implements WorldStorage {
     }
   }
 }
+
+/** @deprecated Use LocalStorage. Retained as a public package API. */
+export class LocalWorldStorage extends LocalStorage {}

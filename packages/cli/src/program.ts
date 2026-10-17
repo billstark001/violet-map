@@ -345,6 +345,86 @@ export function createProgram(): Command {
     const { runWorldSync } = await import('./commands/world.js');
     await runWorldSync(options, await loadContext(options));
   });
+
+  const map = child(program, 'map', 'Manage external map registrations');
+  const matchOption = (command: Command) =>
+    command.requiredOption('--if-match <revision>', 'explicit parent revision', integer);
+  const sourceOptions = (command: Command) =>
+    command
+      .option('--world <key>', 'world directory key')
+      .option('--unbound', 'detach the world source')
+      .option('--name <name>', 'display name')
+      .option('--expected-archive-id <id>', 'expected archive identity');
+  for (const operation of ['register', 'list', 'show', 'rebind', 'delete']) {
+    let command = child(map, operation, `${operation} map registrations`);
+    if (['show', 'rebind', 'delete'].includes(operation)) command.argument('<id>');
+    if (['register', 'rebind'].includes(operation)) sourceOptions(command);
+    if (['rebind', 'delete'].includes(operation)) command = matchOption(command);
+    action<GlobalOptions & import('./commands/content.js').ContentOptions>(command, async (options, args) => {
+      if (['register', 'rebind'].includes(operation) && !!options.world === !!options.unbound)
+        throw new Error('Specify exactly one of --world or --unbound');
+      const { mapCommand } = await import('./commands/content.js');
+      console.log(JSON.stringify(await mapCommand(await loadContext(options), operation, args, options), null, 2));
+    });
+  }
+  const overlay = child(program, 'overlay', 'Manage external overlay layers and bindings');
+  const layer = child(overlay, 'layer', 'Manage versioned overlay documents');
+  for (const operation of ['validate', 'list', 'import', 'export', 'replace', 'copy', 'delete', 'revisions']) {
+    let command = child(layer, operation, `${operation} overlay layer`);
+    if (['validate', 'import'].includes(operation)) command.argument('<file>');
+    else if (operation !== 'list') command.argument('<id>');
+    if (operation === 'replace') command.argument('<file>');
+    if (['replace', 'delete'].includes(operation)) command = matchOption(command);
+    if (operation === 'copy') command.option('--name <name>', 'new layer name');
+    if (operation === 'export')
+      command
+        .option('--revision <revision>', 'retained revision', integer)
+        .option('--output <file>', 'write document to file');
+    action<GlobalOptions & import('./commands/content.js').ContentOptions>(command, async (options, args) => {
+      const { layerCommand } = await import('./commands/content.js');
+      console.log(JSON.stringify(await layerCommand(await loadContext(options), operation, args, options), null, 2));
+    });
+  }
+  for (const operation of ['bind', 'unbind', 'bindings', 'manifest']) {
+    let command = child(overlay, operation, `${operation} dimension overlays`).requiredOption(
+      '--map <id>',
+      'map identity',
+    );
+    if (['bind', 'unbind'].includes(operation))
+      command = matchOption(command.requiredOption('--binding <id>', 'binding identity'));
+    if (['bind', 'manifest'].includes(operation)) command.requiredOption('--dimension <id>', 'dimension ID');
+    if (operation === 'bind')
+      command
+        .requiredOption('--layer <id>', 'layer identity')
+        .option('--order <integer>', 'binding order', (value) => {
+          const n = Number(value);
+          if (!Number.isSafeInteger(n)) throw new InvalidArgumentError('expected integer');
+          return n;
+        })
+        .option('--disabled', 'disable this binding');
+    action<GlobalOptions & import('./commands/content.js').ContentOptions>(command, async (options) => {
+      const { bindingCommand } = await import('./commands/content.js');
+      console.log(JSON.stringify(await bindingCommand(await loadContext(options), operation, options), null, 2));
+    });
+  }
+  const media = child(program, 'media', 'Import and manage versioned media');
+  for (const operation of ['import', 'list', 'show', 'versions', 'delete']) {
+    let command = child(media, operation, `${operation} media`);
+    if (operation === 'import')
+      command
+        .argument('<file>')
+        .option('--name <name>', 'display name')
+        .option('--type <mime>', 'media type')
+        .option('--asset <id>', 'publish a new version of an existing asset')
+        .option('--if-match <revision>', 'explicit asset revision', integer);
+    else if (operation !== 'list') command.argument('<id>');
+    if (operation === 'delete')
+      command = matchOption(command.option('--version <id>', 'remove version from asset publication'));
+    action<GlobalOptions & import('./commands/content.js').ContentOptions>(command, async (options, args) => {
+      const { mediaCommand } = await import('./commands/content.js');
+      console.log(JSON.stringify(await mediaCommand(await loadContext(options), operation, args, options), null, 2));
+    });
+  }
   program.action(() => program.help());
   return program;
 }

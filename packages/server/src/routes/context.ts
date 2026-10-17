@@ -90,6 +90,8 @@ export function createRouteContext(app: Hono, config: ServerConfig, services: Ap
   return {
     app,
     config,
+    content: services.content,
+    mounts: services.mounts,
     worldStorage,
     buildAssetBundle,
     buildTextureAtlas,

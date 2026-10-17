@@ -26,7 +26,21 @@ export function mountWorldRead(context: RouteContext) {
     if (!isDimensionId(c.req.param('dim'))) return c.json({ error: 'invalid dimension id' }, 400);
     await next();
   });
-  app.get('/api/worlds', async (c) => c.json(await listWorlds()));
+  app.get('/api/worlds', async (c) => {
+    const worlds = await listWorlds();
+    if (!context.content) return c.json(worlds);
+    try {
+      const maps = await context.content.listMaps();
+      return c.json(
+        worlds.map((world) => ({
+          ...world,
+          mapIds: maps.filter((map) => map.worldKey === world.id).map((map) => map.mapId),
+        })),
+      );
+    } catch {
+      return c.json(worlds);
+    }
+  });
   app.get('/api/worlds/:world/capabilities', async (c) => c.json(await getWorldCapabilities(c.req.param('world'))));
   app.get('/api/worlds/:world/:dim/regions', async (c) =>
     c.json(await listRegions(c.req.param('world'), decodeURIComponent(c.req.param('dim')))),

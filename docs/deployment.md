@@ -73,3 +73,5 @@ For static prefixes with Docker, build with `--build-arg VITE_BASE_PATH=/map/` (
 After building, run `pnpm boundary:check`, `pnpm test:production`, `pnpm --filter @violet-map/cli test:artifact`, `pnpm --filter @violet-map/server test:db:artifact` and `pnpm test:frontend`. The browser test needs Playwright Chromium (`pnpm exec playwright install chromium`); on macOS it defaults to installed Google Chrome, override with `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`. CI builds `/map/` and `/console/` and verifies three origins, the `/violet/` API prefix, CORS Canvas/WebGL, Bearer uploads/Range and token isolation.
 
 With a local Docker engine, `pnpm test:containers` builds the three production images and tests independent frontend startup plus public/sync/full server containers.
+
+See [external overlays and named storage mounts](overlays.md) for the phase 1–4 object storage, content API, CLI, configuration and persistence contract.

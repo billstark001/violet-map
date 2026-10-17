@@ -1,5 +1,5 @@
-import { cleanStoragePath } from './paths.js';
-import type { WorldStorage } from '@violet-map/core/storage';
+import { copyObjects } from './copy.js';
+import type { ObjectStorage } from '@violet-map/core/storage';
 
 const IDENTITY_PATH = '.violet-map/identity.json';
 const encoder = new TextEncoder();
@@ -35,7 +35,7 @@ function generatedIdentity(): WorldIdentity {
       : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   return { schema: 1, id, createdAt: new Date().toISOString() };
 }
-async function identity(storage: WorldStorage): Promise<WorldIdentity | undefined> {
+async function identity(storage: ObjectStorage): Promise<WorldIdentity | undefined> {
   const bytes = await storage.read(IDENTITY_PATH);
   if (!bytes) return undefined;
   try {
@@ -52,7 +52,7 @@ async function identity(storage: WorldStorage): Promise<WorldIdentity | undefine
 }
 
 /** Ensure a source archive owns a stable identity marker. */
-export async function ensureWorldIdentity(storage: WorldStorage, dryRun = false): Promise<WorldIdentity> {
+export async function ensureWorldIdentity(storage: ObjectStorage, dryRun = false): Promise<WorldIdentity> {
   const existing = await identity(storage);
   if (existing) return existing;
   const created = generatedIdentity();
@@ -61,7 +61,7 @@ export async function ensureWorldIdentity(storage: WorldStorage, dryRun = false)
   return created;
 }
 
-export async function checkWorldIdentity(source: WorldStorage, target: WorldStorage): Promise<WorldIdentityCheck> {
+export async function checkWorldIdentity(source: ObjectStorage, target: ObjectStorage): Promise<WorldIdentityCheck> {
   const [sourceIdentity, targetIdentity, targetFiles] = await Promise.all([
     identity(source),
     identity(target),
@@ -86,63 +86,14 @@ export async function checkWorldIdentity(source: WorldStorage, target: WorldStor
   return { status: 'same', source: sourceIdentity, target: targetIdentity, message: 'world identity markers match' };
 }
 
-async function sha256(bytes: Uint8Array): Promise<string> {
-  const hash = await globalThis.crypto.subtle.digest(
-    'SHA-256',
-    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
-  );
-  return Array.from(new Uint8Array(hash), (value) => value.toString(16).padStart(2, '0')).join('');
-}
-async function compareContent(
-  source: WorldStorage,
-  target: WorldStorage,
-  path: string,
-  sourceSize: number,
-): Promise<{ same: boolean; sourceBytes: Uint8Array | null }> {
-  const targetInfo = await target.stat(path);
-  if (!targetInfo || targetInfo.size !== sourceSize) return { same: false, sourceBytes: null };
-  const [from, to] = await Promise.all([source.read(path), target.read(path)]);
-  if (!from) throw new Error(`source file disappeared during sync: ${path}`);
-  if (!to) return { same: false, sourceBytes: from };
-  const [sourceHash, targetHash] = await Promise.all([sha256(from), sha256(to)]);
-  return { same: sourceHash === targetHash, sourceBytes: from };
-}
-
 /** Copy changed files from source to target. Call checkWorldIdentity first to enforce policy. */
 export async function syncWorld(
-  source: WorldStorage,
-  target: WorldStorage,
+  source: ObjectStorage,
+  target: ObjectStorage,
   options: SyncOptions = {},
 ): Promise<SyncResult> {
   const identityBytes = await source.read(IDENTITY_PATH);
-  const sourceFiles = (await source.list()).filter((file) => cleanStoragePath(file.path) !== IDENTITY_PATH);
-  const result: SyncResult = { copied: [], skipped: [], deleted: [] };
-  for (const file of sourceFiles) {
-    const path = cleanStoragePath(file.path);
-    const comparison = await compareContent(source, target, path, file.size);
-    if (comparison.same) {
-      result.skipped.push(path);
-      options.onProgress?.({ type: 'skip', path });
-      continue;
-    }
-    if (!options.dryRun) {
-      const bytes = comparison.sourceBytes ?? (await source.read(path));
-      if (!bytes) throw new Error(`source file disappeared during sync: ${path}`);
-      await target.write(path, bytes);
-    }
-    result.copied.push(path);
-    options.onProgress?.({ type: 'copy', path });
-  }
-  if (options.deleteExtra) {
-    const expected = new Set(sourceFiles.map((file) => cleanStoragePath(file.path)));
-    for (const file of await target.list()) {
-      const path = cleanStoragePath(file.path);
-      if (path === IDENTITY_PATH || expected.has(path)) continue;
-      if (!options.dryRun) await target.delete(path);
-      result.deleted.push(path);
-      options.onProgress?.({ type: 'delete', path });
-    }
-  }
+  const result = await copyObjects(source, target, { ...options, exclude: [IDENTITY_PATH] });
   if (identityBytes) {
     if (!options.dryRun) await target.write(IDENTITY_PATH, identityBytes, 'application/json');
     result.copied.push(IDENTITY_PATH);

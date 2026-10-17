@@ -1,5 +1,5 @@
 import type { ServerConfig } from './configuration.js';
-import type { WorldStorage } from '@violet-map/core/storage';
+import type { ObjectStorage } from '@violet-map/core/storage';
 import type { TopMapService } from './topMap.js';
 import type { WorldInfo, WorldFileManifestEntry, ChunkCoverage, ChunkHashPayload } from '@violet-map/core/contracts';
 import { createHash } from 'node:crypto';
@@ -10,7 +10,7 @@ import { parseNbt, decompress } from '@violet-map/core/nbt';
 import { createMinimalLevelDat } from './levelDat.js';
 import { cleanStoragePath } from '@violet-map/storage';
 import { type StoredFileInfo } from '@violet-map/core/storage';
-import { ensureWorldIdentity, PrefixedWorldStorage } from '@violet-map/storage';
+import { ensureWorldIdentity, ScopedStorage } from '@violet-map/storage';
 import { isChunkCoordinate } from './chunkCoordinates.js';
 export interface ChunkMetadata extends ChunkHashPayload {
   sourcePath?: string;
@@ -24,7 +24,7 @@ export interface ChunkReadResult extends ChunkMetadata {
   source: 'region' | 'chunk';
   sourcePath: string;
 }
-export function createWorldStore(worldStorage: WorldStorage, topMap: TopMapService, config: ServerConfig) {
+export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapService, config: ServerConfig) {
   const { invalidateTopMapManifest } = topMap;
 
   const VANILLA_DIMS: Record<string, string[]> = {
@@ -447,7 +447,7 @@ export function createWorldStore(worldStorage: WorldStorage, topMap: TopMapServi
       invalidatePath(levelDatPath(world));
     }
     await writeWorldMeta(world, dimensions);
-    await ensureWorldIdentity(new PrefixedWorldStorage(worldStorage, world));
+    await ensureWorldIdentity(new ScopedStorage(worldStorage, world));
     invalidateWorldList();
   }
 

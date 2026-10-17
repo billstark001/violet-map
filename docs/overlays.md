@@ -1,0 +1,171 @@
+# External overlays: phases 1–4
+
+This release implements storage, configuration, content persistence, API and CLI management. Curve/area/media rendering remains phases 5–6; the existing viewer continues to display worlds. No editor is added to Admin.
+
+## Object storage
+
+`@violet-map/core/storage` defines `ObjectReader`, `ObjectStorage`, and `AtomicObjectStorage`. The latter adds `replace`, guaranteeing one complete object becomes visible at a time. Local replacement uses a temporary file and same-filesystem rename; S3 replacement uses one completed PUT. This is not cross-object atomicity, conditional update or crash durability/fsync.
+
+`@violet-map/storage/factory` exposes `createObjectStorage` for local and S3 physical stores, with lazy AWS imports. Local/S3 subpaths export `LocalStorage`/`S3Storage`; the root exports `ScopedStorage`, `CachedStorage`, `copyObjects` and content comparison. A scope returns relative paths; caches coalesce metadata requests and invalidate generations after writes. Directory prefix operations operate on descendants: `a` and `a/` select `a/file`, exclude object `a`, and never select `ab/file`. Local deletion now matches S3 by preserving a same-name file. Empty prefix selects all descendants. Local `.violet-tmp-` filenames are reserved for replacement and hidden from listing. Missing objects return null; backend errors propagate. Ranges require nonnegative safe integers, zero-length ranges still check existence, EOF yields empty bytes, and missing objects yield null.
+
+Only published compatibility APIs are retained: `WorldReader`, `WorldStorage`, `LocalWorldStorage`, `S3WorldStorage`, `PrefixedWorldStorage`, `CachedWorldStorage`, and `createWorldStorage` are deprecated. Existing package subpaths, constructor arguments and the remote `ServerWorldStorage` world protocol remain available. Internal business code uses object names. World identity creation/force policy and identity-last publication remain in world sync; general object copying has no world policy.
+
+## Backends and mounts
+
+One physical root:
+
+```yaml
+deployment: { profile: sync }
+auth: { mode: static, staticRole: admin }
+features: { contentReads: true, contentWrites: true }
+storage:
+  backends:
+    main: { driver: local, root: /srv/violet }
+  mounts:
+    worlds: { backend: main, prefix: worlds }
+    content: { backend: main, prefix: content }
+    blobs: { backend: main, prefix: blobs }
+```
+
+A local world root with auxiliary R2/S3:
+
+```yaml
+storage:
+  backends:
+    archives: { driver: local, root: /srv/minecraft/worlds }
+    auxiliary2:
+      driver: s3
+      endpoint: https://ACCOUNT.r2.cloudflarestorage.com
+      region: auto
+      bucket: violet
+      forcePathStyle: true
+      accessKeyIdEnv: VIOLET_R2_KEY
+      secretAccessKeyEnv: VIOLET_R2_SECRET
+  mounts:
+    worlds: { backend: archives, prefix: '' }
+    content: { backend: auxiliary2, prefix: metadata }
+    blobs: { backend: auxiliary2, prefix: blobs }
+```
+
+Names match `[a-z][a-z0-9]*`; `legacy`, `auxiliary`, `worldoverride` are reserved normalization names. New environment fields map exactly: `STORAGE_BACKEND_MAIN_DRIVER`, `_ROOT`, `_ENDPOINT`, `_REGION`, `_BUCKET`, `_FORCE_PATH_STYLE`, `_ACCESS_KEY_ID_ENV`, `_SECRET_ACCESS_KEY_ENV`, `_SESSION_TOKEN_ENV`; mount fields are `STORAGE_MOUNT_WORLDS_BACKEND` and `_PREFIX` (also CONTENT/BLOBS). Credential fields contain an environment variable name, not a key. Unspecified named S3 credentials use the SDK chain. Backend prefixes are forbidden; prefixes belong to mounts.
+
+ENV overrides YAML; same-priority old and new definitions must agree. Legacy `WORLD_STORAGE`, `WORLDS_DIR`, `S3_*` project only onto worlds. An old ENV override clones the worlds configuration instead of changing a shared backend. Relative YAML roots resolve from the YAML directory; relative ENV roots resolve from cwd. Overlap is checked against real local paths and normalized S3 endpoint/bucket/segment prefix, including separate names for one location. Reading absent local auxiliary stores does not create them. Content disabled does not mount/access auxiliary stores. Default auxiliary metadata and blobs use `DATA_DIR/content/{metadata,blobs}`, independent of `WORLDS_DIR`. `ASSETS_DIRS` remains ordered Minecraft resource-pack roots.
+
+Existing server library `AppServices.storage` is the deprecated public worlds projection; `mounts.worlds` is authoritative. Existing configuration projections `storage.driver`, `worldsDir`, `s3` retain their original meaning for callers; only the normalized mounts drive backend construction.
+
+## Format 1
+
+All documents use `schemaVersion: 1`. `revision` is a positive integer document revision. SHA-256 `versionId` identifies media bytes and is independent of document revision. Unknown fields and format versions are rejected. IDs are 1–128 ASCII letters/digits/underscore/dash, starting with a letter or digit. Names are 1–256 characters. Coordinates, rotations (radians), heights, sizes and scale are finite numbers; scale, dimensions and width are positive. Colors are `#RRGGBB`, opacity is 0–1. Coordinates are target-dimension block coordinates; bindings have no transform or automatic Nether scaling.
+
+Layer example:
+
+```json
+{
+  "schemaVersion": 1,
+  "layerId": "import-fixture",
+  "revision": 1,
+  "name": "Village routes",
+  "features": [
+    {
+      "featureId": "route",
+      "kind": "curve",
+      "closed": false,
+      "nodes": [
+        { "anchor": [0, 64, 0], "in": [0, 0, 0], "out": [10, 2, 0] },
+        { "anchor": [20, 64, 20], "in": [-5, 0, 0], "out": [0, 0, 0] }
+      ],
+      "style": { "color": "#aa44ff", "opacity": 1, "width": 2, "widthUnit": "blocks" }
+    },
+    {
+      "featureId": "village",
+      "kind": "area",
+      "ring": [
+        [0, 0],
+        [64, 0],
+        [64, 64],
+        [0, 64]
+      ],
+      "minY": -64,
+      "maxY": 320,
+      "fill": { "color": "#aa44ff", "opacity": 0.3 },
+      "wall": { "color": "#aa44ff", "opacity": 0.5, "occlusion": "terrain" }
+    }
+  ]
+}
+```
+
+Curves have 2–4096 nodes (closed: at least 3). Handles are relative to anchors. Closure adds the last-to-first segment, never smooths control points, and never repeats the first node at the end. Degenerate open segments are legal. Width units are `blocks` or `pixels`.
+
+Areas have 3–2048 XZ vertices; no repeated endpoint, self-intersection, touching nonadjacent edges, overlapping edges, holes or zero area. Absolute `minY < maxY` defines finite extrusion. Top view means planar projection; wall occlusion is `terrain` or `always`.
+
+A media feature has `featureId`, `kind: media`, `assetId`, pinned `versionId`, XYZ `position`, XYZ Euler `rotation` in radians, positive XYZ `scale`, and nonempty `views` drawn from `top`/`player`. A GLB uses `placement: model`. Images use `placement: plane|billboard|upright`, positive `[width,height]` `size` in blocks and normalized `[x,y]` `anchor`. The service checks placement against media type. Feature IDs are unique within a layer. Layer count limit: 10,000 features.
+
+Maps have `mapId`, `name`, `worldKey` (world directory name or null), optional `expectedArchiveId`, revision and `bindings`. A binding has `bindingId`, complete normalized `dimension`, `layerId`, `enabled`, integer `order`. Missing namespace becomes `minecraft`. Bindings sort by order then identity. A world can have multiple map registrations; `/api/worlds` adds `mapIds` when available. Unregistered worlds retain their behavior.
+
+Supported media: decoded static PNG/JPEG/WebP (at most 16,777,216 pixels), SVG with positive pixel dimensions or viewBox and a static shape/path/group/gradient/clip/mask/local-use subset. SVG text must be converted to paths; scripts, event handlers, CSS/style, animation, images, foreignObject, declarations and external references are rejected. Originals are retained, no derived conversion is performed. GLB 2.0 uses embedded buffers and PNG/JPEG buffer-view images, static scene geometry, and no extensions (including Draco, Meshopt, KTX2), skinning, morph targets or animation. Khronos validator checks GLB structure/data; scene bounds include node transforms. Unsupported input returns `UNSUPPORTED_FORMAT`.
+
+## Persistence and lifecycle
+
+Metadata paths: `maps/<id>.json`, `layers/<id>/head.json`, `layers/<id>/revisions/<revision>.json`, `assets/<id>/head.json`, `assets/<id>/versions/<sha256>.json`. Blobs use `sha256/<first-two>/<sha256>`. Map documents publish in one replacement. Layer heads point to the last committed revision; media heads contain the public document, retained published-version list and deletion state. Blobs and immutable layer revisions are written before publishing the head. Failed unpublished files may remain orphaned; there is no automatic GC. Deletion publishes a tombstone head retaining the last committed revision/version set. Old revisions remain readable; unpublished orphan revisions/versions cannot be read through the API or act as references. Asset deletion/version removal is rejected while any retained layer revision references it.
+
+One `ContentService` serializes all metadata checks and publication. Run one writer process only; this is not a distributed lock. Multiple independent read-only processes are possible. Railway deployment scripts stop the previous deployment and allow its drain window before starting another writer, with a maintenance window.
+
+Map registration reads existing world identity without writing it. It pins an existing marker by default. No marker produces `unverified`; a pinned missing/different marker produces `mismatch`; absent source produces `missing`; null source produces `unbound`. Missing/mismatched/unbound maps retain external content but return no public overlays. Copies get new map IDs and no inferred sharing. Rebind explicitly to move a source; shared layer changes affect all its bindings. World sync continues to create identity markers, separately from registration.
+
+## API and CLI
+
+`CONTENT_READS_ENABLED` and `CONTENT_WRITES_ENABLED` default false. Writes require reads, admin API and authentication. Read-only public and statically authenticated sync modes never initialize a user DB. Content management requires ci or higher. Diagnostics remains independent of admin API. `DIAGNOSTICS_UPLOAD_TOKEN` optionally allows only diagnostic upload, with no admin privileges. When blob mounts are enabled, diagnostics use `blobs/diagnostics/` and game-data API overrides use `blobs/server-data/`, both durable across container replacements.
+
+| Operation                      | API                                                           |
+| ------------------------------ | ------------------------------------------------------------- |
+| List/create registrations      | GET/POST `/api/admin/maps`                                    |
+| Read/replace/delete map        | GET/PUT/DELETE `/api/admin/maps/:id`                          |
+| List bindings                  | GET `/api/admin/maps/:id/bindings`                            |
+| Set/remove binding             | PUT/DELETE `/api/admin/maps/:id/bindings/:bindingId`          |
+| List/import layers             | GET/POST `/api/admin/overlays/layers`                         |
+| Read/replace/delete layer      | GET/PUT/DELETE `/api/admin/overlays/layers/:id`               |
+| Retained revision/export       | GET layer with `?revision=N`; GET `/:id/revisions`            |
+| Copy layer                     | POST `/api/admin/overlays/layers/:id/copy` with optional name |
+| List/import assets             | GET/POST `/api/admin/media`                                   |
+| Read/delete asset              | GET/DELETE `/api/admin/media/:id`                             |
+| List/add versions              | GET/POST `/api/admin/media/:id/versions`                      |
+| Read/remove version            | GET/DELETE `/api/admin/media/:id/versions/:versionId`         |
+| Read source bytes (management) | GET version endpoint plus `/file`                             |
+| Public manifest                | GET `/api/maps/:id/overlays?dimension=minecraft:overworld`    |
+| Public bound source bytes      | Manifest resource URL; requires map/dimension binding         |
+
+Creation generates a new identity. Layer import/export uses complete documents; replace requires the same ID and next revision. Map replacement uses complete documents. Binding mutations use the parent map revision. Mutations/deletes use `If-Match: "N"`; GET document ETag is the quoted revision. Missing conditions return 428 `PRECONDITION_REQUIRED`; stale conditions return 412 `REVISION_CONFLICT`. Clients never retry conflicts with a new revision. Reference conflicts return 409 `REFERENCE_CONFLICT`, malformed content 400 `INVALID_CONTENT`, unsupported schema/media 415 `UNSUPPORTED_FORMAT`, missing content 404 `CONTENT_NOT_FOUND`, source resource mismatch 409 `SOURCE_MISMATCH`, backend errors 503 `CONTENT_BACKEND_UNAVAILABLE`. Corrupt stored documents fail explicitly. Media upload is raw bytes with MIME Content-Type and `?name=...`, never a server file path. Public resources are only reachable through currently enabled bound layers; full library reads require authentication.
+
+Capabilities protocol 1 is extended additively. New clients normalize absent content flags to false. CORS includes If-Match and existing conditional/Range headers. Resource URLs use `/api/` references compatible with `resolveApiResourceUrl` and independent API prefixes. Existing raw admin storage endpoints remain exclusively worlds.
+
+CLI uses the existing profile/token references and API prefix. Examples (`violet-map` means the installed binary or `pnpm violet-map`):
+
+```sh
+violet-map map register --world wupa_village --name wupa_village
+violet-map map list
+violet-map map show MAP_ID
+violet-map map rebind MAP_ID --world moved --if-match 1
+violet-map media import marker.svg --name marker
+violet-map media import marker-v2.svg --asset ASSET_ID --if-match 1
+violet-map media list
+violet-map media show ASSET_ID
+violet-map media versions ASSET_ID
+violet-map overlay layer validate layer.json
+violet-map overlay layer import layer.json
+violet-map overlay bind --map MAP_ID --binding main --layer LAYER_ID --dimension overworld --if-match 1
+violet-map overlay manifest --map MAP_ID --dimension overworld
+violet-map overlay layer export LAYER_ID --output exported.json
+violet-map overlay layer replace LAYER_ID exported.json --if-match 1
+violet-map overlay layer copy LAYER_ID --name independent
+violet-map overlay unbind --map MAP_ID --binding main --if-match 2
+violet-map overlay layer delete LAYER_ID --if-match 2
+violet-map media delete ASSET_ID --if-match 2
+```
+
+Local layer validation only imports core. API management does not require server/storage/render installed; artifact tests check this. Original assets extraction and world sync remain available.
+
+## Acceptance and rollback
+
+Fixtures in core/storage/server tests cover legal/illegal/boundary geometry, relative handles, rings, transparent images, SVG, GLB, source identities, same-prefix siblings, cache generations, request conflicts, head failure and restart. CLI integration covers the complete create/import/bind/read/replace/export/unbind lifecycle through an API subpath. The deployment script also runs real R2 missing/Range/scope/prefix/atomic visibility checks in an isolated disposable prefix.
+
+Before upgrading, back up all three mounts, including retained revisions and versions, plus user DB if using users mode. To roll back an overlay, export a retained revision and replace with the current explicit revision; this creates a new revision. To roll back the service, stop the current writer, deploy the prior commit and keep content reads/writes disabled if that version lacks format support. World data layout and identity format do not migrate. Never remove content/blobs as part of world deletion. Do not GC from only current bindings.

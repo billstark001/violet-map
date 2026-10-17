@@ -56,6 +56,11 @@
       "development": "./src/async.ts",
       "types": "./dist/async.d.ts",
       "default": "./dist/async.js"
+    },
+    "./overlays": {
+      "development": "./src/overlays.ts",
+      "types": "./dist/overlays.d.ts",
+      "default": "./dist/overlays.js"
     }
   },
   "scripts": {

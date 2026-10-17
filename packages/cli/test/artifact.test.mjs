@@ -66,10 +66,38 @@ test('relocated CLI works without render/storage/server, TS sources, tsx, or nat
   assert.equal(records[`retired-${oldId}`].backend, 'keychain');
   assert.doesNotMatch(replaced.stdout + replaced.stderr, /artifact-token-value/);
 
+  const overlayFixture = path.join(root, 'overlay.json');
+  await fs.writeFile(
+    overlayFixture,
+    JSON.stringify({ schemaVersion: 1, layerId: 'fixture', revision: 1, name: 'fixture', features: [] }),
+  );
+  assert.equal(JSON.parse((await run(['overlay', 'layer', 'validate', overlayFixture])).stdout).ok, true);
   const remoteFiles = new Map();
   const server = createServer((request, response) => {
     assert.equal(request.headers.authorization, 'Bearer artifact-token-value');
     const url = new URL(request.url, 'http://localhost');
+    if (url.pathname === '/violet/api/capabilities') {
+      response.setHeader('content-type', 'application/json');
+      response.end(
+        JSON.stringify({
+          protocolVersion: 1,
+          adminApi: true,
+          users: false,
+          worldWrites: true,
+          dataWrites: false,
+          diagnostics: false,
+          authMode: 'static',
+          contentReads: true,
+          contentWrites: true,
+        }),
+      );
+      return;
+    }
+    if (url.pathname === '/violet/api/admin/maps') {
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify([{ mapId: 'artifact-map', revision: 1 }]));
+      return;
+    }
     const prefix = '/violet/api/admin/storage/';
     if (url.pathname.startsWith(prefix)) {
       const route = url.pathname.slice(prefix.length);
@@ -121,6 +149,13 @@ test('relocated CLI works without render/storage/server, TS sources, tsx, or nat
       (await run(['users', 'list'], { VIOLET_SERVER_URL: url, VIOLET_SERVER_TOKEN: 'artifact-token-value' })).stdout,
     )[0].username,
     'remote_admin',
+  );
+  assert.equal(
+    JSON.parse(
+      (await run(['map', 'list'], { VIOLET_SERVER_URL: url + '/violet/', VIOLET_SERVER_TOKEN: 'artifact-token-value' }))
+        .stdout,
+    )[0].mapId,
+    'artifact-map',
   );
   const archive = path.join(root, 'archive');
   await fs.mkdir(archive);

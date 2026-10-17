@@ -1,10 +1,10 @@
 import { parseTopMapManifest } from '@violet-map/core/formats/top-map';
 import type { ServerConfig } from './configuration.js';
-import type { WorldReader } from '@violet-map/core/storage';
+import type { ObjectReader } from '@violet-map/core/storage';
 import type { WorldCapabilities } from '@violet-map/core/contracts';
 import { cleanStoragePath } from '@violet-map/storage';
 import { type TopMapManifest } from '@violet-map/core/formats/top-map';
-export function createTopMapService(worldStorage: WorldReader, config: ServerConfig) {
+export function createTopMapService(worldStorage: ObjectReader, config: ServerConfig) {
   const WORLD_RE = /^[A-Za-z0-9_.-]+$/;
   const TOP_MAP_ROOT = '.violet-map/top-map';
 

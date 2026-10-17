@@ -44,11 +44,11 @@ export class ApiError extends Error {
     this.name = 'ApiError';
   }
 }
-export async function apiRequest<T>(
+export async function apiResponse(
   connection: { url: string; token?: string },
   pathname: string,
   init: RequestInit = {},
-): Promise<T> {
+): Promise<Response> {
   if (!pathname.startsWith('api/')) throw new Error('Invalid API path');
   const headers = new Headers(init.headers);
   if (connection.token) headers.set('authorization', `Bearer ${connection.token}`);
@@ -58,8 +58,8 @@ export async function apiRequest<T>(
     redirect: 'error',
     signal: init.signal ?? AbortSignal.timeout(30_000),
   });
-  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
     const hint =
       response.status === 401
         ? 'Sign in again or replace the credential.'
@@ -72,7 +72,15 @@ export async function apiRequest<T>(
       `HTTP ${response.status}: ${typeof data.error === 'string' ? data.error : 'request failed'} ${hint}`.trim(),
     );
   }
-  return data as T;
+  return response;
+}
+export async function apiRequest<T>(
+  connection: { url: string; token?: string },
+  pathname: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const response = await apiResponse(connection, pathname, init);
+  return (await response.json()) as T;
 }
 export const jsonRequest = (method: string, body?: unknown): RequestInit => ({
   method,
