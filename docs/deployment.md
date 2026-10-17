@@ -74,4 +74,4 @@ After building, run `pnpm boundary:check`, `pnpm test:production`, `pnpm --filte
 
 With a local Docker engine, `pnpm test:containers` builds the three production images and tests independent frontend startup plus public/sync/full server containers.
 
-See [external overlays and named storage mounts](overlays.md) for the phase 1–4 object storage, content API, CLI, configuration and persistence contract.
+See [external overlays and named storage mounts](overlays.md) for storage, content API/CLI and viewer contracts. The [release and recovery guide](overlay-release-acceptance.md) provides one-root/two-root examples, content snapshots and the old-binary/old-config rollback procedure.

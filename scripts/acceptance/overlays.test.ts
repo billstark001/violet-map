@@ -314,22 +314,37 @@ test(
         ),
       ),
     ]);
-    const vite = spawn('pnpm', ['--filter', '@violet-map/web', 'exec', 'vite', '--host', '127.0.0.1', '--port', '0'], {
-      cwd: project,
+    const fixtureBuild = path.join(root, 'production-fixture');
+    await execute(
+      'pnpm',
+      [
+        '--filter',
+        '@violet-map/web',
+        'exec',
+        'vite',
+        'build',
+        '--config',
+        'vite.acceptance.config.ts',
+        '--outDir',
+        fixtureBuild,
+      ],
+      { cwd: project, timeout: 60000, maxBuffer: 4 * 1024 ** 2 },
+    );
+    await fs.copyFile(path.join(project, 'scripts/serve-static.mjs'), path.join(fixtureBuild, 'serve.mjs'));
+    const fixture = spawn(process.execPath, [path.join(fixtureBuild, 'serve.mjs'), '0', apiBase], {
+      env: { ...process.env, PORT: '0', STATIC_BASE_PATH: '/', API_BASE_URL: undefined },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const viteUrl = await new Promise<string>((resolve, reject) => {
-      let text = '';
-      vite.stdout.on('data', (data) => {
-        text += data;
-        const match = text.match(/http:\/\/127\.0\.0\.1:\d+/);
-        if (match) resolve(match[0]);
+    const fixtureUrl = await new Promise<string>((resolve, reject) => {
+      fixture.stdout.on('data', (data) => {
+        const match = String(data).match(/:(\d+)/);
+        if (match) resolve(`http://127.0.0.1:${match[1]}`);
       });
-      vite.on('error', reject);
-      vite.on('exit', (code) => reject(new Error(`fixture Vite exited ${code}`)));
+      fixture.on('error', reject);
+      fixture.on('exit', (code) => reject(new Error(`built fixture exited ${code}`)));
     });
     t.after(() => {
-      vite.kill('SIGTERM');
+      fixture.kill('SIGTERM');
     });
     const browser = await chromium.launch({
       executablePath:
@@ -348,7 +363,7 @@ test(
     });
     const requests: string[] = [];
     page.on('request', (request) => requests.push(request.url()));
-    await page.goto(`${viteUrl}/test/overlay-browser.html?api=${encodeURIComponent(apiBase)}`);
+    await page.goto(`${fixtureUrl}/test/overlay-browser.html?api=${encodeURIComponent(apiBase)}`);
     await page.waitForFunction(() => !!window.overlayHarness);
     const set = async (id: string, dimension = 'overworld') => {
       await page.evaluate(({ id, dimension }) => window.overlayHarness.set(id, dimension), { id, dimension });
@@ -446,7 +461,7 @@ test(
     assert.deepEqual(pngBounds.max, [-24, 35, 0]);
     await page.screenshot({ path: path.join(output, 'top-images.png') });
     assert.ok(
-      !requests.some((url) => url.includes('GLTFLoader')),
+      !requests.some((url) => /GLTFLoader|overlay-gltf/.test(url)),
       'GLB loader must remain lazy before the first visible model',
     );
     const changedFile = path.join(root, 'changed.png');
@@ -601,14 +616,64 @@ test(
       else await page.evaluate(() => window.overlayHarness.set(null));
       await page.waitForFunction(() => window.overlayHarness.status().pending === 0);
       const loadedRequests = requests.length - start;
+      const measurement = await page.evaluate(() => window.overlayHarness.benchmark());
       benchmarks.push({
         name,
         loadRequests: loadedRequests,
-        ...(await page.evaluate(() => window.overlayHarness.benchmark())),
+        pathRequests: requests.length - start - loadedRequests,
+        ...measurement,
       });
+      const limits = await page.evaluate(() => window.overlayHarness.limits());
+      assert.ok(measurement.peakActive <= limits.activeFeatures);
+      assert.ok(measurement.peakMedia <= limits.mediaBytes);
+      assert.ok(measurement.peakMask <= limits.maskPixels ** 2 * 4);
+      assert.ok(measurement.peakCurvePoints <= limits.curvePointsTotal);
+      assert.equal(measurement.checkpoints[2].status.active, 0);
+      assert.equal(measurement.checkpoints[2].status.resourceBytes, 0);
+      assert.equal(measurement.checkpoints[2].status.maskBytes, 0);
     }
     assert.ok(benchmarks[2].gpu.suppressed > 0);
+    if (process.env.VIOLET_REFERENCE_PERF === '1') {
+      for (const [index, budget] of [2, 6, 12].entries()) {
+        assert.ok(
+          benchmarks[index].cpuMs.p95 <= budget,
+          `${benchmarks[index].name} render CPU p95 exceeds reference ${budget} ms`,
+        );
+        assert.ok(
+          benchmarks[index].frameMs.p95 <= 34,
+          `${benchmarks[index].name} reference frame interval p95 exceeds 34 ms`,
+        );
+      }
+    }
     await page.screenshot({ path: path.join(output, 'pressure.png') });
+    let unblock!: () => void,
+      blocked = 0;
+    const gate = new Promise<void>((resolve) => {
+      unblock = resolve;
+    });
+    const delayed = `**/api/maps/${imageMap.mapId}/media/**`;
+    let canceled = 0;
+    page.on('requestfailed', (request) => {
+      if (request.url().includes(`/maps/${imageMap.mapId}/media/`)) canceled++;
+    });
+    await page.route(delayed, async (route) => {
+      blocked++;
+      await gate;
+      try {
+        await route.continue();
+      } catch {
+        /* Expected after request cancellation. */
+      }
+    });
+    await set(imageMap.mapId);
+    for (let i = 0; i < 100 && blocked === 0; i++) await page.waitForTimeout(10);
+    assert.ok(blocked > 0);
+    await page.evaluate(() => window.overlayHarness.set(null));
+    unblock();
+    await page.unroute(delayed);
+    await page.waitForTimeout(100);
+    assert.equal(await page.evaluate(() => window.overlayHarness.status().resourceBytes), 0);
+    assert.ok(canceled > 0, 'context switch cancels actual pending media requests');
     const samples = [];
     for (let i = 0; i < 5; i++) {
       await set(imageMap.mapId);
@@ -617,8 +682,13 @@ test(
       );
       await page.evaluate(() => window.overlayHarness.set(null));
       await page.waitForTimeout(100);
+      await page.requestGC();
       samples.push(
-        await page.evaluate(() => ({ memory: window.overlayHarness.memory(), status: window.overlayHarness.status() })),
+        await page.evaluate(() => ({
+          memory: window.overlayHarness.memory(),
+          status: window.overlayHarness.status(),
+          heapBytes: (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0,
+        })),
       );
     }
     for (const s of samples) {
@@ -628,14 +698,25 @@ test(
     }
     assert.equal(samples.at(-1)!.memory.textures, samples[0].memory.textures);
     assert.equal(samples.at(-1)!.memory.geometries, samples[0].memory.geometries);
+    assert.ok(
+      samples.at(-1)!.heapBytes <= samples[0].heapBytes + 2 * 1024 ** 2,
+      'retained heap stays within the measured 2 MiB churn tolerance',
+    );
+    assert.equal(benchmarks[0].loadRequests + benchmarks[0].pathRequests, 0);
     const disabledRequests = requests.length;
     await page.evaluate(() => window.overlayHarness.set(null));
     await page.waitForTimeout(200);
     assert.equal(requests.length, disabledRequests);
     const builtRoot = path.join(root, 'built-web');
-    await fs.cp(path.join(project, 'packages/web/dist'), builtRoot, { recursive: true });
+    await execute('pnpm', ['--filter', '@violet-map/web', 'exec', 'vite', 'build', '--outDir', builtRoot], {
+      cwd: project,
+      env: { ...process.env, VITE_BASE_PATH: '/map/' },
+      timeout: 60000,
+      maxBuffer: 4 * 1024 ** 2,
+    });
+    await fs.copyFile(path.join(project, 'scripts/serve-static.mjs'), path.join(builtRoot, 'serve.mjs'));
     const built = spawn(process.execPath, [path.join(builtRoot, 'serve.mjs'), '0', apiBase], {
-      env: { ...process.env, PORT: '0', STATIC_BASE_PATH: '/', API_BASE_URL: undefined },
+      env: { ...process.env, PORT: '0', STATIC_BASE_PATH: '/map/', API_BASE_URL: undefined },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     t.after(() => {
@@ -644,7 +725,7 @@ test(
     const builtUrl = await new Promise<string>((resolve, reject) => {
       built.stdout.on('data', (data) => {
         const match = String(data).match(/:(\d+)/);
-        if (match) resolve(`http://127.0.0.1:${match[1]}`);
+        if (match) resolve(`http://127.0.0.1:${match[1]}/map`);
       });
       built.on('error', reject);
       built.on('exit', (code) => reject(new Error(`built viewer exited ${code}`)));
@@ -685,6 +766,29 @@ test(
     for (let i = 0; i < centerPixels.length; i += 3)
       if (centerPixels[i] > 200 && centerPixels[i + 1] > 200 && centerPixels[i + 2] < 100) yellow++;
     assert.ok(yellow > 5, 'built viewer renders the upgraded yellow image');
+    let modelSource = false,
+      loaderSource = false;
+    ui.on('response', (response) => {
+      if (response.ok() && response.url().includes(`/maps/${modelMap.mapId}/media/`)) modelSource = true;
+      if (response.ok() && response.url().includes('overlay-gltf')) loaderSource = true;
+    });
+    await ui.goto(
+      `${builtUrl}/?world=fixture&overlayMapId=${modelMap.mapId}&viewMode=topOrthographic&viewDistance=2&lodDistance=0`,
+    );
+    await ui.getByTestId('overlay-status').filter({ hasText: /2/ }).waitFor({ timeout: 30000 });
+    for (let i = 0; i < 100 && (!modelSource || !loaderSource); i++) await ui.waitForTimeout(50);
+    assert.ok(modelSource && loaderSource, 'built /map viewer loads a visible GLB and its deferred bundle');
+    await ui.waitForTimeout(150);
+    const modelShot = await ui.screenshot({ path: path.join(output, 'viewer-model-integration.png') });
+    const modelPixels = await sharp(modelShot)
+      .extract({ left: 500, top: 300, width: 300, height: 160 })
+      .removeAlpha()
+      .raw()
+      .toBuffer();
+    let redPixelsCount = 0;
+    for (let i = 0; i < modelPixels.length; i += 3)
+      if (modelPixels[i] > 100 && modelPixels[i + 1] < 100 && modelPixels[i + 2] < 100) redPixelsCount++;
+    assert.ok(redPixelsCount > 5, 'built /map viewer renders GLB');
     assert.deepEqual(uiErrors, []);
     await ui.close();
     const legacy = await browser.newPage();
@@ -711,6 +815,9 @@ test(
       JSON.stringify(
         {
           hardware,
+          buildMode: 'production',
+          cameraPath: '180 frames: orthographic sweep, perspective sweep, offscreen, return',
+          canceledRequests: canceled,
           widths,
           benchmarks,
           gpuResourceSamples: samples,

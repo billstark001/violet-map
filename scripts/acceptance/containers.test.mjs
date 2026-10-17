@@ -79,6 +79,7 @@ test('production containers run independently with only their own artifacts', as
         STATIC_API_TOKEN: 'container-test-token',
         ROOT_USERNAME: 'operator',
         ROOT_PASSWORD: 'container-test-password',
+        ...(profile === 'sync' ? { CONTENT_READS_ENABLED: 'true', CONTENT_WRITES_ENABLED: 'true' } : {}),
       },
       profile === 'full' ? ['sh', '-c', 'node dist/src/db/maintenance.js migrate && exec node dist/src/index.js'] : [],
     );
@@ -104,6 +105,50 @@ test('production containers run independently with only their own artifacts', as
         'test ! -e /data/users.pglite && test ! -e /data/users.pglite.lock',
       );
       assert.equal((await request('/api/auth/login', { method: 'POST' })).status, 404);
+    }
+    if (profile === 'sync') {
+      const json = async (url, body, revision) => {
+        const response = await request(url, {
+          method: revision ? 'PUT' : 'POST',
+          headers: {
+            authorization: 'Bearer container-test-token',
+            'content-type': 'application/json',
+            ...(revision ? { 'if-match': `"${revision}"` } : {}),
+          },
+          body: JSON.stringify(body),
+        });
+        assert.ok(response.ok, await response.clone().text());
+        return response.json();
+      };
+      await json('/api/admin/worlds', { world: 'overlay' });
+      const map = await json('/api/admin/maps', { name: 'container', worldKey: 'overlay' });
+      const layer = await json('/api/admin/overlays/layers', {
+        schemaVersion: 1,
+        layerId: 'input',
+        revision: 1,
+        name: 'container',
+        features: [],
+      });
+      await json(
+        `/api/admin/maps/${map.mapId}/bindings/main`,
+        { bindingId: 'main', layerId: layer.layerId, dimension: 'overworld', enabled: true, order: 0 },
+        1,
+      );
+      const manifest = await (await request(`/api/maps/${map.mapId}/overlays?dimension=overworld`)).json();
+      assert.equal(manifest.layers.length, 1);
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><path d="M0 0h8v8H0z"/></svg>';
+      const imported = await request('/api/admin/media?name=container', {
+        method: 'POST',
+        headers: { authorization: 'Bearer container-test-token', 'content-type': 'image/svg+xml' },
+        body: svg,
+      });
+      assert.equal(imported.status, 201);
+      const { document, version } = await imported.json();
+      const range = await request(`/api/admin/media/${document.assetId}/versions/${version.versionId}/file`, {
+        headers: { authorization: 'Bearer container-test-token', range: 'bytes=0-3' },
+      });
+      assert.equal(range.status, 206);
+      assert.equal(await range.text(), '<svg');
     }
     let token = 'container-test-token';
     if (profile === 'full') {

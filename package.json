@@ -1,6 +1,6 @@
 {
   "name": "@violet-map/workspace",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -27,7 +27,8 @@
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "violet-map": "tsx --conditions=development packages/cli/src/cli.ts",
-    "test:overlays": "tsx --conditions=development --test scripts/acceptance/overlays.test.ts"
+    "test:overlays": "tsx --conditions=development --test scripts/acceptance/overlays.test.ts",
+    "test:release": "node --test scripts/acceptance/release.test.mjs"
   },
   "devDependencies": {
     "@hono/node-server": "^2.1.5",

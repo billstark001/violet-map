@@ -9,10 +9,11 @@ test('Commander help is side-effect free, rejects old/admin/maintenance commands
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-program-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const options = { home: root, env: { VIOLET_MAP_CONFIG: '/missing/server.yaml' } };
+  const { version } = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const help = (await invoke(['--help'], options)).stdout;
   assert.match(help, /Usage: violet-map/);
   assert.doesNotMatch(help, /vm-cli|vm-admin|db:migrate/);
-  assert.equal((await invoke(['--version'], options)).stdout.trim(), '0.1.0');
+  assert.equal((await invoke(['--version'], options)).stdout.trim(), version);
   const extraction = (await invoke(['assets', 'extract', '--help'], options)).stdout;
   assert.match(extraction, /Minecraft version/);
   for (const args of [
@@ -35,7 +36,7 @@ test('Commander help is side-effect free, rejects old/admin/maintenance commands
   );
   const extract = await invoke(['assets', 'extract', '--version=test-version', '--dry-run'], options);
   assert.match(extract.stdout, /dry-run extract/);
-  assert.doesNotMatch(extract.stdout, /^0\.1\.0/);
+  assert.ok(!extract.stdout.startsWith(version));
   await assert.rejects(
     invoke(['profile-mca', '--rounds', 'not-a-number', 'region.mca'], options),
     /expected a positive safe integer/,

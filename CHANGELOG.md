@@ -24,7 +24,14 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-17
+
 ### Added
+
+- External map registrations, immutable overlay revisions and media versions, conditional content APIs and CLI management, named local/S3 storage mounts and independent diagnostics credentials.
+- Adaptive Bezier curves, terrain-fragment region masks, finite double-sided walls, PNG/JPEG/WebP/SVG placement and static GLB instances with label/scene lighting, lazy loading, shared pinned resources and bounded disposal.
+- Production WebGL acceptance with fixed camera paths, pressure/cancellation/heap checks, isolated real-S3 restore and actual pre-overlay binary/config rollback tests.
+- Private quiesced content/blob snapshots and verified empty-target recovery; Railway incremental/full deployment now snapshots external content before world updates.
 
 - Independent render/storage packages, core contracts/formats/default data, AST dependency checks and isolated CLI capability loading.
 - Server configuration/service/application factories, public/sync/full capability presets and static Bearer authentication without a user database.
@@ -46,6 +53,10 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 - Remote APIs distinguish unauthenticated requests (401) from authenticated users lacking permission (403). User roles are checked from current account state; logout and per-user revocation invalidate stored server credentials.
 - S3 supports refreshable AWS credential providers and temporary session tokens, while profiles contain only non-secret settings and credential references. Programmatic S3 storage options now take a `credentials` identity/provider instead of separate key fields.
 - Core and the optional server library provide built JavaScript exports; workspace development uses an explicit `development` condition. The CLI requires Node.js 24 or newer.
+
+### Deprecated
+
+- Published world-storage interfaces/classes/factory and `AppServices.storage` remain available with deprecation annotations; object-storage names and logical mounts are authoritative. HTTP world paths, CLI synchronization and identity rules remain supported. New internal compatibility aliases are not introduced.
 
 ## [0.1.0] - 2026-10-14
 

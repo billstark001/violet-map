@@ -25,8 +25,7 @@ import type { SharedUniforms } from './materials';
 import { OverlayMask, createMaskMaterial } from './overlayMask';
 import { OverlayResourcePool, type ResourceLease } from './overlayResources';
 import { loadOverlayMedia, type OverlayMediaResource } from './overlayMedia';
-const ACTIVE_LIMIT = 512;
-const CURVE_POINT_LIMIT = 200_000;
+import { OVERLAY_LIMITS } from './overlayLimits';
 const REFRESH_MS = 30_000;
 const RETRY_MS = 12_000;
 export interface OverlayDiagnosticSnapshot {
@@ -44,6 +43,7 @@ export interface OverlayDiagnosticSnapshot {
   maskBytes: number;
   maskLimited: boolean;
   samplingLimited: number;
+  curvePoints: number;
   errors: { feature: string; message: string }[];
 }
 interface RecordBase {
@@ -284,7 +284,7 @@ export class OverlayManager {
         if (f.kind === 'curve') visible = visible && f.style.opacity > 0;
         if (f.kind === 'area') visible = visible && f.wall.opacity > 0;
       }
-      if (visible && active >= ACTIVE_LIMIT) {
+      if (visible && active >= OVERLAY_LIMITS.activeFeatures) {
         visible = false;
         this.suppressed++;
       }
@@ -467,8 +467,12 @@ export class OverlayManager {
     try {
       const sampled = sampleCurve(feature, {
         projection: { matrix: this.matrix.elements, width: frame.width, height: frame.height },
-        tolerance: 0.5,
-        maxPoints: Math.min(65536, CURVE_POINT_LIMIT - this.curvePoints + record.curve!.positions.length / 3),
+        tolerance: OVERLAY_LIMITS.curveToleranceCssPixels,
+        maxDepth: OVERLAY_LIMITS.curveDepth,
+        maxPoints: Math.min(
+          OVERLAY_LIMITS.curvePointsPerFeature,
+          OVERLAY_LIMITS.curvePointsTotal - this.curvePoints + record.curve!.positions.length / 3,
+        ),
       });
       record.curve!.capped = sampled.capped;
       const origin = feature.nodes[0].anchor,
@@ -536,6 +540,7 @@ export class OverlayManager {
       maskBytes: this.mask.bytes,
       maskLimited: this.mask.layout?.limited ?? false,
       samplingLimited: this.samplingLimited,
+      curvePoints: this.curvePoints,
       errors: [...this.issues].slice(0, 20).map(([feature, message]) => ({ feature, message })),
     };
   }

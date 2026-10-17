@@ -38,4 +38,4 @@ Docker equivalents are `docker compose --profile light up` and `docker compose -
 
 The default server profile is `full`; `light`/`full` scripts select local processes. For a public map without a user database, use `DEPLOYMENT_PROFILE=public`. After `pnpm build`, server runs built Node ESM and web/admin serve their static artifacts without Vite. Production services can run independently; see [deployment](docs/deployment.md).
 
-External map overlays now support API/CLI management, versioned external content, media imports and named storage mounts. The viewer renders curves, terrain-aligned regions, images/SVG and static GLB with versioned resource sharing. See [the phase 1–6 guide](docs/overlays.md).
+External map overlays now support API/CLI management, versioned external content, media imports and named storage mounts. The viewer renders curves, terrain-aligned regions, images/SVG and static GLB with versioned resource sharing. See [the phase 1–7 guide](docs/overlays.md).

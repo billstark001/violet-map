@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { OVERLAY_LIMITS } from './overlayLimits';
 import { areaMaskLayout, type MaskLayout } from '@violet-map/render/overlays';
 import type { SharedUniforms } from './materials';
 /** A world-XZ compositing atlas, sampled by every terrain material at the actual surface position. */
@@ -23,7 +24,7 @@ export class OverlayMask {
       this.disposeTarget();
       return;
     }
-    const limit = Math.min(4096, renderer.capabilities.maxTextureSize);
+    const limit = Math.min(OVERLAY_LIMITS.maskPixels, renderer.capabilities.maxTextureSize);
     const layout = areaMaskLayout(bounds, worldPerPixel, limit);
     const signature = [...layout.origin, ...layout.size, layout.width, layout.height].join(',');
     if (signature !== this.signature) {

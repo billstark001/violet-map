@@ -1,4 +1,4 @@
-# External overlays: phases 1–6
+# External overlays: phases 1–7
 
 This release implements storage, configuration, persistence, API/CLI management and viewer rendering for curves, areas, images, SVG and static GLB. Admin has no overlay editor; publish content with CLI/API, then select the registered map in the viewer.
 
@@ -194,4 +194,6 @@ Diagnostics include active/suppressed feature counts, loading/source status, pen
 
 Run `pnpm build` before `pnpm test:overlays`; the latter uses the built CLI against an actual temporary local server and real Chrome WebGL, with the API under `/violet/`. It imports PNG/JPEG/WebP, viewBox SVG and a GLB through the CLI, then renders fixed 800×600 CSS-pixel scenes. It checks orthographic/perspective top masks across terrain heights 0/12/24 and all three terrain resolutions, wall sides/heights/occlusion and transparency references, actual pixel/block curve widths, image orientation/anchors/alpha, GLB illumination in all dimensions/day factors, shared-version instance removal, explicit version upgrades, context cleanup and the real viewer toggle. An older capability document is also exercised with no overlay API/media/GLB requests. `pnpm test:frontend` checks the built viewer/admin applications and existing diagnostics/token isolation. Pure geometry, manifest and lifecycle tests run with `pnpm test`.
 
-Screenshots and machine-readable CPU/frame/network/resource measurements are written to ignored `LOCAL_railway_deploy/overlay-acceptance/`. See [the measured phase 5–6 reference](overlay-rendering-validation.md). These are implementation measurements, not a frame-rate promise or the final phase 7 release/rollback exercise. No annotations are written into world chunks or offline top-map files.
+Screenshots and machine-readable CPU/frame/network/resource measurements are written to ignored `LOCAL_railway_deploy/overlay-acceptance/`. See [the measured phase 5–6 reference](overlay-rendering-validation.md). These are measured reference fixtures, not a general frame-rate promise. The final gate and rollback exercise are in [release acceptance](overlay-release-acceptance.md). No annotations are written into world chunks or offline top-map files.
+
+The shared first-release viewer budgets are defined in `packages/web/src/render/overlayLimits.ts` and enforced in pressure acceptance. Backup/restore uses `scripts/operations/content-snapshot.mjs` with quiesced writers and an empty restore destination. Follow [release and recovery](overlay-release-acceptance.md) before replacing binaries or storage locations.

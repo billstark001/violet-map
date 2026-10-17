@@ -1,3 +1,4 @@
+import { OVERLAY_LIMITS } from './overlayLimits';
 export interface DisposableOverlayResource {
   readonly bytes: number;
   dispose(): void;
@@ -25,9 +26,9 @@ export class OverlayResourcePool<T extends DisposableOverlayResource> {
   private residentBytes = 0;
   private disposed = false;
   constructor(
-    private readonly maxBytes = 128 * 1024 ** 2,
-    private readonly maxEntries = 32,
-    private readonly concurrency = 4,
+    private readonly maxBytes: number = OVERLAY_LIMITS.mediaBytes,
+    private readonly maxEntries: number = OVERLAY_LIMITS.mediaVersions,
+    private readonly concurrency: number = OVERLAY_LIMITS.parallelMediaLoads,
   ) {}
   acquire(key: string, load: (signal: AbortSignal) => Promise<T>): ResourceLease<T> {
     if (this.disposed) throw new Error('overlay resource pool is disposed');

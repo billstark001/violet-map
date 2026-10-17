@@ -5,8 +5,7 @@ import type { DisposableOverlayResource } from './overlayResources';
 export interface OverlayMediaResource extends DisposableOverlayResource {
   instantiate(feature: MediaFeature): THREE.Object3D;
 }
-const MAX_PIXELS = 4096;
-const MAX_DOWNLOAD_BYTES = 64 * 1024 ** 2;
+import { OVERLAY_LIMITS } from './overlayLimits';
 function abort(signal: AbortSignal) {
   if (signal.aborted) throw new DOMException('overlay media aborted', 'AbortError');
 }
@@ -180,7 +179,7 @@ async function imageResource(
     });
     abort(signal);
     const largest = Math.max(version.width!, version.height!),
-      limit = Math.min(MAX_PIXELS, maxTextureSize);
+      limit = Math.min(OVERLAY_LIMITS.mediaTexturePixels, maxTextureSize);
     const scale =
       version.mediaType === 'image/svg+xml'
         ? Math.min(limit / largest, Math.max(1, 1024 / largest))
@@ -259,7 +258,7 @@ export async function loadOverlayMedia(
   signal: AbortSignal,
   maxTextureSize: number,
 ): Promise<OverlayMediaResource> {
-  if (version.bytes > MAX_DOWNLOAD_BYTES) throw new Error('media exceeds the 64 MiB viewer download limit');
+  if (version.bytes > OVERLAY_LIMITS.downloadBytes) throw new Error('media exceeds the 64 MiB viewer download limit');
   const response = await fetch(resolveApiResourceUrl(url), {
     signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
     credentials: 'omit',

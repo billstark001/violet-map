@@ -8,6 +8,7 @@ import {
 } from '../src/render/materials';
 import { TOP_MAP_POSITION_OFFSET, TOP_MAP_POSITION_SCALE } from '@violet-map/render/top-map/mesh';
 import { initializeRuntime } from '../src/runtime';
+import { OVERLAY_LIMITS } from '../src/render/overlayLimits';
 const query = new URLSearchParams(location.search);
 await initializeRuntime({ fallbackApi: query.get('api')! });
 THREE.ColorManagement.enabled = false;
@@ -46,6 +47,7 @@ let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = orthographic,
 let cpu: number[] = [],
   intervals: number[] = [],
   lastFrame = 0;
+let profiling = false;
 function surface(mode: 'online' | 'lod' | 'topmap' | 'mixed' | 'none') {
   for (const object of [...terrain.children]) {
     terrain.remove(object);
@@ -88,8 +90,10 @@ function setCamera(
 }
 function draw() {
   const start = performance.now();
-  if (lastFrame) intervals.push(start - lastFrame);
-  lastFrame = start;
+  if (profiling) {
+    if (lastFrame) intervals.push(start - lastFrame);
+    lastFrame = start;
+  }
   manager.update(renderer, {
     camera,
     topView,
@@ -102,7 +106,7 @@ function draw() {
     surfaceMaxY: 384,
   });
   renderer.render(scene, camera);
-  cpu.push(performance.now() - start);
+  if (profiling) cpu.push(performance.now() - start);
 }
 function pixel(point: [number, number, number]) {
   draw();
@@ -177,19 +181,58 @@ const harness = {
   },
   status: () => manager.diagnosticSnapshot(),
   memory: () => ({ ...renderer.info.memory, programs: renderer.info.programs?.length ?? 0 }),
+  limits: () => OVERLAY_LIMITS,
   benchmark: async () => {
     cpu = [];
     intervals = [];
     lastFrame = 0;
-    for (let i = 0; i < 60; i++) await new Promise(requestAnimationFrame);
+    profiling = true;
+    const checkpoints = [];
+    let peakHeap = 0,
+      peakMedia = 0,
+      peakMask = 0,
+      peakActive = 0,
+      peakCurvePoints = 0;
+    try {
+      for (let frame = 0; frame < 180; frame++) {
+        if (frame < 60) setCamera('topOrthographic', [-20 + (frame * 2) / 3, 150, 0], [-20 + (frame * 2) / 3, 0, 0]);
+        else if (frame < 120)
+          setCamera('topPerspective', [20 - ((frame - 60) * 2) / 3, 150, 0], [20 - ((frame - 60) * 2) / 3, 0, 0]);
+        else if (frame < 140) setCamera('topOrthographic', [100000, 150, 100000], [100000, 0, 100000]);
+        else setCamera('topOrthographic', [0, 150, 0], [0, 0, 0]);
+        await new Promise(requestAnimationFrame);
+        const status = manager.diagnosticSnapshot();
+        peakMedia = Math.max(peakMedia, status.resourceBytes);
+        peakMask = Math.max(peakMask, status.maskBytes);
+        peakActive = Math.max(peakActive, status.active);
+        peakCurvePoints = Math.max(peakCurvePoints, status.curvePoints);
+        peakHeap = Math.max(
+          peakHeap,
+          (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0,
+        );
+        if ([59, 119, 139, 179].includes(frame))
+          checkpoints.push({ frame, status, memory: { ...renderer.info.memory } });
+      }
+    } finally {
+      profiling = false;
+    }
     const summarize = (values: number[]) => {
       const sorted = values.slice().sort((a, b) => a - b);
-      return { median: sorted[Math.floor(sorted.length / 2)], p95: sorted[Math.floor(sorted.length * 0.95)] };
+      return {
+        median: sorted[Math.floor(sorted.length / 2)],
+        p95: sorted[Math.floor(sorted.length * 0.95)],
+        max: sorted.at(-1),
+      };
     };
     return {
       cpuMs: summarize(cpu),
       frameMs: summarize(intervals),
-      heapBytes: (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? null,
+      heapBytes: peakHeap,
+      peakMedia,
+      peakMask,
+      peakActive,
+      peakCurvePoints,
+      checkpoints,
       gpu: manager.diagnosticSnapshot(),
       memory: { ...renderer.info.memory },
     };
