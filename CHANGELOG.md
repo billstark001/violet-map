@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Fallback lighting copies contiguous section channels in bulk while preserving independent section buffers and untouched channels; real-world output digests remain unchanged.
+
 - Region discovery and uploads share bounded Anvil filename parsing; impossible region/chunk filenames no longer produce unsafe coverage coordinates.
 
 - Object synchronization hashes byte views directly instead of copying both complete objects before WebCrypto; shared backing remains supported with an explicit ordinary-buffer copy.

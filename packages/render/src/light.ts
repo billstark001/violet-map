@@ -1,5 +1,7 @@
 import { ChunkColumn } from '@violet-map/core/domain';
 
+const SECTION_VOLUME = 16 ** 3;
+
 export interface LightBlockInfo {
   filter: number;
   emit: number;
@@ -124,21 +126,11 @@ export function computeColumnLight(
   // 写回各 section（缺失的补空气 section）
   for (let sy = col.minSectionY; sy <= col.maxSectionY; sy++) {
     const s = col.ensureSection(sy);
-    const bl = block ? new Uint8Array(4096) : null;
-    const sl = sky ? new Uint8Array(4096) : null;
-    for (let ly = 0; ly < 16; ly++) {
-      const y = sy * 16 + ly - col.minY;
-      for (let lz = 0; lz < 16; lz++) {
-        for (let lx = 0; lx < 16; lx++) {
-          const src = idxOf(lx, y, lz);
-          const dst = (ly << 8) | (lz << 4) | lx;
-          if (bl && block) bl[dst] = block[src];
-          if (sl && sky) sl[dst] = sky[src];
-        }
-      }
-    }
-    if (bl) s.blockLight = bl;
-    if (sl) s.skyLight = sl;
+    // idxOf packs whole sections contiguously in the same Y/Z/X order as
+    // ChunkSection. Copy each channel as an owned span rather than per voxel.
+    const start = (sy - col.minSectionY) * SECTION_VOLUME;
+    if (block) s.blockLight = block.slice(start, start + SECTION_VOLUME);
+    if (sky) s.skyLight = sky.slice(start, start + SECTION_VOLUME);
   }
   if (writeBlock) col.hasStoredBlockLight = true;
   if (bakeSky) col.hasStoredSkyLight = true;
