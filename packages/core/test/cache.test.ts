@@ -36,3 +36,19 @@ test('disabled caches retain nothing and invalid limits or weights fail without 
   assert.equal(cache.get('a'), 1);
   assert.equal(cache.weight, 1);
 });
+
+test('finite weight overflow cannot trap eviction and unbounded aggregates recover after deletion', () => {
+  const bounded = new LruCache<string, number>({ maxEntries: 3, maxWeight: 1e308, weightOf: (value) => value });
+  bounded.set('old', 1e308).set('new', 1e308);
+  assert.deepEqual([...bounded], [['new', 1e308]]);
+  assert.equal(bounded.weight, 1e308);
+  bounded.delete('new');
+  assert.equal(bounded.weight, 0);
+  const unbounded = new LruCache<string, number>({ maxEntries: 3, weightOf: (value) => value });
+  unbounded.set('a', 1e308).set('b', 1e308);
+  assert.equal(unbounded.weight, Infinity);
+  unbounded.delete('a');
+  assert.equal(unbounded.weight, 1e308);
+  unbounded.delete('b');
+  assert.equal(unbounded.weight, 0);
+});

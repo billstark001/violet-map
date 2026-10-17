@@ -60,19 +60,29 @@ export class LruCache<K, V> implements Iterable<[K, V]> {
       throw new RangeError('cache entry weight must be finite and nonnegative');
     this.delete(key);
     if (this.maxEntries === 0 || weight > this.maxWeight) return this;
-    this.entries.set(key, { value, weight });
-    this.residentWeight += weight;
-    while (this.entries.size > this.maxEntries || this.residentWeight > this.maxWeight) {
+    // Make room before adding: two finite weights can overflow their sum and
+    // otherwise leave an eviction loop subtracting from Infinity forever.
+    while (this.entries.size >= this.maxEntries || this.residentWeight > this.maxWeight - weight) {
       this.delete(this.entries.keys().next().value!);
     }
+    this.entries.set(key, { value, weight });
+    this.residentWeight += weight;
     return this;
   }
 
   delete(key: K): boolean {
     const entry = this.entries.get(key);
     if (!entry) return false;
-    this.residentWeight -= entry.weight;
-    return this.entries.delete(key);
+    this.entries.delete(key);
+    if (!this.entries.size) this.residentWeight = 0;
+    else if (Number.isFinite(this.residentWeight)) this.residentWeight -= entry.weight;
+    else {
+      // Unbounded caches may legitimately report an infinite aggregate. Once
+      // entries leave, recompute so finite totals can recover.
+      this.residentWeight = 0;
+      for (const remaining of this.entries.values()) this.residentWeight += remaining.weight;
+    }
+    return true;
   }
 
   clear(): void {

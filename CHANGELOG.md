@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Weighted LRU insertion evicts before adding weights, avoiding an infinite eviction loop when finite weights overflow their sum; unbounded totals recover after deletion.
+
 - Remote storage range reads honor the requested slice when a server/proxy legally ignores Range and returns a full 200 response; returned slices do not retain the full response buffer.
 
 - Failed media reads no longer attach the original asset length, MIME type or validators to a JSON error, avoiding truncated/hanging HTTP responses. Conditional cross-origin HEAD is included in CORS methods.
