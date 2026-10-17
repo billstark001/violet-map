@@ -97,6 +97,8 @@ test(
     near(edges.opaque, [0, 255, 0, 255]);
     near(edges.hidden, [0, 0, 128, 255]);
     near(edges.dynamic, [128, 0, 64, 255]);
+    const coveredRange = await page.evaluate(() => window.transparencyHarness.coveredRange());
+    near(coveredRange, [128, 128, 0, 255]);
     const textured = await page.evaluate(() => window.transparencyHarness.textured());
     near(textured.alpha.left, [0, 0, 0, 255]);
     near(textured.alpha.right, [128, 0, 0, 255]);
@@ -161,6 +163,7 @@ test(
           browser: browser.version(),
           results,
           edges,
+          coveredRange,
           textured,
           glb,
           reference,

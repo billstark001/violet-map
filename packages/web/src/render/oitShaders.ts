@@ -30,7 +30,9 @@ float violetOpticalThickness(float alpha) {
 }
 float violetBinPosition(vec4 bounds) {
   float depth = violetViewDepth(gl_FragCoord.z);
-  return clamp((depth + bounds.x) / max(bounds.y + bounds.x, 0.00001), 0.0, 1.0) * 15.0;
+  // Fully hidden surfaces must not consume the finite visible depth range.
+  float visibleFar = min(bounds.y, violetViewDepth(-bounds.z));
+  return clamp((depth + bounds.x) / max(visibleFar + bounds.x, 0.00001), 0.0, 1.0) * 15.0;
 }
 float violetPrefixAt(int index, ivec2 pixel) {
   if (index < 0) return 0.0;

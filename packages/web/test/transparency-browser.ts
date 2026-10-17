@@ -210,6 +210,18 @@ const harness = {
     draw();
     return { alpha, cutout: { left: pixel(220), right: pixel(420) } };
   },
+  coveredRange() {
+    clear();
+    camera = perspective;
+    camera.position.set(0, 0, 10);
+    camera.lookAt(0, 0, 0);
+    plane(0xff0000, 0.5, 2);
+    const opaque = plane(0x00ff00, 1, 1);
+    opaque.material.transparent = true;
+    plane(0x0000ff, 0.5, -1000);
+    draw();
+    return pixel();
+  },
   async glb() {
     clear();
     const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
