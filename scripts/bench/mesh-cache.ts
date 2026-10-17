@@ -76,7 +76,7 @@ try {
               }
               const start = performance.now();
               const hit = await getCachedFull(parts);
-              if (!hit || hit[0].layers.opaque.positions.byteLength !== bytes)
+              if (hit?.[0]?.layers.opaque?.positions.byteLength !== bytes)
                 throw new Error('invalid benchmark cache hit');
               if (i >= 10) samples.push(performance.now() - start);
             }

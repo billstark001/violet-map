@@ -165,11 +165,10 @@ test('content comparison hashes only the supplied view and accepts shared backin
   const target = new Uint8Array([55, 1, 2, 3, 66]).subarray(1, 4);
   const shared = new Uint8Array(new SharedArrayBuffer(3));
   shared.set(source);
-  const storage = (bytes: Uint8Array) =>
-    ({
-      stat: async () => ({ path: 'object', size: bytes.length }),
-      read: async () => bytes,
-    }) as Parameters<typeof compareObjectContent>[0];
+  const storage = (bytes: Uint8Array) => ({
+    stat: async () => ({ path: 'object', size: bytes.length }),
+    read: async () => bytes,
+  });
   assert.equal((await compareObjectContent(storage(source), storage(target), 'object', 3)).same, true);
   assert.equal((await compareObjectContent(storage(source), storage(shared), 'object', 3)).same, true);
   assert.equal(

@@ -1,4 +1,4 @@
-import type { ObjectStorage } from '@violet-map/core/storage';
+import type { ObjectReader, ObjectStorage } from '@violet-map/core/storage';
 
 async function sha256(bytes: Uint8Array): Promise<string> {
   // WebCrypto snapshots an ArrayBuffer view itself. Only shared backing needs
@@ -13,8 +13,8 @@ async function sha256(bytes: Uint8Array): Promise<string> {
 
 /** Compare size and SHA-256; return source bytes already read for reuse by a copy. */
 export async function compareObjectContent(
-  source: ObjectStorage,
-  target: ObjectStorage,
+  source: Pick<ObjectReader, 'read'>,
+  target: Pick<ObjectReader, 'read' | 'stat'>,
   path: string,
   sourceSize: number,
 ): Promise<{ same: boolean; sourceBytes: Uint8Array | null }> {

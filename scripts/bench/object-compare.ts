@@ -1,17 +1,16 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { compareObjectContent } from '../../packages/storage/src/copy.js';
-import type { ObjectStorage } from '../../packages/core/src/storage.js';
+import type { ObjectReader } from '../../packages/core/src/storage.js';
 
 assert.equal(process.argv.length, 3, 'provide one representative region/object path');
 
 const bytes = await readFile(process.argv[2]);
 const targetBytes = new Uint8Array(bytes);
-const reader = (value: Uint8Array) =>
-  ({
-    stat: async () => ({ path: 'sample', size: value.length }),
-    read: async () => value,
-  }) as ObjectStorage;
+const reader = (value: Uint8Array): Pick<ObjectReader, 'read' | 'stat'> => ({
+  stat: async () => ({ path: 'sample', size: value.length }),
+  read: async () => value,
+});
 const source = reader(bytes),
   target = reader(targetBytes);
 const oldHash = async (input: Uint8Array) => {
