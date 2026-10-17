@@ -96,3 +96,35 @@ test('concurrency, version and byte budgets are bounded; one failure does not po
   a.release();
   pool.dispose();
 });
+
+test('invalid pool limits fail immediately instead of disabling budgets or stalling pending loads', async () => {
+  for (const value of [NaN, Infinity, -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => new OverlayResourcePool(value), RangeError);
+    assert.throws(() => new OverlayResourcePool(10, value), RangeError);
+    assert.throws(() => new OverlayResourcePool(10, 2, value), RangeError);
+  }
+  assert.throws(() => new OverlayResourcePool(10, 2, 0), RangeError);
+  const disabled = new OverlayResourcePool(0, 0);
+  assert.throws(() => disabled.acquire('a', async () => ({ bytes: 0, dispose() {} })), /version budget/);
+  const pool = new OverlayResourcePool(0, 1, 1);
+  let disposed = 0;
+  const invalid = pool.acquire('fractional', async () => ({
+    bytes: 0.5,
+    dispose() {
+      disposed++;
+    },
+  }));
+  await assert.rejects(invalid.promise, /GPU resource budget/);
+  assert.equal(disposed, 1);
+  assert.equal(pool.snapshot().bytes, 0);
+  const valid = pool.acquire('zero', async () => ({
+    bytes: 0,
+    dispose() {
+      disposed++;
+    },
+  }));
+  await valid.promise;
+  valid.release();
+  pool.dispose();
+  assert.equal(disposed, 2);
+});

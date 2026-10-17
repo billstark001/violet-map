@@ -33,7 +33,11 @@ export class OverlayResourcePool<T extends DisposableOverlayResource> {
     private readonly maxBytes: number = OVERLAY_LIMITS.mediaBytes,
     private readonly maxEntries: number = OVERLAY_LIMITS.mediaVersions,
     private readonly concurrency: number = OVERLAY_LIMITS.parallelMediaLoads,
-  ) {}
+  ) {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError('invalid overlay byte budget');
+    if (!Number.isSafeInteger(maxEntries) || maxEntries < 0) throw new RangeError('invalid overlay version budget');
+    if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new RangeError('invalid overlay load concurrency');
+  }
   acquire(key: string, load: (signal: AbortSignal) => Promise<T>): ResourceLease<T> {
     if (this.disposed) throw new Error('overlay resource pool is disposed');
     let entry = this.entries.get(key);
@@ -89,7 +93,7 @@ export class OverlayResourcePool<T extends DisposableOverlayResource> {
             throw new DOMException('overlay resource released', 'AbortError');
           }
           if (
-            !Number.isFinite(resource.bytes) ||
+            !Number.isSafeInteger(resource.bytes) ||
             resource.bytes < 0 ||
             this.residentBytes + resource.bytes > this.maxBytes
           ) {
