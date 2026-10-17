@@ -4,6 +4,13 @@ import { initReactI18next } from 'react-i18next';
 const resources = {
   en: {
     translation: {
+      overlays: 'Map overlays',
+      overlayMap: 'Overlay map',
+      overlaysLoading: 'Loading overlays…',
+      overlaysLoaded: '{{count}} features',
+      overlaySourceUnavailable: 'Source unavailable',
+      overlayError: 'Overlay error',
+      overlayBudget: 'Display budget reached',
       world: 'World',
       dimension: 'Dimension',
       selectWorld: 'Select world',
@@ -85,6 +92,13 @@ const resources = {
   },
   'zh-CN': {
     translation: {
+      overlays: '地图覆盖图层',
+      overlayMap: '覆盖地图',
+      overlaysLoading: '正在加载图层…',
+      overlaysLoaded: '{{count}} 个要素',
+      overlaySourceUnavailable: '来源不可用',
+      overlayError: '图层错误',
+      overlayBudget: '已达到显示预算',
       world: '世界',
       dimension: '维度',
       selectWorld: '选择世界',
@@ -168,6 +182,13 @@ const resources = {
     translation: {
       world: '世界',
       dimension: '維度',
+      overlays: '地圖覆蓋圖層',
+      overlayMap: '覆蓋地圖',
+      overlaysLoading: '正在載入圖層…',
+      overlaysLoaded: '{{count}} 個要素',
+      overlaySourceUnavailable: '來源無法使用',
+      overlayError: '圖層錯誤',
+      overlayBudget: '已達顯示上限',
       selectWorld: '選擇世界',
       fullRadius: '霧氣起始距離：{{value}} 區塊',
       lodRadius: '霧氣淡出距離：+{{value}} 區塊',
@@ -247,6 +268,13 @@ const resources = {
   },
   ja: {
     translation: {
+      overlays: '地図オーバーレイ',
+      overlayMap: 'オーバーレイ地図',
+      overlaysLoading: '読み込み中…',
+      overlaysLoaded: '{{count}} 要素',
+      overlaySourceUnavailable: 'ソースを利用できません',
+      overlayError: 'オーバーレイエラー',
+      overlayBudget: '表示上限に到達',
       world: 'ワールド',
       dimension: 'ディメンション',
       selectWorld: 'ワールドを選択',

@@ -1,0 +1,217 @@
+import * as THREE from 'three';
+import { OverlayManager } from '../src/render/overlayManager';
+import {
+  createMaterials,
+  createSharedUniforms,
+  createTextureAnimationUniforms,
+  createTopMapMaterial,
+} from '../src/render/materials';
+import { TOP_MAP_POSITION_OFFSET, TOP_MAP_POSITION_SCALE } from '@violet-map/render/top-map/mesh';
+import { initializeRuntime } from '../src/runtime';
+const query = new URLSearchParams(location.search);
+await initializeRuntime({ fallbackApi: query.get('api')! });
+THREE.ColorManagement.enabled = false;
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(800, 600);
+renderer.setClearColor(0x101010);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const shared = createSharedUniforms();
+shared.skyDarken.value = 1;
+shared.ambient.value = 1;
+shared.fogNear.value = 1e9;
+shared.fogFar.value = 1e9 + 1;
+shared.envFogDensity.value = 0;
+const texture = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+texture.needsUpdate = true;
+const animation = createTextureAnimationUniforms({
+  ids: {},
+  info: new Uint8Array(4),
+  frames: new Uint8Array(4),
+  infoSize: [1, 1],
+  frameSize: [1, 1],
+});
+const materials = createMaterials(texture, shared, animation),
+  top = createTopMapMaterial(texture, shared);
+const terrain = new THREE.Group();
+scene.add(terrain);
+const manager = new OverlayManager(scene, shared);
+const perspective = new THREE.PerspectiveCamera(50, 4 / 3, 0.1, 2000),
+  orthographic = new THREE.OrthographicCamera(-80, 80, 60, -60, 0.1, 2000);
+let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = orthographic,
+  topView = true,
+  sky: 'normal' | 'nether' | 'end' = 'normal',
+  dayFactor = 1;
+let cpu: number[] = [],
+  intervals: number[] = [],
+  lastFrame = 0;
+function surface(mode: 'online' | 'lod' | 'topmap' | 'mixed' | 'none') {
+  for (const object of [...terrain.children]) {
+    terrain.remove(object);
+    if (object instanceof THREE.Mesh) object.geometry.dispose();
+  }
+  if (mode === 'none') return;
+  for (let index = 0; index < 3; index++) {
+    const kind = mode === 'mixed' ? (['online', 'lod', 'topmap'] as const)[index] : mode;
+    const material = kind === 'online' ? materials.opaque : kind === 'lod' ? materials.lod : top;
+    const scale = kind === 'online' ? [18, 18, 18] : kind === 'lod' ? [16, 4096, 16] : TOP_MAP_POSITION_SCALE;
+    const offset = kind === 'online' ? [-1, -1, -1] : kind === 'lod' ? [0, -2048, 0] : TOP_MAP_POSITION_OFFSET;
+    const minX = -60 + index * 40,
+      maxX = minX + 40,
+      y = index * 12;
+    const positions = [minX, y, -40, maxX, y, -40, maxX, y, 40, minX, y, 40];
+    const encoded = positions.map((v, i) => (v - offset[i % 3]) / scale[i % 3]);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(encoded, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+    geometry.setAttribute('tintColor', new THREE.Float32BufferAttribute(Array(12).fill(0.25), 3));
+    geometry.setAttribute('lightData', new THREE.Float32BufferAttribute(Array(8).fill(1), 2));
+    geometry.setIndex([0, 2, 1, 0, 3, 2]);
+    geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 10000);
+    terrain.add(new THREE.Mesh(geometry, material));
+  }
+}
+function setCamera(
+  mode: 'player' | 'topPerspective' | 'topOrthographic',
+  position: [number, number, number] = [0, 150, 0],
+  target: [number, number, number] = [0, 0, 0],
+) {
+  topView = mode !== 'player';
+  camera = mode === 'topOrthographic' ? orthographic : perspective;
+  camera.position.fromArray(position);
+  camera.up.set(0, 0, -1);
+  if (!topView) camera.up.set(0, 1, 0);
+  camera.lookAt(...target);
+  camera.updateProjectionMatrix();
+  camera.updateMatrixWorld();
+}
+function draw() {
+  const start = performance.now();
+  if (lastFrame) intervals.push(start - lastFrame);
+  lastFrame = start;
+  manager.update(renderer, {
+    camera,
+    topView,
+    width: 800,
+    height: 600,
+    now: performance.now(),
+    dayFactor,
+    sky,
+    ambient: 0.18,
+    surfaceMaxY: 384,
+  });
+  renderer.render(scene, camera);
+  cpu.push(performance.now() - start);
+}
+function pixel(point: [number, number, number]) {
+  draw();
+  const p = new THREE.Vector3(...point).project(camera),
+    x = Math.floor((p.x + 1) * 400),
+    y = Math.floor((p.y + 1) * 300),
+    value = new Uint8Array(4);
+  renderer.getContext().readPixels(x, y, 1, 1, renderer.getContext().RGBA, renderer.getContext().UNSIGNED_BYTE, value);
+  return [...value];
+}
+function block(visible: boolean) {
+  const existing = scene.getObjectByName('occluder');
+  if (existing) {
+    scene.remove(existing);
+    const mesh = existing as THREE.Mesh;
+    mesh.geometry.dispose();
+    (mesh.material as THREE.Material).dispose();
+  }
+  if (visible) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(8, 24, 3), new THREE.MeshBasicMaterial({ color: 0x00ff00 }));
+    mesh.name = 'occluder';
+    mesh.position.set(0, 12, 20);
+    scene.add(mesh);
+  }
+}
+function water(visible: boolean) {
+  const old = scene.getObjectByName('water') as THREE.Mesh | undefined;
+  if (old) {
+    scene.remove(old);
+    old.geometry.dispose();
+    const material = old.material as THREE.ShaderMaterial;
+    (material.uniforms.map.value as THREE.Texture).dispose();
+    material.dispose();
+  }
+  if (!visible) return;
+  const map = new THREE.DataTexture(new Uint8Array([40, 100, 255, 128]), 1, 1);
+  map.needsUpdate = true;
+  const bundle = createMaterials(map, shared, animation),
+    material = bundle.translucent;
+  for (const unused of bundle.all) if (unused !== material) unused.dispose();
+  const geometry = new THREE.BufferGeometry();
+  const positions = [-25, 8, -25, 25, 8, -25, 25, 8, 25, -25, 8, 25];
+  geometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(
+      positions.map((v) => (v + 1) / 18),
+      3,
+    ),
+  );
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+  geometry.setAttribute('tintColor', new THREE.Float32BufferAttribute(Array(12).fill(1), 3));
+  geometry.setAttribute('lightData', new THREE.Float32BufferAttribute(Array(8).fill(1), 2));
+  geometry.setIndex([0, 2, 1, 0, 3, 2]);
+  const object = new THREE.Mesh(geometry, material);
+  object.name = 'water';
+  scene.add(object);
+}
+surface('mixed');
+setCamera('topOrthographic');
+renderer.setAnimationLoop(draw);
+const harness = {
+  set: (mapId: string | null, dimension = 'overworld', enabled = true) => manager.configure(mapId, dimension, enabled),
+  refresh: () => manager.refresh(),
+  camera: setCamera,
+  surface,
+  block,
+  water,
+  pixel,
+  lighting: (mode: 'normal' | 'nether' | 'end', day: number) => {
+    sky = mode;
+    dayFactor = day;
+  },
+  status: () => manager.diagnosticSnapshot(),
+  memory: () => ({ ...renderer.info.memory, programs: renderer.info.programs?.length ?? 0 }),
+  benchmark: async () => {
+    cpu = [];
+    intervals = [];
+    lastFrame = 0;
+    for (let i = 0; i < 60; i++) await new Promise(requestAnimationFrame);
+    const summarize = (values: number[]) => {
+      const sorted = values.slice().sort((a, b) => a - b);
+      return { median: sorted[Math.floor(sorted.length / 2)], p95: sorted[Math.floor(sorted.length * 0.95)] };
+    };
+    return {
+      cpuMs: summarize(cpu),
+      frameMs: summarize(intervals),
+      heapBytes: (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? null,
+      gpu: manager.diagnosticSnapshot(),
+      memory: { ...renderer.info.memory },
+    };
+  },
+  objects: () =>
+    manager.group.children.map((object) => ({
+      position: object.position.toArray(),
+      scale: object.scale.toArray(),
+      bounds: (() => {
+        const box = new THREE.Box3().setFromObject(object);
+        return { min: box.min.toArray(), max: box.max.toArray() };
+      })(),
+    })),
+  dispose: () => {
+    manager.dispose();
+    renderer.setAnimationLoop(null);
+  },
+};
+export type OverlayHarness = typeof harness;
+declare global {
+  interface Window {
+    overlayHarness: OverlayHarness;
+  }
+}
+window.overlayHarness = harness;

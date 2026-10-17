@@ -18,6 +18,16 @@ function includesPackage(id: string, packageName: string): boolean {
 }
 
 const vendorGroups: CodeSplittingGroup[] = [
+  {
+    name: 'overlay-gltf',
+    includeDependenciesRecursively: false,
+    test: (id) =>
+      includesPackage(id, 'three') &&
+      /\/examples\/jsm\/(loaders\/GLTFLoader|utils\/(?:BufferGeometryUtils|SkeletonUtils))\.js$/.test(
+        normalizedModuleId(id),
+      ),
+    priority: 50,
+  },
   { name: 'vendor-three', test: (id) => includesPackage(id, 'three'), priority: 40 },
   { name: 'vendor-radix', test: (id) => normalizedModuleId(id).includes('/node_modules/@radix-ui/'), priority: 30 },
   {

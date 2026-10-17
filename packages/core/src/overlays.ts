@@ -32,6 +32,7 @@ export interface MediaFeature {
   rotation: Vec3;
   scale: Vec3;
   views: ViewMode[];
+  lighting?: 'label' | 'scene';
   placement: 'model' | 'plane' | 'billboard' | 'upright';
   size?: Vec2;
   anchor?: Vec2;
@@ -97,6 +98,12 @@ export class ContentValidationError extends Error {
     this.name = 'ContentValidationError';
     this.code = code;
   }
+}
+function cloneDocument<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((item) => cloneDocument(item)) as T;
+  if (value && typeof value === 'object')
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneDocument(item)])) as T;
+  return value;
 }
 function fail(message: string): never {
   throw new ContentValidationError(message);
@@ -232,7 +239,19 @@ export function validateFeature(value: unknown): asserts value is OverlayFeature
   } else if (kind === 'media') {
     const f = record(
       value,
-      [...common, 'assetId', 'versionId', 'position', 'rotation', 'scale', 'views', 'placement', 'size', 'anchor'],
+      [
+        ...common,
+        'assetId',
+        'versionId',
+        'position',
+        'rotation',
+        'scale',
+        'views',
+        'placement',
+        'size',
+        'anchor',
+        'lighting',
+      ],
       [...common, 'assetId', 'versionId', 'position', 'rotation', 'scale', 'views', 'placement'],
     );
     contentId(f.featureId);
@@ -245,6 +264,7 @@ export function validateFeature(value: unknown): asserts value is OverlayFeature
     views.forEach((view) => oneOf(view, ['top', 'player']));
     if (new Set(views).size !== views.length) fail('duplicate view');
     oneOf(f.placement, ['model', 'plane', 'billboard', 'upright']);
+    if (f.lighting !== undefined) oneOf(f.lighting, ['label', 'scene']);
     if (f.placement === 'model') {
       if (f.size !== undefined || f.anchor !== undefined) fail('model placement uses scale');
     } else {
@@ -264,7 +284,7 @@ export function parseLayerDocument(value: unknown): LayerDocument {
   const features = array(d.features, 0, 10000);
   features.forEach(validateFeature);
   unique(features, 'featureId');
-  return structuredClone(value as LayerDocument);
+  return cloneDocument(value as LayerDocument);
 }
 export function parseBinding(value: unknown): LayerBinding {
   const d = record(value, ['bindingId', 'dimension', 'layerId', 'enabled', 'order']);
@@ -292,7 +312,7 @@ export function parseMapDocument(value: unknown): MapDocument {
   if (d.expectedArchiveId !== undefined) contentId(d.expectedArchiveId);
   const bindings = array(d.bindings, 0, 10000).map(parseBinding);
   unique(bindings, 'bindingId');
-  return { ...structuredClone(value as MapDocument), bindings };
+  return { ...cloneDocument(value as MapDocument), bindings };
 }
 export function parseMediaDocument(value: unknown): MediaDocument {
   const d = record(value, ['schemaVersion', 'assetId', 'revision', 'name', 'versions']);
@@ -303,7 +323,7 @@ export function parseMediaDocument(value: unknown): MediaDocument {
   const versions = array(d.versions, 1, 10000);
   versions.forEach(contentId);
   if (new Set(versions).size !== versions.length) fail('duplicate version');
-  return structuredClone(value as MediaDocument);
+  return cloneDocument(value as MediaDocument);
 }
 export function parseMediaVersion(value: unknown): MediaVersion {
   const d = record(
@@ -347,8 +367,44 @@ export function parseMediaVersion(value: unknown): MediaVersion {
     positive(d.height);
     if (d.bounds !== undefined) fail('images use dimensions');
   }
-  return structuredClone(value as MediaVersion);
+  return cloneDocument(value as MediaVersion);
 }
 export function revisionTag(revision: number): string {
   return `"${revision}"`;
+}
+
+/** Validate the public wire document before it crosses into the renderer. */
+export function parseOverlayManifest(value: unknown): OverlayManifest {
+  const d = record(value, ['schemaVersion', 'mapId', 'mapRevision', 'dimension', 'sourceStatus', 'layers', 'media']);
+  schema(d);
+  contentId(d.mapId);
+  integer(d.mapRevision, 1);
+  oneOf(d.sourceStatus, ['verified', 'unverified', 'missing', 'mismatch', 'unbound']);
+  const dimension = normalizeContentDimension(d.dimension);
+  const layers = array(d.layers, 0, 10000).map((value) => {
+    const item = record(value, ['binding', 'document']);
+    const binding = parseBinding(item.binding),
+      document = parseLayerDocument(item.document);
+    if (binding.layerId !== document.layerId || binding.dimension !== dimension || !binding.enabled)
+      fail('manifest binding mismatch');
+    return { binding, document };
+  });
+  if (new Set(layers.map((item) => item.binding.bindingId)).size !== layers.length) fail('duplicate binding');
+  const media = array(d.media, 0, 10000).map((value) => {
+    const item = record(value, ['version', 'url']);
+    const version = parseMediaVersion(item.version);
+    if (typeof item.url !== 'string' || !item.url.startsWith('/api/')) fail('invalid API resource reference');
+    return { version, url: item.url };
+  });
+  if (new Set(media.map((item) => item.version.assetId + '/' + item.version.versionId)).size !== media.length)
+    fail('duplicate media version');
+  return {
+    schemaVersion: 1,
+    mapId: d.mapId as string,
+    mapRevision: d.mapRevision as number,
+    dimension,
+    sourceStatus: d.sourceStatus as MapSourceStatus,
+    layers,
+    media,
+  };
 }

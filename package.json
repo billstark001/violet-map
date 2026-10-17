@@ -26,7 +26,8 @@
     "lint": "oxlint --deny-warnings packages",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "violet-map": "tsx --conditions=development packages/cli/src/cli.ts"
+    "violet-map": "tsx --conditions=development packages/cli/src/cli.ts",
+    "test:overlays": "tsx --conditions=development --test scripts/acceptance/overlays.test.ts"
   },
   "devDependencies": {
     "@hono/node-server": "^2.1.5",

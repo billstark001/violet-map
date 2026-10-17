@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { parseLayerDocument, parseMapDocument, normalizeContentDimension, parseMediaVersion } from '../src/overlays.js';
+import {
+  parseLayerDocument,
+  parseMapDocument,
+  normalizeContentDimension,
+  parseMediaVersion,
+  parseOverlayManifest,
+} from '../src/overlays.js';
 import { parseServiceCapabilities } from '../src/contracts.js';
 const fill = { color: '#8844ff', opacity: 0.4 };
 const area = {
@@ -111,4 +117,40 @@ test('map dimensions normalize and capabilities default new fields while retaini
   assert.throws(() => parseServiceCapabilities({ ...old, contentReads: 'yes' }));
   assert.throws(() => parseServiceCapabilities({ ...old, users: undefined }));
   assert.throws(() => parseMediaVersion({ schemaVersion: 1 }));
+});
+
+test('public manifests enforce binding identity and media lighting is a strict optional display field', () => {
+  const binding = { bindingId: 'b', layerId: 'layer', dimension: 'overworld', order: 0, enabled: true };
+  const manifest = {
+    schemaVersion: 1,
+    mapId: 'map',
+    mapRevision: 1,
+    dimension: 'overworld',
+    sourceStatus: 'verified',
+    layers: [{ binding, document: layer(area) }],
+    media: [],
+  };
+  assert.equal(parseOverlayManifest(manifest).dimension, 'minecraft:overworld');
+  for (const change of [
+    { ...binding, layerId: 'other' },
+    { ...binding, dimension: 'the_end' },
+    { ...binding, enabled: false },
+  ])
+    assert.throws(() => parseOverlayManifest({ ...manifest, layers: [{ binding: change, document: layer(area) }] }));
+  assert.throws(() => parseOverlayManifest({ ...manifest, layers: [...manifest.layers, ...manifest.layers] }));
+  assert.throws(() => parseOverlayManifest({ ...manifest, schemaVersion: 2 }));
+  const media = {
+    featureId: 'media',
+    kind: 'media',
+    assetId: 'asset',
+    versionId: 'v',
+    position: [0, 0, 0],
+    rotation: [0, 0, 0],
+    scale: [1, 1, 1],
+    views: ['player'],
+    placement: 'model',
+  };
+  for (const lighting of [undefined, 'label', 'scene'])
+    assert.ok(parseLayerDocument(layer({ ...media, ...(lighting ? { lighting } : {}) })));
+  assert.throws(() => parseLayerDocument(layer({ ...media, lighting: 'dynamic' })));
 });

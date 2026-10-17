@@ -23,6 +23,8 @@ import {
   type TextureAnimationUniforms,
 } from './materials';
 import { TopMapManager, type TopMapDiagnosticSnapshot } from './topMapManager';
+import { OverlayManager, type OverlayDiagnosticSnapshot } from './overlayManager';
+import { serviceCapabilities } from '../runtime';
 import type { WorkerInit } from '../worker/protocol';
 
 const VIEW_STORAGE_KEY = 'violet-map:view';
@@ -62,6 +64,9 @@ export interface CameraPositionRequest {
 
 export interface ViewerProps {
   world: string;
+  overlayMapId?: string;
+  overlaysEnabled?: boolean;
+  onOverlayStatus?: (status: OverlayDiagnosticSnapshot) => void;
   dimension: string;
   viewDistance: number;
   lodDistance: number;
@@ -95,6 +100,7 @@ export interface ViewerDiagnosticSnapshot {
   schedulerPreset: SchedulerPreset;
   chunkManager: ChunkManagerDiagnosticSnapshot | null;
   topMap: TopMapDiagnosticSnapshot;
+  overlays: OverlayDiagnosticSnapshot;
 }
 
 type ActiveCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
@@ -127,6 +133,7 @@ interface Engine {
   topPerspectiveControls: TopDownControls;
   topOrthographicControls: TopDownControls;
   topMap: TopMapManager;
+  overlays: OverlayManager;
   materials: TerrainMaterials;
   terrainTexture: THREE.Texture;
   textureAnimations: TextureAnimationUniforms;
@@ -347,6 +354,7 @@ function diagnosticSnapshotForViewer(
     schedulerPreset,
     chunkManager: manager?.diagnosticSnapshot() ?? null,
     topMap: engine.topMap.diagnosticSnapshot(),
+    overlays: engine.overlays.diagnosticSnapshot(),
   };
 }
 
@@ -813,6 +821,7 @@ function createEngine(
     topPerspectiveControls: controls.topPerspectiveControls,
     topOrthographicControls: controls.topOrthographicControls,
     topMap,
+    overlays: new OverlayManager(scene, shared),
     materials,
     terrainTexture,
     textureAnimations,
@@ -847,6 +856,7 @@ function disposeEngine(engine: Engine) {
   engine.topPerspectiveControls.dispose();
   engine.topOrthographicControls.dispose();
   engine.topMap.dispose();
+  engine.overlays.dispose();
   engine.sky.dispose();
   for (const material of engine.materials.all) material.dispose();
   engine.textureAnimations.info.dispose();
@@ -1067,6 +1077,23 @@ function renderFrame({ engine, manager, latestStats, props, capabilities, state 
   applyLightingAndFog(engine, manager, props, dimDef, topView, state.skyColor, state.horizonColor);
 
   const camera = engine.activeCamera;
+  engine.overlays.configure(
+    props.overlayMapId ?? null,
+    props.dimension,
+    !!props.overlaysEnabled && !!serviceCapabilities().contentReads,
+  );
+  engine.overlays.update(engine.renderer, {
+    camera,
+    topView,
+    width: engine.renderer.domElement.clientWidth,
+    height: engine.renderer.domElement.clientHeight,
+    now,
+    dayFactor: dayFactorForDimension(dimDef, props.timeOfDay),
+    sky: dimensionSkyMode(dimDef),
+    ambient: dimDef.ambientLight,
+    surfaceMaxY: props.topClipRange.maxY,
+  });
+  if (now - state.lastStatsReport > 250) props.onOverlayStatus?.(engine.overlays.diagnosticSnapshot());
   maybeReportStats(state, now, latestStats, camera, props.viewMode, props.onStats);
   maybePersistActiveView(state, now, engine, camera, props.viewMode);
   engine.renderer.render(engine.scene, camera);

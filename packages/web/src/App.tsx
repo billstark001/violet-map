@@ -2,6 +2,8 @@ import { apiTokenKey, serviceCapabilities } from './runtime';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge, Box, Button, Card, Flex, Select, Slider, Switch, Tabs, Text, TextField, Theme } from '@radix-ui/themes';
 import { useTranslation } from 'react-i18next';
+import type { WorldInfo } from '@violet-map/core/contracts';
+import type { OverlayDiagnosticSnapshot } from './render/overlayManager';
 import { fetchWorlds, uploadDiagnosticSnapshot } from './api';
 import { Compass } from './Compass';
 import { languageOptions } from './i18n';
@@ -17,10 +19,6 @@ import {
 import { EMPTY_CHUNK_SCHEDULER_STATS, type SchedulerPreset } from './render/chunkScheduler';
 import type { TopClipRange } from './render/chunkManager';
 
-interface WorldInfo {
-  id: string;
-  dimensions: string[];
-}
 type Axis = 'x' | 'y' | 'z';
 type AngleAxis = 'yaw' | 'pitch';
 type DiagnosticDetail = 'off' | 'simple' | 'standard' | 'detailed';
@@ -35,6 +33,8 @@ const TOP_CLIP_STEP = 16;
 
 interface ViewerSettings {
   world?: string;
+  overlayMapId?: string;
+  overlaysEnabled?: boolean;
   dimension?: string;
   viewDistance?: number;
   lodDistance?: number;
@@ -220,6 +220,9 @@ export default function App() {
   const { t, i18n } = useTranslation();
   const [worlds, setWorlds] = useState<WorldInfo[]>([]);
   const [world, setWorld] = useState(() => stringSetting('world', ''));
+  const [overlayMapId, setOverlayMapId] = useState(() => stringSetting('overlayMapId', ''));
+  const [overlaysEnabled, setOverlaysEnabled] = useState(() => booleanSetting('overlaysEnabled', true));
+  const [overlayStatus, setOverlayStatus] = useState<OverlayDiagnosticSnapshot | null>(null);
   const [dimension, setDimension] = useState(() => stringSetting('dimension', 'minecraft:overworld'));
   const [viewDistance, setViewDistance] = useState(() => numberSetting('viewDistance', 8));
   const [lodDistance, setLodDistance] = useState(() => numberSetting('lodDistance', 12));
@@ -290,6 +293,8 @@ export default function App() {
         if (world) next.world = world;
         else delete next.world;
       }
+      if (!params.has('overlayMapId')) next.overlayMapId = overlayMapId;
+      if (!params.has('overlaysEnabled')) next.overlaysEnabled = overlaysEnabled;
       if (!params.has('dimension')) next.dimension = dimension;
       if (!params.has('viewDistance')) next.viewDistance = viewDistance;
       if (!params.has('lodDistance')) next.lodDistance = lodDistance;
@@ -323,6 +328,8 @@ export default function App() {
     schedulerPreset,
     idbCacheEnabled,
     worldsLoaded,
+    overlayMapId,
+    overlaysEnabled,
   ]);
 
   useEffect(() => {
@@ -371,6 +378,8 @@ export default function App() {
     };
   }, [panelCollapsed, panelTab, diagnosticDetail, diagnosticCollapsed, idbCacheEnabled]);
 
+  const overlayMaps = serviceCapabilities().contentReads ? (worlds.find((w) => w.id === world)?.mapIds ?? []) : [];
+  const activeOverlayMap = overlayMaps.includes(overlayMapId) ? overlayMapId : overlayMaps[0];
   const dims = worlds.find((w) => w.id === world)?.dimensions ?? [];
   const draftValues = [Number(coordDraft.x), Number(coordDraft.y), Number(coordDraft.z)] as const;
   const angleDraftValues = [Number(angleDraft.yaw), Number(angleDraft.pitch)] as const;
@@ -491,6 +500,9 @@ export default function App() {
         {world && (
           <Viewer
             world={world}
+            overlayMapId={activeOverlayMap}
+            overlaysEnabled={overlaysEnabled}
+            onOverlayStatus={setOverlayStatus}
             dimension={dimension}
             viewDistance={viewDistance}
             lodDistance={lodDistance}
@@ -596,6 +608,48 @@ export default function App() {
                           </Select.Content>
                         </Select.Root>
                       </Flex>
+                      {activeOverlayMap && (
+                        <Box>
+                          <Flex align="center" justify="between">
+                            <Text as="label" size="1" htmlFor="overlay-toggle">
+                              {t('overlays')}
+                            </Text>
+                            <Switch
+                              id="overlay-toggle"
+                              checked={overlaysEnabled}
+                              onCheckedChange={setOverlaysEnabled}
+                            />
+                          </Flex>
+                          {overlayMaps.length > 1 && (
+                            <Select.Root value={activeOverlayMap} onValueChange={setOverlayMapId}>
+                              <Select.Trigger aria-label={t('overlayMap')} style={{ width: '100%', marginTop: 8 }} />
+                              <Select.Content>
+                                {overlayMaps.map((id) => (
+                                  <Select.Item key={id} value={id}>
+                                    {id}
+                                  </Select.Item>
+                                ))}
+                              </Select.Content>
+                            </Select.Root>
+                          )}
+                          {overlaysEnabled && overlayStatus && (
+                            <Text size="1" as="p" mt="1" role="status" data-testid="overlay-status">
+                              {overlayStatus.loading
+                                ? t('overlaysLoading')
+                                : t('overlaysLoaded', { count: overlayStatus.features })}
+                              {overlayStatus.sourceStatus &&
+                                !['verified', 'unverified'].includes(overlayStatus.sourceStatus) &&
+                                ` · ${t('overlaySourceUnavailable')}`}
+                              {overlayStatus.errors.length > 0 &&
+                                ` · ${t('overlayError')}: ${overlayStatus.errors[0].message}`}
+                              {(overlayStatus.suppressed > 0 ||
+                                overlayStatus.maskLimited ||
+                                overlayStatus.samplingLimited > 0) &&
+                                ` · ${t('overlayBudget')}`}
+                            </Text>
+                          )}
+                        </Box>
+                      )}
                       <Box>
                         <Text size="1">{t('fullRadius', { value: viewDistance })}</Text>
                         <Slider value={[viewDistance]} min={2} max={32} onValueChange={([v]) => setViewDistance(v)} />
