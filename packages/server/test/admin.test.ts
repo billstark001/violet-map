@@ -42,6 +42,7 @@ for (const driver of ['pglite', 'postgres'] as const) {
     },
   );
 }
+
 test('direct business context never initializes or migrates an unversioned database', async (t) => {
   const fixture = await managementFixture(t);
   const options = { databaseDir: path.join(fixture.root, 'uninitialized') };
@@ -56,6 +57,7 @@ test('direct business context never initializes or migrates an unversioned datab
   const api = await import('../src/admin.js');
   assert.deepEqual(Object.keys(api).sort(), ['createAdminContext', 'readAdminConfig']);
 });
+
 test('direct configuration has an explicit target and resolves YAML relative to its file', async (t) => {
   const fixture = await managementFixture(t);
   await assert.rejects(async () => readAdminConfig({ env: {}, cwd: fixture.root }), /requires/);

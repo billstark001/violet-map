@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { initializeRuntime, apiUrl, apiTokenKey } from '../src/runtime.js';
+
 const full = {
   protocolVersion: 1,
   adminApi: true,
@@ -10,6 +11,7 @@ const full = {
   diagnostics: true,
   authMode: 'users',
 };
+
 test('runtime configuration only falls back on explicit 404 and isolates API token keys', async (t) => {
   const previous = globalThis.fetch;
   t.after(() => {

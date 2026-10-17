@@ -1,15 +1,20 @@
 import type { AreaFeature, CurveFeature, MediaFeature, MediaVersion, Vec2, Vec3 } from '@violet-map/core/overlays';
+
 export interface OverlayBounds {
   min: Vec3;
   max: Vec3;
 }
+
 export interface Projection {
   matrix: readonly number[];
   width: number;
   height: number;
 }
+
 const mix = (a: Vec3, b: Vec3): Vec3 => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+
 const add = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+
 export function boundsOf(points: readonly Vec3[], padding = 0): OverlayBounds {
   const min: Vec3 = [Infinity, Infinity, Infinity],
     max: Vec3 = [-Infinity, -Infinity, -Infinity];
@@ -21,6 +26,7 @@ export function boundsOf(points: readonly Vec3[], padding = 0): OverlayBounds {
   if ([...min, ...max].some((v) => !Number.isFinite(v))) throw new Error('nonfinite overlay bounds');
   return { min, max };
 }
+
 export function curveBounds(curve: CurveFeature, padding = 0): OverlayBounds {
   const points: Vec3[] = [];
   for (let i = 0; i < curve.nodes.length - (curve.closed ? 0 : 1); i++) {
@@ -30,6 +36,7 @@ export function curveBounds(curve: CurveFeature, padding = 0): OverlayBounds {
   }
   return boundsOf(points, padding);
 }
+
 export function projectPoint(point: Vec3, projection: Projection): Vec3 {
   const m = projection.matrix,
     [x, y, z] = point;
@@ -40,6 +47,7 @@ export function projectPoint(point: Vec3, projection: Projection): Vec3 {
     w,
   ];
 }
+
 function distanceToSegment(
   p: readonly number[],
   a: readonly number[],
@@ -57,6 +65,7 @@ function distanceToSegment(
   for (let i = 0; i < dimensions; i++) squared += (p[i] - a[i] - (b[i] - a[i]) * t) ** 2;
   return Math.sqrt(squared);
 }
+
 export function cubicPoint(points: readonly Vec3[], t: number): Vec3 {
   const u = 1 - t;
   return [0, 1, 2].map(
@@ -64,6 +73,7 @@ export function cubicPoint(points: readonly Vec3[], t: number): Vec3 {
       u * u * u * points[0][i] + 3 * u * u * t * points[1][i] + 3 * u * t * t * points[2][i] + t * t * t * points[3][i],
   ) as Vec3;
 }
+
 /** Positive homogeneous weights keep the projected curve inside its projected control hull. */
 export function sampleCurve(
   curve: CurveFeature,
@@ -111,7 +121,9 @@ export function sampleCurve(
   }
   return { points, bounds: curveBounds(curve), capped };
 }
+
 const cross = (a: Vec2, b: Vec2, c: Vec2) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+
 export function pointInRing(point: Vec2, ring: readonly Vec2[]): boolean {
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -130,6 +142,7 @@ export function pointInRing(point: Vec2, ring: readonly Vec2[]): boolean {
   }
   return inside;
 }
+
 /** Simple single-ring ear clipping; collinear boundary points are removed without moving the contour. */
 export function triangulateRing(ring: readonly Vec2[]): Uint32Array {
   if (ring.length < 3 || ring.length > 2048) throw new Error('invalid area ring size');
@@ -179,6 +192,7 @@ export function triangulateRing(ring: readonly Vec2[]): Uint32Array {
   if (active.length === 3 && cross(ring[active[0]], ring[active[1]], ring[active[2]]) !== 0) indices.push(...active);
   return new Uint32Array(indices);
 }
+
 export function buildAreaFill(area: AreaFeature) {
   const origin: Vec3 = [area.ring[0][0], 0, area.ring[0][1]];
   return {
@@ -187,6 +201,7 @@ export function buildAreaFill(area: AreaFeature) {
     indices: triangulateRing(area.ring),
   };
 }
+
 export function buildAreaWall(area: AreaFeature) {
   const origin: Vec3 = [area.ring[0][0], area.minY, area.ring[0][1]],
     positions: number[] = [],
@@ -226,6 +241,7 @@ export function buildAreaWall(area: AreaFeature) {
     ),
   };
 }
+
 export interface MaskLayout {
   origin: Vec2;
   size: Vec2;
@@ -233,6 +249,7 @@ export interface MaskLayout {
   height: number;
   limited: boolean;
 }
+
 export function areaMaskLayout(bounds: { min: Vec2; max: Vec2 }, worldPerPixel: number, maxSize = 4096): MaskLayout {
   if (!(worldPerPixel > 0) || !Number.isFinite(worldPerPixel) || maxSize < 16)
     throw new Error('invalid mask resolution');
@@ -244,9 +261,11 @@ export function areaMaskLayout(bounds: { min: Vec2; max: Vec2 }, worldPerPixel: 
     height = Math.max(4, Math.min(maxSize, Math.ceil((bounds.max[1] - origin[1]) / step) + 1));
   return { origin, size: [width * step, height * step], width, height, limited: step > desired * 1.001 };
 }
+
 export function areaMaskUv(point: Vec2, layout: MaskLayout): Vec2 {
   return [(point[0] - layout.origin[0]) / layout.size[0], 1 - (point[1] - layout.origin[1]) / layout.size[1]];
 }
+
 export function mediaBounds(feature: MediaFeature, version: MediaVersion): OverlayBounds {
   if (feature.placement === 'billboard') {
     const size = feature.size!,

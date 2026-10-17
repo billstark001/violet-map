@@ -23,6 +23,7 @@ export interface WorldSyncOptions {
   delete?: boolean;
   force?: boolean;
 }
+
 export async function targetStorage(options: WorldSyncOptions, context: CliContext): Promise<StorageOptions> {
   if (options.target === 'local') {
     if (!options.targetDir) throw new Error('Local target requires --target-dir');
@@ -110,6 +111,7 @@ export async function targetStorage(options: WorldSyncOptions, context: CliConte
     credentials,
   };
 }
+
 export async function runWorldSync(options: WorldSyncOptions, context: CliContext): Promise<void> {
   if (!options.from) throw new Error('--from must not be empty');
   if (!/^[A-Za-z0-9_.-]+$/.test(options.world))

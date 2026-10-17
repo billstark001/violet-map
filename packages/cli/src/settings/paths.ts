@@ -7,6 +7,7 @@ export interface LocationOptions {
   cliHome?: string;
   config?: string;
 }
+
 export interface CliPaths {
   configFile: string;
   stateFile: string;

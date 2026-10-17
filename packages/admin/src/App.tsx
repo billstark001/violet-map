@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next';
 import { languageOptions } from './i18n';
 
 const DIMS = ['minecraft:overworld', 'minecraft:the_nether', 'minecraft:the_end'];
+
 const adminTokenKey = () => apiTokenKey('admin-token');
 
 function authHeaders(token: string, headers: HeadersInit = {}): HeadersInit {

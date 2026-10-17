@@ -4,6 +4,7 @@ import { Float32Writer, Uint32Writer } from '../utils.js';
 
 export const TOP_MAP_POSITION_SCALE = [512, 4096, 512] as const;
 export const TOP_MAP_POSITION_OFFSET = [0, -2048, 0] as const;
+
 export interface BuildTopMapMeshOptions {
   step: number;
   onlineChunks?: ReadonlySet<string>;

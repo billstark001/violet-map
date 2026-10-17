@@ -10,7 +10,9 @@ import { Hono } from 'hono';
 import { createApp } from '../src/app.js';
 import { createServices } from '../src/services.js';
 import { loadServerConfig } from '../src/configuration.js';
+
 const execute = promisify(execFile);
+
 test('CLI alone completes content lifecycle with API prefix, credentials and explicit conflicts', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-content-cli-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

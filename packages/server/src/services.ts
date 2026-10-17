@@ -11,9 +11,11 @@ import { createWorldStore } from './worldStore.js';
 import { createAuthorization, type Authentication } from './auth.js';
 import type { DatabaseOptions } from './db/connection.js';
 import type { createDatabaseService } from './db/index.js';
+
 export interface ServiceFactories {
   database?: (options: DatabaseOptions) => ReturnType<typeof createDatabaseService>;
 }
+
 export async function createServices(config: ServerConfig, factories: ServiceFactories = {}): Promise<AppServices> {
   const mounts = await createStorageMounts(config);
   const storage = mounts.worlds;

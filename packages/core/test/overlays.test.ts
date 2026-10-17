@@ -8,6 +8,7 @@ import {
   parseOverlayManifest,
 } from '../src/overlays.js';
 import { parseServiceCapabilities } from '../src/contracts.js';
+
 const fill = { color: '#8844ff', opacity: 0.4 };
 const area = {
   featureId: 'area',
@@ -23,6 +24,7 @@ const area = {
   fill,
   wall: { ...fill, occlusion: 'terrain' },
 };
+
 const layer = (feature: unknown) => ({
   schemaVersion: 1,
   layerId: 'layer',
@@ -30,6 +32,7 @@ const layer = (feature: unknown) => ({
   name: 'fixture',
   features: [feature],
 });
+
 test('overlay geometry rejects nonfinite, self-intersecting, touching and repeated rings', () => {
   assert.deepEqual(parseLayerDocument(layer(area)), layer(area));
   for (const ring of [
@@ -79,6 +82,7 @@ test('overlay geometry rejects nonfinite, self-intersecting, touching and repeat
     assert.throws(() => parseLayerDocument(layer({ ...area, ...changes })));
   assert.throws(() => parseLayerDocument({ ...layer(area), schemaVersion: 2 }), { code: 'UNSUPPORTED_FORMAT' });
 });
+
 test('curve handles remain relative, closure does not smooth, degenerate open segments are valid', () => {
   const node = { anchor: [0, 2, 0], in: [-3, 1, 0], out: [0, 0, 0] };
   const curve = {
@@ -92,6 +96,7 @@ test('curve handles remain relative, closure does not smooth, degenerate open se
   assert.throws(() => parseLayerDocument(layer({ ...curve, closed: true })));
   assert.throws(() => parseLayerDocument(layer({ ...curve, nodes: [node, { ...node, out: [Infinity, 0, 0] }] })));
 });
+
 test('map dimensions normalize and capabilities default new fields while retaining strict old fields', () => {
   const map = {
     schemaVersion: 1,

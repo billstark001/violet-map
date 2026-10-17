@@ -1,4 +1,5 @@
 import type { RouteContext } from './context.js';
+
 export function mountData(context: RouteContext) {
   const { app, buildBlockInfo, readBiomes, readDimensions, jsonPayload, cachedObjectPayload } = context;
   app.get('/api/data/blocks', async (c) =>

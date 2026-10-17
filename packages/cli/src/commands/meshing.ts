@@ -1,8 +1,10 @@
 import { loadCapability } from '../capabilities.js';
 import { ChunkColumn, type BlockStateRef } from '@violet-map/core/domain';
 import type { ChunkNeighborhood, MesherResources, Rgb } from '@violet-map/render';
+
 const render = await loadCapability('@violet-map/render');
 const { computeColumnLight, meshLodChunk, meshSection } = render;
+
 import { type AssetBundle, type AtlasIndex, type BlockInfo } from '@violet-map/core/assets';
 import { ColumnEntry } from './worldInput.js';
 import { tintOf } from './colorInput.js';

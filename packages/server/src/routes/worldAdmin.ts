@@ -1,4 +1,5 @@
 import type { RouteContext } from './context.js';
+
 export function mountWorldAdmin(context: RouteContext) {
   const {
     app,

@@ -2,10 +2,12 @@ import { serve } from '@hono/node-server';
 import { loadServerConfig } from './configuration.js';
 import { createServices } from './services.js';
 import { createApp } from './app.js';
+
 const config = loadServerConfig({ env: process.env });
 const services = await createServices(config);
 let httpServer: ReturnType<typeof serve> | undefined;
 let closing: Promise<void> | undefined;
+
 function shutdown() {
   if (closing) return;
   closing = (async () => {
@@ -26,8 +28,11 @@ function shutdown() {
     process.exitCode = 1;
   });
 }
+
 process.once('SIGINT', shutdown);
+
 process.once('SIGTERM', shutdown);
+
 try {
   const application = createApp(config, services);
   if (config.server.staticDir) {

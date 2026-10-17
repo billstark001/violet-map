@@ -7,10 +7,13 @@ import { ContentValidationError, parseMediaVersion, type MediaVersion, type Vec3
 function invalid(message: string): never {
   throw new ContentValidationError(message);
 }
+
 function unsupported(message: string): never {
   throw new ContentValidationError(message, 'UNSUPPORTED_FORMAT');
 }
+
 const pixelLimit = 16_777_216;
+
 function svgDimensions(bytes: Uint8Array) {
   const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   if (/<!DOCTYPE|<!ENTITY|<\?(?!xml(?:\s|\?))/i.test(text))
@@ -121,6 +124,7 @@ function svgDimensions(bytes: Uint8Array) {
     invalid('SVG requires positive pixel dimensions or viewBox within pixel limit');
   return { width, height };
 }
+
 type GltfNode = {
   mesh?: number;
   children?: number[];
@@ -130,6 +134,7 @@ type GltfNode = {
   scale?: number[];
   skin?: number;
 };
+
 interface Gltf {
   asset: { version: string };
   animations?: unknown[];
@@ -142,7 +147,9 @@ interface Gltf {
   meshes?: { primitives: { attributes: Record<string, number>; targets?: unknown[] }[] }[];
   accessors?: { min?: number[]; max?: number[] }[];
 }
+
 const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
 function multiply(a: number[], b: number[]): number[] {
   return Array.from({ length: 16 }, (_, i) => {
     const row = i % 4,
@@ -152,6 +159,7 @@ function multiply(a: number[], b: number[]): number[] {
     );
   });
 }
+
 function matrix(node: GltfNode): number[] {
   if (node.matrix) return node.matrix;
   const [x, y, z, w] = node.rotation ?? [0, 0, 0, 1],
@@ -174,6 +182,7 @@ function matrix(node: GltfNode): number[] {
     1,
   ];
 }
+
 async function glbBounds(bytes: Uint8Array): Promise<{ min: Vec3; max: Vec3 }> {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (
@@ -255,6 +264,7 @@ async function glbBounds(bytes: Uint8Array): Promise<{ min: Vec3; max: Vec3 }> {
   if ([...min, ...max].some((v) => !Number.isFinite(v))) invalid('GLB requires finite scene bounds');
   return { min, max };
 }
+
 export async function inspectMedia(assetId: string, bytes: Uint8Array, mediaType: string): Promise<MediaVersion> {
   if (!bytes.length) invalid('empty media');
   const digest = createHash('sha256').update(bytes).digest('hex');

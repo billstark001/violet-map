@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OVERLAY_LIMITS } from './overlayLimits';
 import { areaMaskLayout, type MaskLayout } from '@violet-map/render/overlays';
 import type { SharedUniforms } from './materials';
+
 /** A world-XZ compositing atlas, sampled by every terrain material at the actual surface position. */
 export class OverlayMask {
   readonly scene = new THREE.Scene();
@@ -91,6 +92,7 @@ export class OverlayMask {
     this.scene.clear();
   }
 }
+
 export function createMaskMaterial(color: string, opacity: number) {
   const raw = new THREE.Color().setRGB(
     parseInt(color.slice(1, 3), 16) / 255,

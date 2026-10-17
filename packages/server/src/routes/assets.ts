@@ -1,4 +1,5 @@
 import type { RouteContext } from './context.js';
+
 export function mountAssets(context: RouteContext) {
   const {
     app,

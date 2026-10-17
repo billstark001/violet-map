@@ -5,13 +5,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadServerConfig } from '../src/configuration.js';
 import { createStorageMounts } from '../src/storage.js';
+
 async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-mounts-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const file = path.join(root, 'violet.yaml');
   return { root, file, write: (text: string) => fs.writeFile(file, text) };
 }
+
 const header = 'deployment:\n  profile: public\nfeatures:\n  contentReads: true\n';
+
 test('one-root and mixed mounts isolate writes and lazily leave missing stores absent', async (t) => {
   const { root, file, write } = await fixture(t);
   await write(
@@ -46,6 +49,7 @@ test('one-root and mixed mounts isolate writes and lazily leave missing stores a
   );
   assert.equal(disabled.content, undefined);
 });
+
 test('overlap checks compare actual locations and segment prefixes, not names', async (t) => {
   const { root, file, write } = await fixture(t);
   for (const [a, b, reject] of [
@@ -74,6 +78,7 @@ test('overlap checks compare actual locations and segment prefixes, not names', 
   );
   assert.throws(() => loadServerConfig({ env: {}, cwd: root, configFile: file }), /overlapping/);
 });
+
 test('legacy S3 prefix is applied once; named env targets mounts precisely and validates names', async (t) => {
   const { root, file, write } = await fixture(t);
   const config = loadServerConfig({

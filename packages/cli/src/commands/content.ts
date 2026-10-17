@@ -10,6 +10,7 @@ import {
 import { parseServiceCapabilities } from '@violet-map/core/contracts';
 import type { CliContext } from '../context.js';
 import { apiRequest, jsonRequest, resolveServerConnection, type ServerConnection } from '../remote.js';
+
 export interface ContentOptions {
   name?: string;
   world?: string;
@@ -28,9 +29,11 @@ export interface ContentOptions {
   type?: string;
   version?: string;
 }
+
 export async function validateLayer(file: string) {
   return parseLayerDocument(JSON.parse(await fs.readFile(file, 'utf8')));
 }
+
 async function connection(context: CliContext, write = false): Promise<ServerConnection> {
   const server = await resolveServerConnection(context);
   const capabilities = parseServiceCapabilities(await apiRequest(server, 'api/capabilities'));
@@ -38,13 +41,16 @@ async function connection(context: CliContext, write = false): Promise<ServerCon
     throw new Error('Server content capability is unavailable for this operation');
   return server;
 }
+
 function conditional(options: ContentOptions, method: string, body?: unknown): RequestInit {
   if (!Number.isSafeInteger(options.ifMatch) || options.ifMatch! < 1)
     throw new Error('An explicit --if-match revision is required');
   const init = jsonRequest(method, body);
   return { ...init, headers: { ...init.headers, 'if-match': revisionTag(options.ifMatch!) } };
 }
+
 const segment = (id: string) => encodeURIComponent(contentId(id));
+
 export async function mapCommand(context: CliContext, operation: string, args: string[], options: ContentOptions) {
   const server = await connection(context, ['register', 'rebind', 'delete'].includes(operation));
   const base = 'api/admin/maps';
@@ -74,6 +80,7 @@ export async function mapCommand(context: CliContext, operation: string, args: s
   };
   return apiRequest(server, `${base}/${segment(id)}`, conditional(options, 'PUT', body));
 }
+
 export async function layerCommand(context: CliContext, operation: string, args: string[], options: ContentOptions) {
   if (operation === 'validate') return { ok: true, document: await validateLayer(args[0]) };
   const server = await connection(context, ['import', 'replace', 'copy', 'delete'].includes(operation));
@@ -103,6 +110,7 @@ export async function layerCommand(context: CliContext, operation: string, args:
     conditional(options, 'PUT', { ...document, layerId: args[0], revision: (options.ifMatch ?? 0) + 1 }),
   );
 }
+
 export async function bindingCommand(context: CliContext, operation: string, options: ContentOptions) {
   const server = await connection(context, operation !== 'bindings' && operation !== 'manifest');
   const map = segment(options.map!);
@@ -132,6 +140,7 @@ export async function bindingCommand(context: CliContext, operation: string, opt
     ),
   );
 }
+
 export async function mediaCommand(context: CliContext, operation: string, args: string[], options: ContentOptions) {
   const server = await connection(context, ['import', 'delete'].includes(operation));
   const base = 'api/admin/media';

@@ -4,6 +4,7 @@ import { setImmediate } from 'node:timers/promises';
 import * as THREE from 'three';
 import { OverlayManager, type OverlayFrame } from '../src/render/overlayManager.js';
 import { createSharedUniforms } from '../src/render/materials.js';
+
 const manifest = (id: string) => ({
   schemaVersion: 1,
   mapId: id,
@@ -35,7 +36,9 @@ const manifest = (id: string) => ({
   ],
   media: [],
 });
+
 const renderer = { capabilities: { maxTextureSize: 4096 } } as THREE.WebGLRenderer;
+
 function frame(): OverlayFrame {
   const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 100);
   camera.position.set(2, 2, 10);
@@ -53,6 +56,7 @@ function frame(): OverlayFrame {
     surfaceMaxY: 384,
   };
 }
+
 test('context changes abort requests and ignore stale manifests, including after disable/dispose', async () => {
   const pending = new Map<string, (response: Response) => void>();
   let requests = 0;
@@ -85,6 +89,7 @@ test('context changes abort requests and ignore stale manifests, including after
   manager.configure('another', 'overworld', true);
   assert.equal(requests, 2);
 });
+
 test('ETag refresh retains pinned revision objects and transient errors remain local to overlays', async () => {
   let calls = 0;
   const manager = new OverlayManager(new THREE.Scene(), createSharedUniforms(), {
@@ -108,6 +113,7 @@ test('ETag refresh retains pinned revision objects and transient errors remain l
   manager.dispose();
   assert.equal(manager.group.children.length, 0);
 });
+
 test('unknown and failed media leave unrelated curves active and identify the failing feature', async () => {
   const versionId = 'a'.repeat(64);
   const base = manifest('m');

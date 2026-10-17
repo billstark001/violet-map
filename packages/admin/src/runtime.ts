@@ -6,22 +6,28 @@ import {
   LEGACY_SERVICE_CAPABILITIES,
   type ServiceCapabilities,
 } from '@violet-map/core/contracts';
+
 const origin = typeof location === 'undefined' ? 'http://localhost' : location.origin;
 let baseUrl = normalizeApiBaseUrl('/', origin);
 let capabilities: ServiceCapabilities | undefined;
+
 export function apiUrl(path: string): string {
   return resolveApiUrl(baseUrl, path);
 }
+
 export function apiFetch(path: string, init?: RequestInit) {
   return fetch(apiUrl(path), { ...init, credentials: 'omit' });
 }
+
 export function apiTokenKey(name: string): string {
   return `violet-map:${name}:${baseUrl}`;
 }
+
 export function serviceCapabilities(): ServiceCapabilities {
   if (!capabilities) throw new Error('service capabilities have not been loaded');
   return capabilities;
 }
+
 export async function initializeRuntime(options: { staticBase?: string; fallbackApi?: string; origin?: string } = {}) {
   const currentOrigin = options.origin ?? origin;
   const staticBase = options.staticBase ?? import.meta.env?.BASE_URL ?? '/';
@@ -42,6 +48,7 @@ export async function initializeRuntime(options: { staticBase?: string; fallback
     capabilities = parseServiceCapabilities(await result.json());
   }
 }
+
 export function showStartupError(error: unknown) {
   const root = document.getElementById('root')!;
   root.replaceChildren();

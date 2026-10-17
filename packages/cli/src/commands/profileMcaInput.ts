@@ -22,6 +22,7 @@ export interface ProfileInput {
   assetsDir?: string;
   blockInfo?: string;
 }
+
 export function profileOptions(input: ProfileInput): ProfileOptions {
   const center = (input.center ?? '0,0').split(',').map(Number);
   if (center.length !== 2 || !center.every(Number.isFinite)) throw new Error('center must be cx,cz');

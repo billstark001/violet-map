@@ -83,6 +83,7 @@ const SECTION_NEIGHBOR: [number, number, number][] = [
   [1, 0, 0],
 ];
 const SECTION_OPPOSITE = [1, 0, 3, 2, 5, 4] as const;
+
 type MeshCacheBaseParts = Omit<MeshCacheKeyParts, 'mode' | 'step'>;
 
 interface CachePartsResult {

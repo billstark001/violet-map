@@ -25,14 +25,20 @@ async function main(): Promise<number> {
 // Finish/roll back the active operation and close PGlite before exiting on a
 // normal deployment signal. SIGKILL/crashes deliberately require lock recovery.
 let interruptedExitCode: number | undefined;
+
 function interrupt(signal: NodeJS.Signals): void {
   interruptedExitCode = signal === 'SIGINT' ? 130 : 143;
   console.error(`[violet-map db] ${signal}: waiting for database maintenance to close safely`);
 }
+
 const sigint = () => interrupt('SIGINT');
+
 const sigterm = () => interrupt('SIGTERM');
+
 process.on('SIGINT', sigint);
+
 process.on('SIGTERM', sigterm);
+
 try {
   const exitCode = await main();
   // PGlite.close() resets process.exitCode; publish our result after cleanup.

@@ -2,9 +2,13 @@ import { AIR_NAMES, type ChunkColumn, type BlockStateRef } from '@violet-map/cor
 import type { BlockInfo } from '@violet-map/core/assets';
 import type { TopMapApproach } from '@violet-map/core/formats/top-map';
 import type { Rgb } from '../colors.js';
+
 const OVERLAY_ALPHA = { water: 0.58, ice: 0.28, glass: 0.42, translucent: 0.45 } as const;
+
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+
 const clampLight = (value: number) => Math.min(15, Math.max(0, Math.round(value)));
+
 export interface TopMapSurfaceOptions {
   approach: TopMapApproach;
   infoOf(name: string): BlockInfo;

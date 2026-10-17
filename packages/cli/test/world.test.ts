@@ -10,6 +10,7 @@ import { redact } from '../src/settings/secrets.js';
 import { targetStorage, runWorldSync, type WorldSyncOptions } from '../src/commands/world.js';
 
 const base: WorldSyncOptions = { from: '/unused', world: 'survival', target: 's3' };
+
 test('S3 provider selection is explicit, atomic, and supports temporary credentials', async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-s3-options-'));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
@@ -62,6 +63,7 @@ test('S3 provider selection is explicit, atomic, and supports temporary credenti
   );
   assert.equal(sdk.kind === 's3' && typeof sdk.credentials, 'function');
 });
+
 test('remote authorization fails before creating source identity or trying another target', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-sync-auth-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

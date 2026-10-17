@@ -3,11 +3,13 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
+
 export function cleanEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const key of Object.keys(env)) if (/^(VIOLET_|DATABASE_|DATA_DIR$|ROOT_|S3_|AWS_)/.test(key)) delete env[key];
   return { ...env, ...extra };
 }
+
 export function invoke(
   args: string[],
   options: { home: string; input?: string; env?: NodeJS.ProcessEnv; cwd?: string },

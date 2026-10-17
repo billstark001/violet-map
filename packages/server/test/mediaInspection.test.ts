@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import sharp from 'sharp';
 import { inspectMedia } from '../src/mediaInspection.js';
+
 const svg = (body: string) =>
   new TextEncoder().encode(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 8">${body}</svg>`);
+
 export function triangleGlb(changes: Record<string, unknown> = {}) {
   const binary = Buffer.alloc(36);
   new Float32Array(binary.buffer, binary.byteOffset, 9).set([0, 0, 0, 1, 0, 0, 0, 1, 0]);
@@ -34,6 +36,7 @@ export function triangleGlb(changes: Record<string, unknown> = {}) {
   binary.copy(out, 28 + aligned.length);
   return out;
 }
+
 test('media inspection accepts three bitmap formats, static SVG and GLB; rejects incomplete or active input', async () => {
   for (const format of ['png', 'jpeg', 'webp'] as const) {
     const bytes = await sharp({

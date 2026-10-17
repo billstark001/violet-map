@@ -1,4 +1,5 @@
 import type { ObjectStorage } from '@violet-map/core/storage';
+
 async function sha256(bytes: Uint8Array): Promise<string> {
   const hash = await globalThis.crypto.subtle.digest(
     'SHA-256',
@@ -6,6 +7,7 @@ async function sha256(bytes: Uint8Array): Promise<string> {
   );
   return Array.from(new Uint8Array(hash), (value) => value.toString(16).padStart(2, '0')).join('');
 }
+
 export async function compareObjectContent(
   source: ObjectStorage,
   target: ObjectStorage,

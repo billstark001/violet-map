@@ -5,6 +5,7 @@ import type { WorldCapabilities } from '@violet-map/core/contracts';
 import { cleanStoragePath } from '@violet-map/storage';
 import { LruCache } from '@violet-map/core/cache';
 import { type TopMapManifest } from '@violet-map/core/formats/top-map';
+
 export function createTopMapService(worldStorage: ObjectReader, config: ServerConfig) {
   const WORLD_RE = /^[A-Za-z0-9_.-]+$/;
   const TOP_MAP_ROOT = '.violet-map/top-map';
@@ -115,4 +116,5 @@ export function createTopMapService(worldStorage: ObjectReader, config: ServerCo
   }
   return { invalidateTopMapManifest, getTopMapManifest, getWorldCapabilities, readTopMapTile, warmTopMapManifests };
 }
+
 export type TopMapService = ReturnType<typeof createTopMapService>;

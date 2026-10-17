@@ -6,6 +6,7 @@ import type { AppServices } from '../serviceTypes.js';
 import { readLimitedBody } from '../limitedBody.js';
 import { parseByteRange } from '../httpRange.js';
 import { createHash } from 'node:crypto';
+
 function condition(c: Context): number | undefined {
   const value = c.req.header('if-match');
   if (value === undefined) return undefined;
@@ -14,6 +15,7 @@ function condition(c: Context): number | undefined {
   if (!Number.isSafeInteger(revision)) throw new ContentValidationError('invalid If-Match revision');
   return revision;
 }
+
 async function jsonBody(c: Context, limit: number): Promise<unknown> {
   const bytes = await readLimitedBody(c.req.raw, limit);
   if (!bytes) throw new ContentError('PAYLOAD_TOO_LARGE', 413, 'content document exceeds upload limit');
@@ -23,12 +25,14 @@ async function jsonBody(c: Context, limit: number): Promise<unknown> {
     throw new ContentValidationError('invalid JSON');
   }
 }
+
 function documentResponse(c: Context, document: { revision: number }, created = false) {
   c.header('etag', revisionTag(document.revision));
   c.header('cache-control', 'no-store');
   if (!created && c.req.header('if-none-match') === revisionTag(document.revision)) return c.body(null, 304);
   return c.json(document, created ? 201 : 200);
 }
+
 function bytesResponse(
   c: Context,
   { version, bytes }: Awaited<ReturnType<NonNullable<AppServices['content']>['readMedia']>>,
@@ -51,6 +55,7 @@ function bytesResponse(
     range ? { 'content-range': `bytes ${range.start}-${range.end}/${bytes.length}` } : undefined,
   );
 }
+
 export function mountContent(app: Hono, config: ServerConfig, services: AppServices): void {
   if (!config.features.contentReads || !services.content) return;
   const content = services.content;

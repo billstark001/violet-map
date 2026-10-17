@@ -28,19 +28,23 @@ export class ContentError extends Error {
     this.name = 'ContentError';
   }
 }
+
 const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
+
 interface LayerHead {
   schemaVersion: 1;
   layerId: string;
   revision: number;
   deleted: boolean;
 }
+
 interface MediaHead {
   schemaVersion: 1;
   document: MediaDocument;
   retainedVersions: string[];
   deleted: boolean;
 }
+
 function headObject(value: unknown, keys: string[]): Record<string, unknown> {
   if (
     !value ||
@@ -55,6 +59,7 @@ function headObject(value: unknown, keys: string[]): Record<string, unknown> {
   if (typeof object.deleted !== 'boolean') throw new ContentValidationError('invalid deletion marker');
   return object;
 }
+
 function parseLayerHead(value: unknown): LayerHead {
   const head = headObject(value, ['schemaVersion', 'layerId', 'revision', 'deleted']);
   contentId(head.layerId);
@@ -62,6 +67,7 @@ function parseLayerHead(value: unknown): LayerHead {
     throw new ContentValidationError('invalid published revision');
   return value as LayerHead;
 }
+
 function parseMediaHead(value: unknown): MediaHead {
   const head = headObject(value, ['schemaVersion', 'document', 'retainedVersions', 'deleted']);
   const document = parseMediaDocument(head.document);
@@ -72,6 +78,7 @@ function parseMediaHead(value: unknown): MediaHead {
     throw new ContentValidationError('active versions must be retained');
   return { schemaVersion: 1, document, retainedVersions: head.retainedVersions, deleted: head.deleted as boolean };
 }
+
 /** One instance owns every metadata mutation; this queue is not a distributed lock. */
 export class ContentService {
   private pending: Promise<unknown> = Promise.resolve();

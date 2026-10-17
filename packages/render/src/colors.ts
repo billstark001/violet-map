@@ -1,8 +1,10 @@
 import { BiomeDef, BiomeMap } from '@violet-map/core/domain';
 
 export type Rgb = readonly [number, number, number];
+
 const COLORMAP_SIZE = 256;
 const COLORMAP_FALLBACK_COLOR = 0x48b518;
+
 export interface ResolvedBiomeColors {
   grass: Rgb;
   foliage: Rgb;

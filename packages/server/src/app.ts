@@ -14,9 +14,11 @@ import { mountData } from './routes/data.js';
 import { mountDataWrite } from './routes/dataWrite.js';
 import { mountContent } from './routes/content.js';
 import { mountDiagnostics } from './routes/diagnostics.js';
+
 export function serviceCapabilities(config: ServerConfig): ServiceCapabilities {
   return { protocolVersion: 1, ...config.features, authMode: config.auth.mode };
 }
+
 export function createApp(config: ServerConfig, services: AppServices) {
   const app = new Hono();
   app.use(

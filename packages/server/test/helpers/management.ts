@@ -55,6 +55,7 @@ export async function managementFixture(t: TestContext, driver: 'pglite' | 'post
   const app = createApp(config, services);
   return { root, options, database, service, app, storage: services.mounts.worlds };
 }
+
 export async function serveManagement(t: TestContext, fixture: Awaited<ReturnType<typeof managementFixture>>) {
   const { app, storage } = fixture;
   const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 });

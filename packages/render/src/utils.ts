@@ -76,8 +76,11 @@ class TypedArrayWriter<T extends TypedArray> {
 }
 
 const float32Create = (capacity: number) => new Float32Array(capacity);
+
 const uint32Create = (capacity: number) => new Uint32Array(capacity);
+
 const uint16Create = (capacity: number) => new Uint16Array(capacity);
+
 const uint8Create = (capacity: number) => new Uint8Array(capacity);
 
 export class Float32Writer extends TypedArrayWriter<Float32Array> {

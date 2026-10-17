@@ -2,6 +2,7 @@ import { CachedStorage, ScopedStorage } from '@violet-map/storage';
 import { createObjectStorage } from '@violet-map/storage/factory';
 import type { AtomicObjectStorage } from '@violet-map/core/storage';
 import type { ServerConfig } from './configuration.js';
+
 export async function createStorageMounts(config: ServerConfig) {
   const physical = new Map<string, AtomicObjectStorage>();
   const mount = async (name: 'worlds' | 'content' | 'blobs') => {
@@ -25,6 +26,7 @@ export async function createStorageMounts(config: ServerConfig) {
     ...(config.features.contentReads ? { content: await mount('content'), blobs: await mount('blobs') } : {}),
   };
 }
+
 /** Existing public factory returns the worlds mount. */
 export async function createStorage(config: ServerConfig) {
   return (await createStorageMounts(config)).worlds;

@@ -1,12 +1,16 @@
 import { isDimensionId } from './dimensionId.js';
 
 export type Vec2 = [number, number];
+
 export type Vec3 = [number, number, number];
+
 export type ViewMode = 'top' | 'player';
+
 export interface ColorStyle {
   color: string;
   opacity: number;
 }
+
 export interface CurveFeature {
   featureId: string;
   kind: 'curve';
@@ -14,6 +18,7 @@ export interface CurveFeature {
   closed: boolean;
   style: ColorStyle & { width: number; widthUnit: 'blocks' | 'pixels' };
 }
+
 export interface AreaFeature {
   featureId: string;
   kind: 'area';
@@ -23,6 +28,7 @@ export interface AreaFeature {
   fill: ColorStyle;
   wall: ColorStyle & { occlusion: 'terrain' | 'always' };
 }
+
 export interface MediaFeature {
   featureId: string;
   kind: 'media';
@@ -37,7 +43,9 @@ export interface MediaFeature {
   size?: Vec2;
   anchor?: Vec2;
 }
+
 export type OverlayFeature = CurveFeature | AreaFeature | MediaFeature;
+
 export interface LayerDocument {
   schemaVersion: 1;
   layerId: string;
@@ -45,6 +53,7 @@ export interface LayerDocument {
   name: string;
   features: OverlayFeature[];
 }
+
 export interface LayerBinding {
   bindingId: string;
   dimension: string;
@@ -52,6 +61,7 @@ export interface LayerBinding {
   enabled: boolean;
   order: number;
 }
+
 export interface MapDocument {
   schemaVersion: 1;
   mapId: string;
@@ -61,7 +71,9 @@ export interface MapDocument {
   expectedArchiveId?: string;
   bindings: LayerBinding[];
 }
+
 export type MapSourceStatus = 'verified' | 'unverified' | 'missing' | 'mismatch' | 'unbound';
+
 export interface MediaVersion {
   schemaVersion: 1;
   assetId: string;
@@ -75,6 +87,7 @@ export interface MediaVersion {
   dependencies: [];
   blob: string;
 }
+
 export interface MediaDocument {
   schemaVersion: 1;
   assetId: string;
@@ -82,6 +95,7 @@ export interface MediaDocument {
   name: string;
   versions: string[];
 }
+
 export interface OverlayManifest {
   schemaVersion: 1;
   mapId: string;
@@ -91,6 +105,7 @@ export interface OverlayManifest {
   layers: { binding: LayerBinding; document: LayerDocument }[];
   media: { version: MediaVersion; url: string }[];
 }
+
 export class ContentValidationError extends Error {
   readonly code: 'INVALID_CONTENT' | 'UNSUPPORTED_FORMAT';
   constructor(message: string, code: 'INVALID_CONTENT' | 'UNSUPPORTED_FORMAT' = 'INVALID_CONTENT') {
@@ -99,15 +114,18 @@ export class ContentValidationError extends Error {
     this.code = code;
   }
 }
+
 function cloneDocument<T>(value: T): T {
   if (Array.isArray(value)) return value.map((item) => cloneDocument(item)) as T;
   if (value && typeof value === 'object')
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneDocument(item)])) as T;
   return value;
 }
+
 function fail(message: string): never {
   throw new ContentValidationError(message);
 }
+
 function record(value: unknown, keys: string[], required: string[] = keys): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('expected an object');
   const object = value as Record<string, unknown>;
@@ -115,58 +133,73 @@ function record(value: unknown, keys: string[], required: string[] = keys): Reco
   for (const key of required) if (object[key] === undefined) fail(`missing content field: ${key}`);
   return object;
 }
+
 export function contentId(value: unknown): string {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(value)) fail('invalid content id');
   return value;
 }
+
 function text(value: unknown): void {
   if (typeof value !== 'string' || !value.trim() || value.length > 256) fail('invalid name');
 }
+
 function finite(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) fail('expected a finite number');
   return value;
 }
+
 function positive(value: unknown): void {
   if (finite(value) <= 0) fail('expected a positive number');
 }
+
 function integer(value: unknown, min = 0): void {
   if (!Number.isSafeInteger(value) || (value as number) < min) fail('invalid integer');
 }
+
 function vector(value: unknown, length: number): number[] {
   if (!Array.isArray(value) || value.length !== length) fail(`expected a ${length}D vector`);
   value.forEach(finite);
   return value;
 }
+
 function boolean(value: unknown): void {
   if (typeof value !== 'boolean') fail('expected a boolean');
 }
+
 function oneOf(value: unknown, values: string[]): void {
   if (typeof value !== 'string' || !values.includes(value)) fail(`expected ${values.join(', ')}`);
 }
+
 function array(value: unknown, min: number, max: number): unknown[] {
   if (!Array.isArray(value) || value.length < min || value.length > max) fail(`array length must be ${min}..${max}`);
   return value;
 }
+
 function unique(items: unknown[], key: string): void {
   const ids = items.map((item) => (item as Record<string, unknown>)[key]);
   if (new Set(ids).size !== ids.length) fail(`duplicate ${key}`);
 }
+
 function schema(object: Record<string, unknown>): void {
   if (object.schemaVersion !== 1) throw new ContentValidationError('unsupported schemaVersion', 'UNSUPPORTED_FORMAT');
 }
+
 function style(value: unknown, extra: string[] = []): Record<string, unknown> {
   const s = record(value, ['color', 'opacity', ...extra]);
   if (typeof s.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(s.color)) fail('color must be #RRGGBB');
   if (finite(s.opacity) < 0 || (s.opacity as number) > 1) fail('opacity must be 0..1');
   return s;
 }
+
 export function normalizeContentDimension(value: unknown): string {
   if (!isDimensionId(value)) fail('invalid dimension id');
   return value.includes(':') ? value : `minecraft:${value}`;
 }
+
 function orient(a: number[], b: number[], c: number[]): number {
   return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
 }
+
 function onSegment(a: number[], b: number[], p: number[]): boolean {
   return (
     orient(a, b, p) === 0 &&
@@ -176,6 +209,7 @@ function onSegment(a: number[], b: number[], p: number[]): boolean {
     p[1] <= Math.max(a[1], b[1])
   );
 }
+
 function intersects(a: number[], b: number[], c: number[], d: number[]): boolean {
   const ab1 = orient(a, b, c),
     ab2 = orient(a, b, d),
@@ -189,6 +223,7 @@ function intersects(a: number[], b: number[], c: number[], d: number[]): boolean
     onSegment(c, d, b)
   );
 }
+
 export function validateFeature(value: unknown): asserts value is OverlayFeature {
   const common = ['featureId', 'kind'];
   if (!value || typeof value !== 'object') fail('invalid feature');
@@ -275,6 +310,7 @@ export function validateFeature(value: unknown): asserts value is OverlayFeature
     }
   } else fail('unknown feature kind');
 }
+
 export function parseLayerDocument(value: unknown): LayerDocument {
   const d = record(value, ['schemaVersion', 'layerId', 'revision', 'name', 'features']);
   schema(d);
@@ -286,6 +322,7 @@ export function parseLayerDocument(value: unknown): LayerDocument {
   unique(features, 'featureId');
   return cloneDocument(value as LayerDocument);
 }
+
 export function parseBinding(value: unknown): LayerBinding {
   const d = record(value, ['bindingId', 'dimension', 'layerId', 'enabled', 'order']);
   contentId(d.bindingId);
@@ -294,6 +331,7 @@ export function parseBinding(value: unknown): LayerBinding {
   integer(d.order, -2147483648);
   return { ...(value as LayerBinding), dimension: normalizeContentDimension(d.dimension) };
 }
+
 export function parseMapDocument(value: unknown): MapDocument {
   const d = record(
     value,
@@ -314,6 +352,7 @@ export function parseMapDocument(value: unknown): MapDocument {
   unique(bindings, 'bindingId');
   return { ...cloneDocument(value as MapDocument), bindings };
 }
+
 export function parseMediaDocument(value: unknown): MediaDocument {
   const d = record(value, ['schemaVersion', 'assetId', 'revision', 'name', 'versions']);
   schema(d);
@@ -325,6 +364,7 @@ export function parseMediaDocument(value: unknown): MediaDocument {
   if (new Set(versions).size !== versions.length) fail('duplicate version');
   return cloneDocument(value as MediaDocument);
 }
+
 export function parseMediaVersion(value: unknown): MediaVersion {
   const d = record(
     value,
@@ -369,6 +409,7 @@ export function parseMediaVersion(value: unknown): MediaVersion {
   }
   return cloneDocument(value as MediaVersion);
 }
+
 export function revisionTag(revision: number): string {
   return `"${revision}"`;
 }

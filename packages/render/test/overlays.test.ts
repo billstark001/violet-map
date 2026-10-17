@@ -15,6 +15,7 @@ import {
   type Projection,
 } from '../src/overlays.js';
 import type { AreaFeature, CurveFeature, Vec3, MediaFeature, MediaVersion } from '@violet-map/core/overlays';
+
 const curve: CurveFeature = {
   featureId: 'c',
   kind: 'curve',
@@ -42,12 +43,14 @@ const area: AreaFeature = {
   fill: style,
   wall: { ...style, occlusion: 'terrain' },
 };
+
 function distance(p: number[], a: number[], b: number[]) {
   const dx = b[0] - a[0],
     dy = b[1] - a[1],
     t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)));
   return Math.hypot(p[0] - a[0] - dx * t, p[1] - a[1] - dy * t);
 }
+
 test('adaptive cubic samples stay within 0.5 CSS pixels in perspective and orthographic projections', () => {
   const projections: Projection[] = [
     { matrix: [0.02, 0, 0, 0, 0, 0.02, 0, 0, 0, 0, -0.01, 0, 0, 0, 0, 1], width: 1024, height: 768 },
@@ -69,6 +72,7 @@ test('adaptive cubic samples stay within 0.5 CSS pixels in perspective and ortho
   assert.equal(coarse.capped, true);
   assert.ok(coarse.points.length <= 8);
 });
+
 test('hulls conservatively contain overshooting handles, closures and degenerate segments without smoothing', () => {
   const bounds = curveBounds(curve);
   assert.deepEqual(bounds, { min: [-50, 0, -80], max: [50, 80, -20] });
@@ -85,6 +89,7 @@ test('hulls conservatively contain overshooting handles, closures and degenerate
   };
   assert.ok(sampleCurve(zero).points.every((point) => point.every(Number.isFinite)));
 });
+
 test('concave masks and double-sided wall topology preserve contour and finite absolute heights', () => {
   for (const ring of [
     area.ring,
@@ -116,6 +121,7 @@ test('concave masks and double-sided wall topology preserve contour and finite a
   const distant = { ...area, ring: area.ring.map(([x, z]) => [x + 30_000_000, z + 30_000_000] as [number, number]) };
   assert.equal(buildAreaFill(distant).positions[3], 10);
 });
+
 test('world-XZ mask UVs are height-independent, bounded, and report resolution caps', () => {
   const layout = areaMaskLayout({ min: [0, 0], max: [64, 128] }, 0.5);
   assert.equal(layout.limited, false);
@@ -125,6 +131,7 @@ test('world-XZ mask UVs are height-independent, bounded, and report resolution c
   assert.equal(huge.limited, true);
   assert.ok(huge.width <= 256 && huge.height <= 256);
 });
+
 test('media bounds include anchor, intrinsic orientation, scale, Euler rotations and billboard pivot', () => {
   const f: MediaFeature = {
     featureId: 'm',

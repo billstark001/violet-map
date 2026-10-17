@@ -10,18 +10,22 @@ export interface WorldIdentity {
   id: string;
   createdAt: string;
 }
+
 export type WorldIdentityStatus = 'empty-target' | 'same' | 'mismatch' | 'unverified';
+
 export interface WorldIdentityCheck {
   status: WorldIdentityStatus;
   source?: WorldIdentity;
   target?: WorldIdentity;
   message: string;
 }
+
 export interface SyncOptions {
   dryRun?: boolean;
   deleteExtra?: boolean;
   onProgress?: (event: { type: 'copy' | 'skip' | 'delete'; path: string }) => void;
 }
+
 export interface SyncResult {
   copied: string[];
   skipped: string[];
@@ -35,6 +39,7 @@ function generatedIdentity(): WorldIdentity {
       : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   return { schema: 1, id, createdAt: new Date().toISOString() };
 }
+
 async function identity(storage: ObjectStorage): Promise<WorldIdentity | undefined> {
   const bytes = await storage.read(IDENTITY_PATH);
   if (!bytes) return undefined;

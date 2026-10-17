@@ -2,18 +2,23 @@ import * as THREE from 'three';
 import type { MediaFeature, MediaVersion } from '@violet-map/core/overlays';
 import { resolveApiResourceUrl } from '../runtime';
 import type { DisposableOverlayResource } from './overlayResources';
+
 export interface OverlayMediaResource extends DisposableOverlayResource {
   instantiate(feature: MediaFeature): THREE.Object3D;
 }
+
 import { OVERLAY_LIMITS } from './overlayLimits';
+
 function abort(signal: AbortSignal) {
   if (signal.aborted) throw new DOMException('overlay media aborted', 'AbortError');
 }
+
 async function digest(bytes: ArrayBuffer) {
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (byte) =>
     byte.toString(16).padStart(2, '0'),
   ).join('');
 }
+
 export function validateStaticGlb(buffer: ArrayBuffer): void {
   const view = new DataView(buffer);
   if (
@@ -63,12 +68,14 @@ export function validateStaticGlb(buffer: ArrayBuffer): void {
   )
     throw new Error('GLB dependencies must be embedded PNG/JPEG buffer views');
 }
+
 function textureSet(materials: Iterable<THREE.Material>): Set<THREE.Texture> {
   const textures = new Set<THREE.Texture>();
   for (const material of materials)
     for (const value of Object.values(material)) if (value instanceof THREE.Texture) textures.add(value);
   return textures;
 }
+
 function disposeTextures(textures: Iterable<THREE.Texture>) {
   const images = new Set<{ close: () => void }>();
   for (const texture of textures) {
@@ -78,6 +85,7 @@ function disposeTextures(textures: Iterable<THREE.Texture>) {
   }
   for (const image of images) image.close();
 }
+
 export function modelResource(scene: THREE.Group, ownedTextures: Iterable<THREE.Texture> = []): OverlayMediaResource {
   const geometries = new Set<THREE.BufferGeometry>(),
     materials = new Set<THREE.Material>();
@@ -143,6 +151,7 @@ export function modelResource(scene: THREE.Group, ownedTextures: Iterable<THREE.
     },
   };
 }
+
 async function imageResource(
   buffer: ArrayBuffer,
   version: MediaVersion,
@@ -252,6 +261,7 @@ async function imageResource(
     URL.revokeObjectURL(objectUrl);
   }
 }
+
 export async function loadOverlayMedia(
   version: MediaVersion,
   url: string,

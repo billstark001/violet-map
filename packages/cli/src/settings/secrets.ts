@@ -7,10 +7,12 @@ import { validateReference, type CredentialBackend } from './config.js';
 import type { CliPaths } from './paths.js';
 
 const sensitive = new Set<string>();
+
 export function sensitiveValue(value: string): string {
   if (value) sensitive.add(value);
   return value;
 }
+
 export function redact(message: string): string {
   for (const secret of [...sensitive].sort((a, b) => b.length - a.length))
     message = message.split(secret).join('[REDACTED]');

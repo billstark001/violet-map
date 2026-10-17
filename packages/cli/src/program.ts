@@ -11,11 +11,13 @@ const { version } = JSON.parse(readFileSync(new URL('../package.json', import.me
   version: string;
 };
 const roles = ['viewer', 'ci', 'admin'];
+
 function integer(value: string): number {
   const number = Number(value);
   if (!Number.isSafeInteger(number) || number < 1) throw new InvalidArgumentError('expected a positive safe integer');
   return number;
 }
+
 function globals(command: Command): Command {
   // Positional scopes keep the CLI --version separate from assets extract --version.
   return command
@@ -30,16 +32,19 @@ function globals(command: Command): Command {
     .option('--server-url <origin>', 'Violet Map server origin')
     .option('--server-token-ref <reference>', 'server token from env:NAME, secret:NAME, or file:PATH');
 }
+
 function child(parent: Command, name: string, description: string) {
   const command = globals(new Command(name).description(description));
   parent.addCommand(command);
   return command;
 }
+
 function mergedOptions<T extends GlobalOptions>(command: Command): T {
   const scopes: Command[] = [];
   for (let current: Command | null = command; current; current = current.parent) scopes.unshift(current);
   return Object.assign({}, ...scopes.map((scope) => scope.opts())) as T;
 }
+
 function action<T extends GlobalOptions>(
   command: Command,
   run: (options: T, args: string[]) => Promise<unknown> | unknown,
@@ -48,6 +53,7 @@ function action<T extends GlobalOptions>(
     await run(mergedOptions<T>(command), args.slice(0, -2) as string[]);
   });
 }
+
 function managementOptions(command: Command) {
   return command
     .addOption(new Option('--via <method>', 'management connection method (default: api)').choices(['api', 'database']))
@@ -57,11 +63,13 @@ function managementOptions(command: Command) {
       new Option('--database-url-ref <reference>', 'PostgreSQL connection string reference').conflicts('databaseDir'),
     );
 }
+
 function passwordOptions(command: Command) {
   return command
     .addOption(new Option('--password-stdin', 'read the password from standard input').conflicts('passwordFile'))
     .option('--password-file <file>', 'read the password from a file');
 }
+
 function s3Options(command: Command) {
   return command
     .option('--s3-bucket <bucket>', 'S3 bucket')

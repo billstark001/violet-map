@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import base from './vite.config';
+
 // A separate production build exercises the viewer's real chunk splitting without shipping fixtures.
 export default defineConfig({
   ...base,

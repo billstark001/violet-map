@@ -5,6 +5,7 @@ import type { TopMapService } from './topMap.js';
 import type { WorldStore } from './worldStore.js';
 
 import type { UserService } from './users.js';
+
 export interface AppServices {
   mounts: Awaited<ReturnType<typeof import('./storage.js').createStorageMounts>>;
   content?: import('./content.js').ContentService;

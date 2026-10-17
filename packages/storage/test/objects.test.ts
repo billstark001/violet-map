@@ -8,7 +8,9 @@ import { ScopedStorage } from '../src/prefixed.js';
 import { CachedStorage } from '../src/cached.js';
 import { S3Storage } from '../src/s3.js';
 import { copyObjects } from '../src/copy.js';
+
 const bytes = (s: string) => new TextEncoder().encode(s);
+
 test('scopes, descendant prefixes, atomic replacement and copy share the object contract', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-objects-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -46,6 +48,7 @@ test('scopes, descendant prefixes, atomic replacement and copy share the object 
   assert.ok(await storage.read('ab/file'));
   assert.ok(await storage.read('a/sibling'));
 });
+
 test('S3 directory prefixes never list or delete same-name or sibling objects; writes publish one PUT', async () => {
   const storage = new S3Storage({ bucket: 'test', prefix: 'physical' });
   const calls: { name: string; input: Record<string, unknown> }[] = [];

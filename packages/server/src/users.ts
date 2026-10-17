@@ -67,12 +67,14 @@ function publicUser(row: {
 function passwordError(password: string): void {
   if (password.length < 10) throw new AdminError('INVALID_INPUT', 'password must be at least 10 characters');
 }
+
 async function hashPassword(password: string): Promise<string> {
   passwordError(password);
   const salt = randomBytes(PASSWORD_SALT_BYTES).toString('base64url');
   const derived = (await scrypt(password, salt, PASSWORD_HASH_BYTES)) as Buffer;
   return `scrypt$${salt}$${derived.toString('base64url')}`;
 }
+
 async function verifyPassword(password: string, encoded: string): Promise<boolean> {
   const parts = encoded.split('$');
   if (parts.length !== 3) return false;
@@ -84,11 +86,13 @@ async function verifyPassword(password: string, encoded: string): Promise<boolea
   const actual = (await scrypt(password, salt, PASSWORD_HASH_BYTES)) as Buffer;
   return timingSafeEqual(expected, actual);
 }
+
 function sameText(left: string, right: string): boolean {
   const a = Buffer.from(left),
     b = Buffer.from(right);
   return a.length === b.length && timingSafeEqual(a, b);
 }
+
 function tokenHash(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }

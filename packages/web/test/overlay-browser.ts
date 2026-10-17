@@ -9,23 +9,40 @@ import {
 import { TOP_MAP_POSITION_OFFSET, TOP_MAP_POSITION_SCALE } from '@violet-map/render/top-map/mesh';
 import { initializeRuntime } from '../src/runtime';
 import { OVERLAY_LIMITS } from '../src/render/overlayLimits';
+
 const query = new URLSearchParams(location.search);
+
 await initializeRuntime({ fallbackApi: query.get('api')! });
+
 THREE.ColorManagement.enabled = false;
+
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+
 renderer.setPixelRatio(1);
+
 renderer.setSize(800, 600);
+
 renderer.setClearColor(0x101010);
+
 document.body.appendChild(renderer.domElement);
+
 const scene = new THREE.Scene();
 const shared = createSharedUniforms();
+
 shared.skyDarken.value = 1;
+
 shared.ambient.value = 1;
+
 shared.fogNear.value = 1e9;
+
 shared.fogFar.value = 1e9 + 1;
+
 shared.envFogDensity.value = 0;
+
 const texture = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+
 texture.needsUpdate = true;
+
 const animation = createTextureAnimationUniforms({
   ids: {},
   info: new Uint8Array(4),
@@ -36,7 +53,9 @@ const animation = createTextureAnimationUniforms({
 const materials = createMaterials(texture, shared, animation),
   top = createTopMapMaterial(texture, shared);
 const terrain = new THREE.Group();
+
 scene.add(terrain);
+
 const manager = new OverlayManager(scene, shared);
 const perspective = new THREE.PerspectiveCamera(50, 4 / 3, 0.1, 2000),
   orthographic = new THREE.OrthographicCamera(-80, 80, 60, -60, 0.1, 2000);
@@ -48,6 +67,7 @@ let cpu: number[] = [],
   intervals: number[] = [],
   lastFrame = 0;
 let profiling = false;
+
 function surface(mode: 'online' | 'lod' | 'topmap' | 'mixed' | 'none') {
   for (const object of [...terrain.children]) {
     terrain.remove(object);
@@ -74,6 +94,7 @@ function surface(mode: 'online' | 'lod' | 'topmap' | 'mixed' | 'none') {
     terrain.add(new THREE.Mesh(geometry, material));
   }
 }
+
 function setCamera(
   mode: 'player' | 'topPerspective' | 'topOrthographic',
   position: [number, number, number] = [0, 150, 0],
@@ -88,6 +109,7 @@ function setCamera(
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld();
 }
+
 function draw() {
   const start = performance.now();
   if (profiling) {
@@ -108,6 +130,7 @@ function draw() {
   renderer.render(scene, camera);
   if (profiling) cpu.push(performance.now() - start);
 }
+
 function pixel(point: [number, number, number]) {
   draw();
   const p = new THREE.Vector3(...point).project(camera),
@@ -117,6 +140,7 @@ function pixel(point: [number, number, number]) {
   renderer.getContext().readPixels(x, y, 1, 1, renderer.getContext().RGBA, renderer.getContext().UNSIGNED_BYTE, value);
   return [...value];
 }
+
 function block(visible: boolean) {
   const existing = scene.getObjectByName('occluder');
   if (existing) {
@@ -132,6 +156,7 @@ function block(visible: boolean) {
     scene.add(mesh);
   }
 }
+
 function water(visible: boolean) {
   const old = scene.getObjectByName('water') as THREE.Mesh | undefined;
   if (old) {
@@ -164,9 +189,13 @@ function water(visible: boolean) {
   object.name = 'water';
   scene.add(object);
 }
+
 surface('mixed');
+
 setCamera('topOrthographic');
+
 renderer.setAnimationLoop(draw);
+
 const harness = {
   set: (mapId: string | null, dimension = 'overworld', enabled = true) => manager.configure(mapId, dimension, enabled),
   refresh: () => manager.refresh(),
@@ -251,10 +280,13 @@ const harness = {
     renderer.setAnimationLoop(null);
   },
 };
+
 export type OverlayHarness = typeof harness;
+
 declare global {
   interface Window {
     overlayHarness: OverlayHarness;
   }
 }
+
 window.overlayHarness = harness;

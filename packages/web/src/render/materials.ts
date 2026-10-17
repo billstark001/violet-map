@@ -388,6 +388,7 @@ export function createMaterials(
 }
 
 let emptyTextureAnimationUniforms: TextureAnimationUniforms | null = null;
+
 function emptyAnimations(): TextureAnimationUniforms {
   return (emptyTextureAnimationUniforms ??= createTextureAnimationUniforms({
     ids: {},

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import minecraftData from 'minecraft-data';
 import { BiomeMap, DimensionMap } from '@violet-map/core/domain';
 import { BlockInfo, BlockInfoMap } from '@violet-map/core/assets';
+
 export function createGameDataService(config: ServerConfig, assets: AssetService, overrides?: AtomicObjectStorage) {
   const { buildAssetBundle } = assets;
 
@@ -172,4 +173,5 @@ export function createGameDataService(config: ServerConfig, assets: AssetService
   }
   return { writeDataFile, readBiomes, readDimensions, clearGameDataCaches, buildBlockInfo };
 }
+
 export type GameDataService = ReturnType<typeof createGameDataService>;

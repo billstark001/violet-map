@@ -17,6 +17,7 @@ import { PNG } from 'pngjs';
 import { mapWithConcurrency } from '@violet-map/core/async';
 import { WorkLimiter } from '@violet-map/core/async';
 import { LruCache } from '@violet-map/core/cache';
+
 export function createAssetService(config: ServerConfig) {
   type JsonEntry = { rel: string; file: string };
 
@@ -597,4 +598,5 @@ export function createAssetService(config: ServerConfig) {
     getTextureAtlasPng,
   };
 }
+
 export type AssetService = ReturnType<typeof createAssetService>;

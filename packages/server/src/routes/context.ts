@@ -154,4 +154,5 @@ export function createRouteContext(app: Hono, config: ServerConfig, services: Ap
     cleanStoragePath,
   };
 }
+
 export type RouteContext = ReturnType<typeof createRouteContext>;

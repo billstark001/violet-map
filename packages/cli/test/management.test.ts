@@ -41,6 +41,7 @@ test('login, users, credentials, and world sync use the same saved remote author
   assert.deepEqual(state.sessions, {});
   assert.deepEqual(state.secrets, {});
 });
+
 for (const driver of ['pglite', 'postgres'] as const) {
   test(
     `direct CLI uses the selected database and never runs maintenance (${driver})`,

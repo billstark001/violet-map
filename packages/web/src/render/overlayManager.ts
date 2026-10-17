@@ -26,8 +26,10 @@ import { OverlayMask, createMaskMaterial } from './overlayMask';
 import { OverlayResourcePool, type ResourceLease } from './overlayResources';
 import { loadOverlayMedia, type OverlayMediaResource } from './overlayMedia';
 import { OVERLAY_LIMITS } from './overlayLimits';
+
 const REFRESH_MS = 30_000;
 const RETRY_MS = 12_000;
+
 export interface OverlayDiagnosticSnapshot {
   mapId: string | null;
   dimension: string;
@@ -46,6 +48,7 @@ export interface OverlayDiagnosticSnapshot {
   curvePoints: number;
   errors: { feature: string; message: string }[];
 }
+
 interface RecordBase {
   key: string;
   feature: OverlayFeature;
@@ -58,6 +61,7 @@ interface RecordBase {
   curve?: { material: LineMaterial; positions: number[]; capped: boolean };
   dispose?: () => void;
 }
+
 export interface OverlayFrame {
   camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
   topView: boolean;
@@ -69,6 +73,7 @@ export interface OverlayFrame {
   ambient: number;
   surfaceMaxY: number;
 }
+
 export class OverlayManager {
   readonly group = new THREE.Group();
   private readonly mask: OverlayMask;

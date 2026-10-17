@@ -63,11 +63,15 @@ const DEFAULT_NEIGHBOR_PRECISION_EPSILON = 1e-6;
 const DEFAULT_NEIGHBOR_SATISFACTION_PENALTY_BY_COUNT = [0, 0, 0.035, 0.075, 0.12, 0.18, 0.25, 0.34, 0.45] as const;
 
 export const LOD_STEPS = [1, 2, 4, 8] as const;
+
 export type LodStep = (typeof LOD_STEPS)[number];
+
 export type MeshTaskKind = 'full' | 'lod';
+
 export type ChunkSchedulerCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 
 export const SCHEDULER_PRESETS = ['potato', 'low', 'medium', 'high', 'extreme'] as const;
+
 export type SchedulerPreset = (typeof SCHEDULER_PRESETS)[number];
 
 export interface ChunkSchedulingTuning {
@@ -311,6 +315,7 @@ export interface ChunkProfileStats {
 }
 
 export type ChunkDiagnosticOp = 'hashFetch' | 'chunkFetch' | 'parse' | 'fullMesh' | 'lodMesh';
+
 export type ChunkDiagnosticKind = 'slow' | 'delayed';
 
 export interface ChunkDiagnosticEvent {

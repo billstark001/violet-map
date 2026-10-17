@@ -10,6 +10,7 @@ const entries = {
   '@violet-map/storage/factory': () => import('@violet-map/storage/factory'),
   '@violet-map/server/admin': () => import('@violet-map/server/admin'),
 };
+
 export async function loadCapability<K extends keyof typeof entries>(
   entry: K,
 ): Promise<Awaited<ReturnType<(typeof entries)[K]>>> {

@@ -9,7 +9,9 @@ import { createApp } from '../src/app.js';
 import { createServices } from '../src/services.js';
 import { loadServerConfig } from '../src/configuration.js';
 import type { LayerDocument, MapDocument } from '@violet-map/core/overlays';
+
 const layer = { schemaVersion: 1, layerId: 'imported', revision: 1, name: 'route', features: [] };
+
 async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-content-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -45,6 +47,7 @@ async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
     });
   return { root, config, services, app, request, content: services.content! };
 }
+
 test('HTTP content lifecycle uses conditional revisions, public scope, restart and no world identity writes', async (t) => {
   const { root, config, services, request, content, app } = await fixture(t);
   assert.equal((await request('/api/admin/maps', 'GET', undefined, undefined, 'wrong')).status, 401);
@@ -127,6 +130,7 @@ test('HTTP content lifecycle uses conditional revisions, public scope, restart a
   assert.equal((await content.getLayer(doc.layerId, 1)).name, 'route');
   await assert.rejects(fs.stat(path.join(root, 'users.pglite')), { code: 'ENOENT' });
 });
+
 test('source identity lifecycle hides overlays on replacements and preserves registrations after delete', async (t) => {
   const { services, content } = await fixture(t);
   const storage = services.mounts.worlds;
@@ -153,6 +157,7 @@ test('source identity lifecycle hides overlays on replacements and preserves reg
   assert.equal(await content.sourceStatus(await content.getMap(map.mapId)), 'missing');
   assert.equal(await content.sourceStatus({ ...moved, worldKey: null }), 'unbound');
 });
+
 test('head failure leaves complete old revision; reads survive restart and writer recovers', async (t) => {
   const { root, services } = await fixture(t);
   const meta = new LocalStorage(path.join(root, 'isolated-meta')),
@@ -171,6 +176,7 @@ test('head failure leaves complete old revision; reads survive restart and write
   await service.replaceLayer(doc.layerId, { ...doc, revision: 2, name: 'success' }, 1);
   assert.equal((await new ContentService(meta, blobs, services.mounts.worlds).getLayer(doc.layerId)).name, 'success');
 });
+
 test('content routes are absent when disabled, read-only never exposes mutations, permission and CORS hold', async (t) => {
   const { config, services, app } = await fixture(t);
   for (const features of [

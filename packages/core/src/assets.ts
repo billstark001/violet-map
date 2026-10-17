@@ -1,4 +1,5 @@
 export type Direction = 'down' | 'up' | 'north' | 'south' | 'west' | 'east';
+
 export type RenderLayer =
   | 'opaque'
   | 'opaqueTiled'
@@ -9,6 +10,7 @@ export type RenderLayer =
   | 'specialOpaque'
   | 'specialCutout'
   | 'specialTranslucent';
+
 export type TintType = 'none' | 'grass' | 'foliage' | 'water' | 'redstone' | 'stem' | 'attachedStem';
 
 export interface FluidDef {
@@ -35,6 +37,7 @@ export interface BlockInfo {
   fluid?: FluidDef;
   waterlogged?: boolean;
 }
+
 export type BlockInfoMap = Record<string, BlockInfo>;
 
 /** One atlas slot. Animated textures keep the first frame here and expose the
@@ -46,6 +49,7 @@ export interface AtlasRect {
   v1: number;
   animation?: AtlasAnimation;
 }
+
 export interface AtlasAnimation {
   /** Frame rectangles in playback order. */
   frames: AtlasFrameRect[];
@@ -53,13 +57,16 @@ export interface AtlasAnimation {
   times: number[];
   interpolate?: boolean;
 }
+
 export interface AtlasFrameRect {
   u0: number;
   v0: number;
   u1: number;
   v1: number;
 }
+
 export type AtlasIndex = Record<string, AtlasRect>;
+
 export type TextureAlphaMap = Record<string, boolean>;
 
 export interface AssetBundle {
@@ -76,11 +83,13 @@ export interface TextureAnimationFrameDef {
   index: number;
   time?: number;
 }
+
 export interface TextureAnimationDef {
   frametime?: number;
   frames?: TextureAnimationFrameDef[];
   interpolate?: boolean;
 }
+
 export type TextureAnimationMap = Record<string, TextureAnimationDef>;
 
 /**
@@ -109,6 +118,7 @@ export interface RendererModelDef {
   /** First matching `key=value[,key=value]` entry overlays this definition. */
   variants?: Record<string, Partial<RendererModelDef>>;
 }
+
 export interface RendererDefinitions {
   blockEntities?: Record<string, RendererModelDef>;
   entities?: Record<string, RendererModelDef>;
@@ -123,6 +133,7 @@ export interface BlockModelJson {
   textures?: Record<string, unknown>;
   elements?: ModelElementJson[];
 }
+
 export interface ModelElementJson {
   from: [number, number, number];
   to: [number, number, number];
@@ -130,6 +141,7 @@ export interface ModelElementJson {
   shade?: boolean;
   faces: Partial<Record<Direction, ModelFaceJson>>;
 }
+
 export interface ModelFaceJson {
   uv?: [number, number, number, number];
   texture: string;

@@ -9,16 +9,20 @@ export interface Session {
   expiresAt: string;
   secret: string;
 }
+
 export interface SecretRecord {
   backend: CredentialBackend;
   id: string;
 }
+
 export interface CliState {
   version: 1;
   sessions: Record<string, Session>;
   secrets: Record<string, SecretRecord>;
 }
+
 export const emptyState = (): CliState => ({ version: 1, sessions: {}, secrets: {} });
+
 function validate(value: CliState): CliState {
   const record = (input: unknown): input is Record<string, unknown> =>
     !!input && typeof input === 'object' && !Array.isArray(input);
@@ -42,7 +46,9 @@ function validate(value: CliState): CliState {
   }
   return value;
 }
+
 export const loadState = async (paths: CliPaths) => validate(await readJson(paths.stateFile, emptyState));
+
 export const editState = (paths: CliPaths, edit: (value: CliState) => void) =>
   updateJson(paths.stateFile, emptyState, (value) => {
     validate(value);

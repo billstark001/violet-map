@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import { OverlayResourcePool } from '../src/render/overlayResources.js';
+
 test('media resources coalesce loads and dispose exactly once after the last owner', async () => {
   let loads = 0,
     disposed = 0;
@@ -30,6 +31,7 @@ test('media resources coalesce loads and dispose exactly once after the last own
   pool.dispose();
   assert.equal(disposed, 1);
 });
+
 test('late decodes are destroyed after abort/context disposal and cannot replace a new version', async () => {
   const pool = new OverlayResourcePool();
   let finish!: (value: { bytes: number; dispose: () => void }) => void,
@@ -64,6 +66,7 @@ test('late decodes are destroyed after abort/context disposal and cannot replace
   assert.equal(disposed, 2);
   assert.equal(pool.snapshot().bytes, 0);
 });
+
 test('concurrency, version and byte budgets are bounded; one failure does not poison other keys', async () => {
   const pool = new OverlayResourcePool(10, 2, 1);
   let resolve!: (value: { bytes: number; dispose: () => void }) => void;

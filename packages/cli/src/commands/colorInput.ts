@@ -1,7 +1,9 @@
 import { loadCapability } from '../capabilities.js';
 import { AIR_NAMES, normalizeId, type BiomeMap, type BlockStateRef } from '@violet-map/core/domain';
 import type { ResolvedBiomeColors, Rgb } from '@violet-map/render';
+
 const { MISSING_TEXTURE, ModelBaker, hexToRgb, resolveBiomeColors } = await loadCapability('@violet-map/render');
+
 import { type BlockInfo, type BlockInfoMap, type TintType } from '@violet-map/core/assets';
 import {
   readTextureAverageColors,
@@ -14,6 +16,7 @@ import {
 export const DEFAULT_BLOCK_INFO: BlockInfo = { occludes: true, emit: 0, filter: 15, layer: 'opaque', tint: 'none' };
 export const AIR_BLOCK_INFO: BlockInfo = { occludes: false, emit: 0, filter: 0, layer: 'cutout', tint: 'none' };
 export const WHITE: Rgb = [1, 1, 1];
+
 export type BiomeColorMap = Record<string, ResolvedBiomeColors>;
 
 export function localName(name: string): string {

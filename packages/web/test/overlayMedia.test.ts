@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import * as THREE from 'three';
 import { loadOverlayMedia, modelResource, validateStaticGlb } from '../src/render/overlayMedia.js';
 import type { MediaFeature, MediaVersion } from '@violet-map/core/overlays';
+
 function glb(json: unknown) {
   const text = new TextEncoder().encode(JSON.stringify(json));
   const bytes = new Uint8Array(20 + text.length);
@@ -15,6 +16,7 @@ function glb(json: unknown) {
   bytes.set(text, 20);
   return bytes.buffer;
 }
+
 test('static GLB guard rejects unsupported extensions and dependencies, while allowing harmless metadata URLs', () => {
   validateStaticGlb(glb({ asset: { version: '2.0' }, extras: { uri: 'https://credit.example', targets: ['credit'] } }));
   for (const json of [
@@ -28,6 +30,7 @@ test('static GLB guard rejects unsupported extensions and dependencies, while al
   ])
     assert.throws(() => validateStaticGlb(glb(json)), /GLB/);
 });
+
 test('GLB instances share immutable GPU data and close shared image bitmaps exactly once', () => {
   let closed = 0,
     textureDisposed = 0,
@@ -70,6 +73,7 @@ test('GLB instances share immutable GPU data and close shared image bitmaps exac
     { closed: 1, textureDisposed: 1, geometryDisposed: 1, materialDisposed: 1 },
   );
 });
+
 test('media failures and download limits fail before optional loaders, preserving pinned content identity', async (t) => {
   const original = globalThis.fetch;
   t.after(() => {

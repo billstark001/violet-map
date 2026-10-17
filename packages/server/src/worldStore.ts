@@ -13,10 +13,12 @@ import { cleanStoragePath } from '@violet-map/storage';
 import { type StoredFileInfo } from '@violet-map/core/storage';
 import { ensureWorldIdentity, ScopedStorage } from '@violet-map/storage';
 import { isChunkCoordinate } from './chunkCoordinates.js';
+
 export interface ChunkMetadata extends ChunkHashPayload {
   sourcePath?: string;
   entitySourcePath?: string;
 }
+
 export interface ChunkReadResult extends ChunkMetadata {
   data: Uint8Array;
   entities?: Uint8Array;
@@ -25,6 +27,7 @@ export interface ChunkReadResult extends ChunkMetadata {
   source: 'region' | 'chunk';
   sourcePath: string;
 }
+
 export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapService, config: ServerConfig) {
   const { invalidateTopMapManifest } = topMap;
 
@@ -895,4 +898,5 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     diffWorldManifest,
   };
 }
+
 export type WorldStore = ReturnType<typeof createWorldStore>;

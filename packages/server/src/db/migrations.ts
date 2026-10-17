@@ -62,6 +62,7 @@ interface HistoryRow extends Record<string, unknown> {
   hash: string;
   created_at: string | number | null;
 }
+
 export interface MigrationStatus {
   state: 'uninitialized' | 'legacy' | 'pending' | 'current' | 'invalid';
   applied: string[];

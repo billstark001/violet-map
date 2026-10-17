@@ -21,6 +21,7 @@ export interface BakedQuad {
   shade: boolean;
   ao: boolean;
 }
+
 interface WeightedQuads {
   weight: number;
   quads: BakedQuad[];
@@ -100,9 +101,11 @@ function rotateDir(dir: Direction, xSteps: number, ySteps: number): Direction {
   for (let i = 0; i < ySteps; i++) d = ROT_Y[d];
   return d;
 }
+
 function rotXStep(v: Vec3): Vec3 {
   return [v[0], v[2], 16 - v[1]];
 }
+
 function rotYStep(v: Vec3): Vec3 {
   return [16 - v[2], v[1], v[0]];
 }
@@ -194,6 +197,7 @@ function matchVariantKey(key: string, props: Record<string, string>): boolean {
     return props[k] === v;
   });
 }
+
 function matchCondition(cond: any, props: Record<string, string>): boolean {
   if (!cond || typeof cond !== 'object' || Array.isArray(cond)) return false;
   if (Object.hasOwn(cond, 'OR'))

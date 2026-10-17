@@ -45,6 +45,7 @@ const topColorStateKeyCache = new WeakMap<BlockStateRef, string>();
 function infoOf(name: string): BlockInfo {
   return blockInfo[name] ?? DEFAULT_INFO;
 }
+
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
@@ -328,6 +329,7 @@ function modelInstances(col: ChunkColumn): RenderModelInstance[] {
 
 const post = (msg: WorkerResponse, transfer: Transferable[] = []) =>
   (self as unknown as DedicatedWorkerGlobalScope).postMessage(msg, transfer);
+
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 self.onmessage = (ev: MessageEvent<WorkerRequest>) => {

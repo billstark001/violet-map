@@ -1,8 +1,10 @@
 import { OVERLAY_LIMITS } from './overlayLimits';
+
 export interface DisposableOverlayResource {
   readonly bytes: number;
   dispose(): void;
 }
+
 interface Entry<T> {
   key: string;
   refs: number;
@@ -14,10 +16,12 @@ interface Entry<T> {
   resource?: T;
   started: boolean;
 }
+
 export interface ResourceLease<T> {
   promise: Promise<T>;
   release(): void;
 }
+
 /** Ref-counted, bounded in-flight cache. Zero owners means immediate disposal, including late decodes. */
 export class OverlayResourcePool<T extends DisposableOverlayResource> {
   private readonly entries = new Map<string, Entry<T>>();

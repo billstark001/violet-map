@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { bearer } from '../auth.js';
 import type { RouteContext } from './context.js';
+
 export function mountDiagnostics(context: RouteContext) {
   const { app, config, requireRole, MAX_DIAGNOSTIC_BYTES, randomUUID, fs, path, readLimitedBody, REQUIRED_ROLE } =
     context;

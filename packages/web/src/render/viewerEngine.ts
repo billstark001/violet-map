@@ -102,9 +102,13 @@ export interface ViewerDiagnosticSnapshot {
 }
 
 type ActiveCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
+
 type InitialView = FlyView & { hasAngles: boolean };
+
 type ViewerBundle = Awaited<ReturnType<typeof fetchBundle>>;
+
 type ViewerBlockInfo = Awaited<ReturnType<typeof fetchBlockInfo>>;
+
 type ViewerAtlas = Awaited<ReturnType<typeof buildAtlas>>;
 
 type ViewerDimensionDef = DimensionMap[string] | typeof DEFAULT_DIMENSION_DEF;

@@ -7,6 +7,7 @@ export interface SecretInput {
   stdin?: boolean;
   file?: string;
 }
+
 export async function readSecret(input: SecretInput, label: string): Promise<string> {
   if (input.stdin && input.file) throw new Error('Choose either stdin or a file for secret input');
   let value: string;

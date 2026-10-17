@@ -15,6 +15,7 @@ async function directory(t: import('node:test').TestContext) {
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 }
+
 test('CLI home isolates state; config override changes only the configuration file', async (t) => {
   const root = await directory(t);
   const paths = cliPaths(
@@ -27,6 +28,7 @@ test('CLI home isolates state; config override changes only the configuration fi
   assert.notEqual(paths.namespace, cliPaths({ cliHome: path.join(root, 'other') }).namespace);
   assert.deepEqual(await fs.readdir(root), []);
 });
+
 test('configuration validates profiles and excludes inline secrets', async (t) => {
   const root = await directory(t);
   const paths = cliPaths({ cliHome: root });
@@ -52,6 +54,7 @@ test('configuration validates profiles and excludes inline secrets', async (t) =
   await assert.rejects(loadConfig(paths), /Invalid JSON/);
   assert.equal(await fs.readFile(paths.configFile, 'utf8'), '{broken');
 });
+
 test('file credentials are private, referenceable, redacted, and absent from public state', async (t) => {
   const root = await directory(t);
   const paths = cliPaths({ cliHome: root });
@@ -76,6 +79,7 @@ test('file credentials are private, referenceable, redacted, and absent from pub
   await store.delete('alpha');
   await assert.rejects(store.get('alpha'), /not found/);
 });
+
 test('server credentials are bound to a profile and origin and never fall back across targets', async (t) => {
   const root = await directory(t);
   const paths = cliPaths({ cliHome: root });

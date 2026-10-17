@@ -4,6 +4,7 @@ export interface LightBlockInfo {
   filter: number;
   emit: number;
 }
+
 export interface ComputeLightOptions {
   writeSky?: boolean;
   writeBlock?: boolean;

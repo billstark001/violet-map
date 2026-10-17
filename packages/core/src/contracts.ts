@@ -1,9 +1,13 @@
 import type { AtlasIndex, TextureAlphaMap } from './assets.js';
 import type { TopMapTileSetManifest } from './formats/topMap.js';
+
 export const ALL_ROLES = ['guest', 'viewer', 'ci', 'admin', 'root'] as const;
 export const CREATABLE_ROLES = ['viewer', 'ci', 'admin'] as const;
+
 export type Role = (typeof ALL_ROLES)[number];
+
 export type CreatableRole = (typeof CREATABLE_ROLES)[number];
+
 export type AdminErrorCode = 'INVALID_INPUT' | 'USER_NOT_FOUND' | 'USER_EXISTS' | 'FORBIDDEN';
 
 export interface PublicUser {
@@ -42,6 +46,7 @@ export interface ChunkPayload extends ChunkHashPayload {
   data?: Uint8Array;
   entities?: Uint8Array;
 }
+
 export interface ChunkHashPayload {
   cx: number;
   cz: number;
@@ -74,6 +79,7 @@ export interface WorldInfo {
   dimensions: string[];
   mapIds?: string[];
 }
+
 export interface WorldFileManifestEntry {
   path: string;
   size: number;
@@ -81,10 +87,12 @@ export interface WorldFileManifestEntry {
   etag?: string;
   hash: string;
 }
+
 export interface ChunkCoverage {
   regions: { x: number; z: number; mask: string }[];
   chunks: { cx: number; cz: number }[];
 }
+
 export interface ServiceCapabilities {
   protocolVersion: 1;
   adminApi: boolean;
@@ -96,6 +104,7 @@ export interface ServiceCapabilities {
   contentWrites?: boolean;
   authMode: 'none' | 'static' | 'users';
 }
+
 export interface FrontendRuntimeConfig {
   apiBaseUrl?: string;
   capabilityFallback?: 'legacy' | 'error';
@@ -115,6 +124,7 @@ export function normalizeApiBaseUrl(value: string, origin: string): string {
   url.pathname = url.pathname.replace(/\/+$/, '') + '/';
   return url.href;
 }
+
 export function apiUrl(baseUrl: string, path: string): string {
   const relative = path;
   if (!relative.startsWith('api/') || relative.includes('\\') || relative.split(/[/?]/).includes('..'))
@@ -126,6 +136,7 @@ export function apiUrl(baseUrl: string, path: string): string {
     throw new Error('API path escapes deployment prefix');
   return url.href;
 }
+
 export function resolveApiResourceUrl(baseUrl: string, resource: string): string {
   if (resource.startsWith('/api/')) return apiUrl(baseUrl, resource.slice(1));
   const base = new URL(baseUrl);
@@ -134,6 +145,7 @@ export function resolveApiResourceUrl(baseUrl: string, resource: string): string
     throw new Error('resource URL must belong to the configured API');
   return url.href;
 }
+
 export function parseFrontendRuntimeConfig(value: unknown): FrontendRuntimeConfig {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new Error('runtime-config.json must be an object');
@@ -147,6 +159,7 @@ export function parseFrontendRuntimeConfig(value: unknown): FrontendRuntimeConfi
     throw new Error('capabilityFallback must be legacy or error');
   return config as FrontendRuntimeConfig;
 }
+
 export function parseServiceCapabilities(value: unknown): ServiceCapabilities {
   if (!value || typeof value !== 'object') throw new Error('invalid service capabilities');
   const capabilities = value as ServiceCapabilities;
@@ -167,6 +180,7 @@ export function parseServiceCapabilities(value: unknown): ServiceCapabilities {
     contentWrites: capabilities.contentWrites ?? false,
   };
 }
+
 export const LEGACY_SERVICE_CAPABILITIES: ServiceCapabilities = {
   protocolVersion: 1,
   adminApi: true,

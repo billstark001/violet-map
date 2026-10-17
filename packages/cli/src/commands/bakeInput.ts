@@ -48,6 +48,7 @@ export interface BakeInput {
   approach?: TopMapApproach;
   lightMode?: TopMapLightMode;
 }
+
 export function bakeOptions(input: BakeInput): BakeOptions {
   const resolvedWorld = resolvePath(input.world);
   const options: BakeOptions = {

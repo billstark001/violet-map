@@ -1,6 +1,7 @@
 import { Buffer } from 'buffer';
 import * as pako from 'pako';
 import * as nbt from 'prismarine-nbt';
+
 export { toLongs, toBytes } from './binary.js';
 
 /** Detect an RFC 1950 DEFLATE header without assuming a 32 KiB window. */

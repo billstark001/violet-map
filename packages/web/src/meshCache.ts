@@ -95,9 +95,11 @@ export function setMeshCacheEnabled(enabled: boolean): void {
   }
   cacheEnabled = enabled;
 }
+
 export function isMeshCacheEnabled(): boolean {
   return cacheEnabled;
 }
+
 let lastPrune = 0;
 let pendingWriteBytes = 0;
 

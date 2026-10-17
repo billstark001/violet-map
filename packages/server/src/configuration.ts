@@ -11,6 +11,7 @@ export interface ConfigurationOptions {
   cwd?: string;
   configFile?: string;
 }
+
 const fields = [
   'deployment.profile',
   'server.port',
@@ -62,6 +63,7 @@ const fields = [
   'limits.atlasBuilds',
   'limits.atlasQueue',
 ];
+
 function settings(options: ConfigurationOptions) {
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
@@ -167,11 +169,13 @@ function settings(options: ConfigurationOptions) {
   }
   return { env, cwd, base, yamlValue, string, number, boolean, filePath, list };
 }
+
 const presets = {
   public: { adminApi: false, users: false, worldWrites: false, dataWrites: false, diagnostics: false },
   sync: { adminApi: true, users: false, worldWrites: true, dataWrites: false, diagnostics: false },
   full: { adminApi: true, users: true, worldWrites: true, dataWrites: true, diagnostics: true },
 };
+
 export function loadServerConfig(options: ConfigurationOptions = {}) {
   const setting = settings(options);
   const { env, yamlValue, string, number, boolean, filePath, list } = setting;
@@ -320,7 +324,9 @@ export function loadServerConfig(options: ConfigurationOptions = {}) {
     },
   };
 }
+
 export type ServerConfig = ReturnType<typeof loadServerConfig>;
+
 export function readAdminConfig(
   options: ConfigurationOptions & Partial<DatabaseOptions> = {},
 ): DatabaseOptions & RootOptions {
@@ -349,10 +355,12 @@ export function readAdminConfig(
 }
 
 export type StorageBackend = { driver: 'local'; root: string } | ({ driver: 's3' } & Omit<S3StorageOptions, 'prefix'>);
+
 export interface StorageMount {
   backend: string;
   prefix: string;
 }
+
 function resolveStorage(
   setting: ReturnType<typeof settings>,
   legacy: { driver: 'local' | 's3'; worldsDir: string; s3: Omit<S3StorageOptions, 'bucket'> & { bucket?: string } },

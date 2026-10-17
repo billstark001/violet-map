@@ -9,11 +9,13 @@ export interface ServerConnection {
   token: string;
   session?: string;
 }
+
 export function remoteOrigin(context: CliContext): string {
   const input = context.options.serverUrl ?? context.env.VIOLET_SERVER_URL ?? context.profile.server?.url;
   if (!input) throw new Error('Provide --server-url, VIOLET_SERVER_URL, or a server profile');
   return serverBaseUrl(input);
 }
+
 export async function resolveServerConnection(context: CliContext): Promise<ServerConnection> {
   const url = remoteOrigin(context);
   if (context.options.serverTokenRef)
@@ -34,6 +36,7 @@ export async function resolveServerConnection(context: CliContext): Promise<Serv
     throw new Error('Saved login has expired; run violet-map auth login');
   return { url, token: await context.secrets.get(session.secret), session: key };
 }
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -44,6 +47,7 @@ export class ApiError extends Error {
     this.name = 'ApiError';
   }
 }
+
 export async function apiResponse(
   connection: { url: string; token?: string },
   pathname: string,
@@ -74,6 +78,7 @@ export async function apiResponse(
   }
   return response;
 }
+
 export async function apiRequest<T>(
   connection: { url: string; token?: string },
   pathname: string,
@@ -82,6 +87,7 @@ export async function apiRequest<T>(
   const response = await apiResponse(connection, pathname, init);
   return (await response.json()) as T;
 }
+
 export const jsonRequest = (method: string, body?: unknown): RequestInit => ({
   method,
   headers: { 'content-type': 'application/json' },

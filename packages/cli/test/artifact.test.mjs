@@ -8,6 +8,7 @@ import { createServer } from 'node:http';
 import { test } from 'node:test';
 
 const execute = promisify(execFile);
+
 test('relocated CLI works without render/storage/server, TS sources, tsx, or native keyring; direct mode is opt-in', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-cli-artifact-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
