@@ -119,9 +119,11 @@ export class ContentService {
       throw new ContentError('CORRUPT_CONTENT', 500, 'stored content failed validation');
     }
   }
-  private async required<T>(key: string, parse: (value: unknown) => T): Promise<T> {
+  private async required<T>(key: string, parse: (value: unknown) => T, matches?: (value: T) => boolean): Promise<T> {
     const value = await this.read(key, parse);
     if (!value) throw new ContentError('CONTENT_NOT_FOUND', 404, 'content not found');
+    if (matches && !matches(value))
+      throw new ContentError('CORRUPT_CONTENT', 500, 'stored publication identity does not match its key');
     return value;
   }
   private match(document: { revision: number }, expected: number | undefined): void {
@@ -144,8 +146,10 @@ export class ContentService {
   private async layerHeads(): Promise<LayerHead[]> {
     const files = await this.content.list('layers');
     const heads: LayerHead[] = [];
-    for (const file of files)
-      if (/^layers\/[^/]+\/head\.json$/.test(file.path)) heads.push(await this.required(file.path, parseLayerHead));
+    for (const file of files) {
+      const match = /^layers\/([^/]+)\/head\.json$/.exec(file.path);
+      if (match) heads.push(await this.required(file.path, parseLayerHead, (head) => head.layerId === match[1]));
+    }
     return heads;
   }
   async listLayers(): Promise<LayerDocument[]> {
@@ -157,10 +161,15 @@ export class ContentService {
     contentId(id);
     if (revision !== undefined && (!Number.isSafeInteger(revision) || revision < 1))
       throw new ContentValidationError('invalid revision');
-    const head = await this.required(`layers/${id}/head.json`, parseLayerHead);
+    const head = await this.required(`layers/${id}/head.json`, parseLayerHead, (head) => head.layerId === id);
     if ((head.deleted && revision === undefined) || (revision !== undefined && revision > head.revision))
       throw new ContentError('CONTENT_NOT_FOUND', 404, 'published layer revision not found');
-    return this.required(`layers/${id}/revisions/${revision ?? head.revision}.json`, parseLayerDocument);
+    const resolved = revision ?? head.revision;
+    return this.required(
+      `layers/${id}/revisions/${resolved}.json`,
+      parseLayerDocument,
+      (document) => document.layerId === id && document.revision === resolved,
+    );
   }
   private async reference<T>(load: () => Promise<T>): Promise<T> {
     try {
@@ -225,13 +234,15 @@ export class ContentService {
   async listMaps(): Promise<MapDocument[]> {
     const files = await this.content.list('maps');
     const result: MapDocument[] = [];
-    for (const file of files)
-      if (/^maps\/[^/]+.json$/.test(file.path)) result.push(await this.required(file.path, parseMapDocument));
+    for (const file of files) {
+      const match = /^maps\/([^/]+)\.json$/.exec(file.path);
+      if (match) result.push(await this.required(file.path, parseMapDocument, (map) => map.mapId === match[1]));
+    }
     return result;
   }
   getMap(id: string): Promise<MapDocument> {
     contentId(id);
-    return this.required(`maps/${id}.json`, parseMapDocument);
+    return this.required(`maps/${id}.json`, parseMapDocument, (map) => map.mapId === id);
   }
   private async archiveId(worldKey: string): Promise<string | undefined> {
     const bytes = await this.worlds.read(`${worldKey}/.violet-map/identity.json`);
@@ -306,16 +317,18 @@ export class ContentService {
   }
   private mediaHead(id: string): Promise<MediaHead> {
     contentId(id);
-    return this.required(`assets/${id}/head.json`, parseMediaHead);
+    return this.required(`assets/${id}/head.json`, parseMediaHead, (head) => head.document.assetId === id);
   }
   async listMedia(): Promise<MediaDocument[]> {
     const files = await this.content.list('assets');
     const result: MediaDocument[] = [];
-    for (const file of files)
-      if (/^assets\/[^/]+\/head\.json$/.test(file.path)) {
-        const head = await this.required(file.path, parseMediaHead);
+    for (const file of files) {
+      const match = /^assets\/([^/]+)\/head\.json$/.exec(file.path);
+      if (match) {
+        const head = await this.required(file.path, parseMediaHead, (head) => head.document.assetId === match[1]);
         if (!head.deleted) result.push(head.document);
       }
+    }
     return result;
   }
   async getMedia(id: string): Promise<MediaDocument> {
@@ -328,7 +341,11 @@ export class ContentService {
     const head = await this.mediaHead(id);
     if (!head.retainedVersions.includes(version))
       throw new ContentError('CONTENT_NOT_FOUND', 404, 'published asset version not found');
-    return this.required(`assets/${id}/versions/${version}.json`, parseMediaVersion);
+    return this.required(
+      `assets/${id}/versions/${version}.json`,
+      parseMediaVersion,
+      (document) => document.assetId === id && document.versionId === version,
+    );
   }
   async importMedia(
     bytes: Uint8Array,

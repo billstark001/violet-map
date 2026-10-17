@@ -220,6 +220,68 @@ test('head failure leaves complete old revision; reads survive restart and write
   assert.equal((await new ContentService(meta, blobs, services.mounts.worlds).getLayer(doc.layerId)).name, 'success');
 });
 
+test('stored publication IDs and revisions must match their object keys', async (t) => {
+  const { root, services } = await fixture(t);
+  const metadata = new LocalStorage(path.join(root, 'identity-metadata'));
+  const service = new ContentService(
+    metadata,
+    new LocalStorage(path.join(root, 'identity-blobs')),
+    services.mounts.worlds,
+  );
+  const document = await service.createLayer(layer);
+  const map = await service.createMap({ name: 'map', worldKey: 'world' });
+  const asset = await service.importMedia(
+    new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>'),
+    'image/svg+xml',
+    'marker',
+  );
+  const layerHead = `layers/${document.layerId}/head.json`;
+  const layerRevision = `layers/${document.layerId}/revisions/1.json`;
+  const mediaHead = `assets/${asset.document.assetId}/head.json`;
+  const mediaVersion = `assets/${asset.document.assetId}/versions/${asset.version.versionId}.json`;
+  const cases = [
+    {
+      key: `maps/${map.mapId}.json`,
+      patch: { mapId: 'other' },
+      reads: [() => service.getMap(map.mapId), () => service.listMaps()],
+    },
+    {
+      key: layerHead,
+      patch: { layerId: 'other' },
+      reads: [() => service.getLayer(document.layerId), () => service.listLayers()],
+    },
+    { key: layerRevision, patch: { layerId: 'other' }, reads: [() => service.getLayer(document.layerId)] },
+    { key: layerRevision, patch: { revision: 2 }, reads: [() => service.getLayer(document.layerId)] },
+    {
+      key: mediaHead,
+      patch: { document: { ...asset.document, assetId: 'other' } },
+      reads: [() => service.getMedia(asset.document.assetId), () => service.listMedia()],
+    },
+    {
+      key: mediaVersion,
+      patch: { assetId: 'other' },
+      reads: [() => service.getMediaVersion(asset.document.assetId, asset.version.versionId)],
+    },
+    {
+      key: mediaVersion,
+      patch: { versionId: '0'.repeat(64), digest: '0'.repeat(64), blob: `sha256/00/${'0'.repeat(64)}` },
+      reads: [() => service.getMediaVersion(asset.document.assetId, asset.version.versionId)],
+    },
+  ];
+  for (const { key, patch, reads } of cases) {
+    const bytes = (await metadata.read(key))!;
+    const original = JSON.parse(new TextDecoder().decode(bytes));
+    await metadata.replace(key, new TextEncoder().encode(JSON.stringify({ ...original, ...patch })));
+    try {
+      for (const read of reads) await assert.rejects(read(), { code: 'CORRUPT_CONTENT' });
+    } finally {
+      await metadata.replace(key, bytes);
+    }
+  }
+  await metadata.write('maps/accidentalXjson', new Uint8Array([1]));
+  assert.equal((await service.listMaps()).length, 1, 'only actual .json files are map documents');
+});
+
 test('content routes are absent when disabled, read-only never exposes mutations, permission and CORS hold', async (t) => {
   const { config, services, app } = await fixture(t);
   for (const features of [
