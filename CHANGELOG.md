@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- CLI `overlay manifest` supports public read-only servers without requiring an admin capability or login; its anonymous requests omit saved/injected credentials.
+
 - Restricted browser history no longer interrupts camera targeting or animation; URL persistence tolerates sandbox restrictions and history rate limits, independently of local-storage persistence.
 
 - Model texture variables such as `constructor`, `toString` and `__proto__` resolve through normal inheritance; missing variables use the fallback instead of inherited JavaScript prototype values.

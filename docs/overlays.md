@@ -172,6 +172,8 @@ violet-map overlay layer delete LAYER_ID --if-match 2
 violet-map media delete ASSET_ID --if-match 2
 ```
 
+`overlay manifest` reads the public endpoint anonymously: it only requires `contentReads`, works with public deployments where `adminApi` is disabled, and does not load or send a saved/injected credential. Library listings, exports and mutations continue to require the management API and its normal credentials.
+
 Local layer validation only imports core. API management does not require server/storage/render installed; artifact tests check this. Original assets extraction and world sync remain available.
 
 ## Acceptance and rollback

@@ -9,7 +9,7 @@ import {
 } from '@violet-map/core/overlays';
 import { parseServiceCapabilities } from '@violet-map/core/contracts';
 import type { CliContext } from '../context.js';
-import { apiRequest, jsonRequest, resolveServerConnection, type ServerConnection } from '../remote.js';
+import { apiRequest, jsonRequest, resolveServerConnection, remoteOrigin, type ServerConnection } from '../remote.js';
 
 export interface ContentOptions {
   name?: string;
@@ -34,10 +34,18 @@ export async function validateLayer(file: string) {
   return parseLayerDocument(JSON.parse(await fs.readFile(file, 'utf8')));
 }
 
-async function connection(context: CliContext, write = false): Promise<ServerConnection> {
-  const server = await resolveServerConnection(context);
+async function connection(
+  context: CliContext,
+  access: 'public' | 'admin' | 'write' = 'admin',
+): Promise<ServerConnection> {
+  const server =
+    access === 'public' ? { url: remoteOrigin(context), token: '' } : await resolveServerConnection(context);
   const capabilities = parseServiceCapabilities(await apiRequest(server, 'api/capabilities'));
-  if (!capabilities.contentReads || !capabilities.adminApi || (write && !capabilities.contentWrites))
+  if (
+    !capabilities.contentReads ||
+    (access !== 'public' && !capabilities.adminApi) ||
+    (access === 'write' && !capabilities.contentWrites)
+  )
     throw new Error('Server content capability is unavailable for this operation');
   return server;
 }
@@ -52,7 +60,7 @@ function conditional(options: ContentOptions, method: string, body?: unknown): R
 const segment = (id: string) => encodeURIComponent(contentId(id));
 
 export async function mapCommand(context: CliContext, operation: string, args: string[], options: ContentOptions) {
-  const server = await connection(context, ['register', 'rebind', 'delete'].includes(operation));
+  const server = await connection(context, ['register', 'rebind', 'delete'].includes(operation) ? 'write' : 'admin');
   const base = 'api/admin/maps';
   const id = args[0];
   if (operation === 'list') return apiRequest(server, base);
@@ -83,7 +91,10 @@ export async function mapCommand(context: CliContext, operation: string, args: s
 
 export async function layerCommand(context: CliContext, operation: string, args: string[], options: ContentOptions) {
   if (operation === 'validate') return { ok: true, document: await validateLayer(args[0]) };
-  const server = await connection(context, ['import', 'replace', 'copy', 'delete'].includes(operation));
+  const server = await connection(
+    context,
+    ['import', 'replace', 'copy', 'delete'].includes(operation) ? 'write' : 'admin',
+  );
   const base = 'api/admin/overlays/layers';
   if (operation === 'list') return apiRequest(server, base);
   if (operation === 'import') return apiRequest(server, base, jsonRequest('POST', await validateLayer(args[0])));
@@ -112,7 +123,10 @@ export async function layerCommand(context: CliContext, operation: string, args:
 }
 
 export async function bindingCommand(context: CliContext, operation: string, options: ContentOptions) {
-  const server = await connection(context, operation !== 'bindings' && operation !== 'manifest');
+  const server = await connection(
+    context,
+    operation === 'manifest' ? 'public' : operation === 'bindings' ? 'admin' : 'write',
+  );
   const map = segment(options.map!);
   if (operation === 'manifest')
     return apiRequest(
@@ -142,7 +156,7 @@ export async function bindingCommand(context: CliContext, operation: string, opt
 }
 
 export async function mediaCommand(context: CliContext, operation: string, args: string[], options: ContentOptions) {
-  const server = await connection(context, ['import', 'delete'].includes(operation));
+  const server = await connection(context, ['import', 'delete'].includes(operation) ? 'write' : 'admin');
   const base = 'api/admin/media';
   if (operation === 'list') return apiRequest(server, base);
   if (operation === 'import') {
