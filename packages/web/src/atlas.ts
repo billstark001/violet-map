@@ -167,6 +167,18 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
+/** Identify mesh-relevant fallback output, including UV placement, LOD colors
+ * and alpha classification. Texture names alone cannot identify changed packs. */
+export function fallbackAtlasKey(
+  index: AtlasIndex,
+  avgColors: BuiltAtlas['avgColors'],
+  hasAlpha: TextureAlphaMap,
+): string {
+  const entries = Object.entries(index).sort(([a], [b]) => a.localeCompare(b));
+  const metadata = entries.map(([id, rectangle]) => [id, rectangle, avgColors[id], hasAlpha[id]]);
+  return `client-native-v2:${hashString32(JSON.stringify(metadata)).toString(36)}`;
+}
+
 /** The fallback atlas freezes declared vertical sprite sheets at their first square frame. */
 export function fallbackTextureSize(width: number, height: number, animated: boolean): [number, number] {
   return [width, animated && height > width ? width : height];
@@ -308,7 +320,7 @@ export async function buildAtlas(ids: string[], animatedIds: ReadonlySet<string>
     hasAlpha[e.id] = alpha;
   });
   const ret: BuiltAtlas = {
-    cacheKey: `client-native-v1:${hashString32(ids.slice().sort().join('\n')).toString(36)}`,
+    cacheKey: fallbackAtlasKey(index, avgColors, hasAlpha),
     canvas,
     index,
     avgColors,
