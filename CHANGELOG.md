@@ -35,6 +35,7 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 ### Changed
 
 - Server region, chunk, texture and manifest caches share bounded LRU accounting; oversized region/chunk buffers bypass retention without flushing useful residents. Texture-path and world-directory lookups are also bounded.
+- Removed deprecated `WorldReader`/`WorldStorage`, world-named local/S3/cache/scope class aliases, `createWorldStorage`, and `AppServices.storage`. Consumers now use object-storage names and `services.mounts.worlds`; the distinct remote `ServerWorldStorage` protocol remains supported.
 
 ### Added
 

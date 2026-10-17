@@ -34,7 +34,3 @@ export interface ObjectStorage extends ObjectReader {
 export interface AtomicObjectStorage extends ObjectStorage {
   replace(filePath: string, bytes: Uint8Array, contentType?: string): Promise<void>;
 }
-/** @deprecated Use ObjectReader. Public world protocol type retained for existing consumers. */
-export interface WorldReader extends ObjectReader {}
-/** @deprecated Use ObjectStorage. Public world protocol type retained for existing consumers. */
-export interface WorldStorage extends ObjectStorage {}

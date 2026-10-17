@@ -2,11 +2,13 @@
 
 [Back to README](../README.md)
 
-`WorldReader` and `WorldStorage` interfaces live in `@violet-map/core/storage`. Install the CLI optional peer `@violet-map/storage` alongside the CLI to synchronize worlds. The implementations have separate entries:
+`ObjectReader`, `ObjectStorage`, and `AtomicObjectStorage` interfaces live in `@violet-map/core/storage`. Install the CLI optional peer `@violet-map/storage` alongside the CLI to synchronize worlds. The implementations have separate entries:
 
 1. `@violet-map/storage/local` — a filesystem root.
 2. `@violet-map/storage/s3` — AWS S3 or S3-compatible object storage.
 3. `@violet-map/storage/server` — a remote Violet Map server through authenticated storage APIs.
+
+Use `LocalStorage`, `S3Storage`, `ScopedStorage`, and `CachedStorage` directly, or `createObjectStorage` from `/factory` for a physical local/S3 backend. Construct `ServerWorldStorage` from `/server` for the authenticated world protocol. The deprecated world-named interface/class aliases and `createWorldStorage` have been removed. Server library consumers use `services.mounts.worlds` in place of the former `services.storage` projection.
 
 The server selects `local` or `s3` with `WORLD_STORAGE`. The CLI syncs a **local world archive** to any of the three. It creates `.violet-map/identity.json` in the source archive and checks it against the target before writing. A different or missing marker on a non-empty target emits a warning and aborts unless `--force` is explicitly supplied.
 

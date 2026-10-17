@@ -10,7 +10,7 @@ import { createAssetService } from '../src/assets.js';
 import { createGameDataService } from '../src/gameData.js';
 import { createTopMapService } from '../src/topMap.js';
 import { createWorldStore } from '../src/worldStore.js';
-import { LocalWorldStorage } from '@violet-map/storage/local';
+import { LocalStorage } from '@violet-map/storage/local';
 
 test('service instances keep world, manifest, and game data caches independent', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-instances-'));
@@ -20,7 +20,7 @@ test('service instances keep world, manifest, and game data caches independent',
       env: { DATA_DIR: path.join(root, name), DEPLOYMENT_PROFILE: 'public' },
       cwd: root,
     });
-    const storage = new LocalWorldStorage(path.join(root, name, 'worlds'));
+    const storage = new LocalStorage(path.join(root, name, 'worlds'));
     const assets = createAssetService(config);
     const data = createGameDataService(config, assets);
     const topMap = createTopMapService(storage, config);

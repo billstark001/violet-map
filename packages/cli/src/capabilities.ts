@@ -6,6 +6,7 @@ const entries = {
   '@violet-map/storage': () => import('@violet-map/storage'),
   '@violet-map/storage/local': () => import('@violet-map/storage/local'),
   '@violet-map/storage/s3': () => import('@violet-map/storage/s3'),
+  '@violet-map/storage/server': () => import('@violet-map/storage/server'),
   '@violet-map/storage/factory': () => import('@violet-map/storage/factory'),
   '@violet-map/server/admin': () => import('@violet-map/server/admin'),
 };

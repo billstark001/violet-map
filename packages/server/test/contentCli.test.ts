@@ -27,7 +27,7 @@ test('CLI alone completes content lifecycle with API prefix, credentials and exp
   });
   const services = await createServices(config);
   t.after(() => services.close());
-  await services.storage.write('world/level.dat', new Uint8Array([1]));
+  await services.mounts.worlds.write('world/level.dat', new Uint8Array([1]));
   const app = new Hono();
   app.route('/prefix', createApp(config, services));
   const server = serve({ fetch: app.fetch, port: 0 });

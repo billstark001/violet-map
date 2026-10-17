@@ -27,7 +27,7 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
   );
   const topMap = createTopMapService(storage, config);
   const worldStore = createWorldStore(storage, topMap, config);
-  const base = { storage, mounts, content, assets, gameData, topMap, worldStore };
+  const base = { mounts, content, assets, gameData, topMap, worldStore };
   if (!config.features.users) {
     const authentication = createAuthentication(config.auth);
     return {

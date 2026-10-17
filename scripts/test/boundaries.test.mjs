@@ -21,7 +21,7 @@ test('boundary checker rejects type/reexport/dynamic/relative imports and option
   const run = () => execute(process.execPath, [path.join(project, 'scripts/check-boundaries.mjs')], { cwd: root });
   await run();
   for (const [owner, code, error] of [
-    ['core', 'import type { WorldStorage } from "@violet-map/storage";', /forbidden dependency/],
+    ['core', 'import type { ObjectStorage } from "@violet-map/storage";', /forbidden dependency/],
     ['server', 'export * from "@violet-map/render";', /forbidden dependency/],
     ['render', 'const fs = import("node:fs");', /platform implementation/],
     ['render', 'document.createElement("canvas");', /platform global/],

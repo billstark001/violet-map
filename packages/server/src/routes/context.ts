@@ -16,7 +16,7 @@ import type { ServerConfig } from '../configuration.js';
 import type { AppServices } from '../serviceTypes.js';
 
 export function createRouteContext(app: Hono, config: ServerConfig, services: AppServices) {
-  const worldStorage = services.storage;
+  const worldStorage = services.mounts.worlds;
   const {
     buildAssetBundle,
     buildTextureAtlas,

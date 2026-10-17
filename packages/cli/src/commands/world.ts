@@ -117,11 +117,12 @@ export async function runWorldSync(options: WorldSyncOptions, context: CliContex
   const storageOptions = await targetStorage(options, context);
   const { checkWorldIdentity, ensureWorldIdentity, ScopedStorage, syncWorld } =
     await loadCapability('@violet-map/storage');
-  const { createWorldStorage, createObjectStorage } = await loadCapability('@violet-map/storage/factory');
   const { LocalStorage } = await loadCapability('@violet-map/storage/local');
   const source = new LocalStorage(path.resolve(options.from));
   const target = new ScopedStorage(
-    await (storageOptions.kind === 'server' ? createWorldStorage(storageOptions) : createObjectStorage(storageOptions)),
+    storageOptions.kind === 'server'
+      ? new (await loadCapability('@violet-map/storage/server')).ServerWorldStorage(storageOptions)
+      : await (await loadCapability('@violet-map/storage/factory')).createObjectStorage(storageOptions),
     options.world,
   );
   const sourceIdentity = await ensureWorldIdentity(source, !!options.dryRun);

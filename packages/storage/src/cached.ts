@@ -119,6 +119,3 @@ export class CachedStorage implements ObjectStorage {
     );
   }
 }
-
-/** @deprecated Use CachedStorage. Retained as a public package API. */
-export class CachedWorldStorage extends CachedStorage {}

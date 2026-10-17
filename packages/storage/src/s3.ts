@@ -176,6 +176,3 @@ export class S3Storage implements ObjectStorage {
 export async function profileCredentials(options: { profile: string }) {
   return (await import('@aws-sdk/credential-providers')).fromIni(options)();
 }
-
-/** @deprecated Use S3Storage. Retained as a public package API. */
-export class S3WorldStorage extends S3Storage {}

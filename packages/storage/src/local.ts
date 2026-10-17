@@ -149,6 +149,3 @@ export class LocalStorage implements ObjectStorage {
     }
   }
 }
-
-/** @deprecated Use LocalStorage. Retained as a public package API. */
-export class LocalWorldStorage extends LocalStorage {}

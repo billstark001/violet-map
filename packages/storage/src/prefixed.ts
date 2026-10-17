@@ -49,6 +49,3 @@ export class ScopedStorage implements ObjectStorage {
     return this.storage.listDirectories(this.path(prefix));
   }
 }
-
-/** @deprecated Use ScopedStorage. Retained as a public package API. */
-export class PrefixedWorldStorage extends ScopedStorage {}

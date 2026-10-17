@@ -31,7 +31,7 @@ async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
     },
   });
   t.after(() => services.close());
-  await services.storage.write('world/level.dat', new Uint8Array([1]));
+  await services.mounts.worlds.write('world/level.dat', new Uint8Array([1]));
   const app = createApp(config, services);
   const request = (url: string, method = 'GET', body?: unknown, revision?: number, token = 'test') =>
     app.request(url, {
@@ -72,7 +72,7 @@ test('HTTP content lifecycle uses conditional revisions, public scope, restart a
   assert.equal(manifest.layers[0].document.revision, 2);
   assert.equal(manifest.sourceStatus, 'unverified');
   assert.equal((await request(`/api/admin/overlays/layers/${doc.layerId}`, 'DELETE', undefined, 2)).status, 409);
-  assert.equal(await services.storage.read('world/.violet-map/identity.json'), null);
+  assert.equal(await services.mounts.worlds.read('world/.violet-map/identity.json'), null);
   const svg = Buffer.from(
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 8"><path d="M0 0h16v8H0z" fill="#ff00ff"/></svg>',
   );
@@ -129,7 +129,7 @@ test('HTTP content lifecycle uses conditional revisions, public scope, restart a
 });
 test('source identity lifecycle hides overlays on replacements and preserves registrations after delete', async (t) => {
   const { services, content } = await fixture(t);
-  const storage = services.storage;
+  const storage = services.mounts.worlds;
   await storage.write(
     'world/.violet-map/identity.json',
     new TextEncoder().encode(JSON.stringify({ schema: 1, id: 'archive', createdAt: 'now' })),
@@ -157,7 +157,7 @@ test('head failure leaves complete old revision; reads survive restart and write
   const { root, services } = await fixture(t);
   const meta = new LocalStorage(path.join(root, 'isolated-meta')),
     blobs = new LocalStorage(path.join(root, 'isolated-blobs'));
-  const service = new ContentService(meta, blobs, services.storage);
+  const service = new ContentService(meta, blobs, services.mounts.worlds);
   const doc = await service.createLayer(layer);
   const replace = meta.replace.bind(meta);
   let fail = true;
@@ -169,7 +169,7 @@ test('head failure leaves complete old revision; reads survive restart and write
   assert.equal((await service.getLayer(doc.layerId)).revision, 1);
   fail = false;
   await service.replaceLayer(doc.layerId, { ...doc, revision: 2, name: 'success' }, 1);
-  assert.equal((await new ContentService(meta, blobs, services.storage).getLayer(doc.layerId)).name, 'success');
+  assert.equal((await new ContentService(meta, blobs, services.mounts.worlds).getLayer(doc.layerId)).name, 'success');
 });
 test('content routes are absent when disabled, read-only never exposes mutations, permission and CORS hold', async (t) => {
   const { config, services, app } = await fixture(t);
@@ -260,7 +260,7 @@ test('failed revision/version publication never exposes orphan files or protects
   const service = new ContentService(
     metadata,
     new LocalStorage(path.join(root, 'publication-blobs')),
-    services.storage,
+    services.mounts.worlds,
   );
   const doc = await service.createLayer(layer);
   const bytes = new TextEncoder().encode(

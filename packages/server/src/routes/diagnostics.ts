@@ -40,7 +40,7 @@ export function mountDiagnostics(context: RouteContext) {
 
       const id = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`;
       const document = JSON.stringify({ receivedAt: new Date().toISOString(), payload }, null, 2);
-      if (context.mounts?.blobs)
+      if (context.mounts.blobs)
         await context.mounts.blobs.replace(
           `diagnostics/${id}.json`,
           new TextEncoder().encode(document),

@@ -3,12 +3,12 @@ import { test } from 'node:test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { CachedWorldStorage } from '../src/cached.js';
-import { LocalWorldStorage } from '../src/local.js';
-import { S3WorldStorage } from '../src/s3.js';
+import { CachedStorage } from '../src/cached.js';
+import { LocalStorage } from '../src/local.js';
+import { S3Storage } from '../src/s3.js';
 import { ServerWorldStorage } from '../src/server.js';
 import { syncWorld } from '../src/sync.js';
-import type { StoredFileInfo, WorldStorage } from '@violet-map/core/storage';
+import type { StoredFileInfo, ObjectStorage } from '@violet-map/core/storage';
 
 test('a metadata request from before a write cannot refill the cache', async () => {
   let resolveOld!: (value: StoredFileInfo | null) => void;
@@ -25,8 +25,8 @@ test('a metadata request from before a write cannot refill the cache', async () 
     write: async () => {
       currentInfo = newInfo;
     },
-  } as unknown as WorldStorage;
-  const cache = new CachedWorldStorage(storage, { statTtlMs: 60_000 });
+  } as unknown as ObjectStorage;
+  const cache = new CachedStorage(storage, { statTtlMs: 60_000 });
 
   const stale = cache.stat(oldInfo.path);
   const staleAgain = cache.stat(oldInfo.path);
@@ -41,7 +41,7 @@ test('a metadata request from before a write cannot refill the cache', async () 
 });
 
 test('S3 storage distinguishes absent objects from backend failures', async () => {
-  const storage = new S3WorldStorage({ bucket: 'test' });
+  const storage = new S3Storage({ bucket: 'test' });
   const fake = storage as unknown as { client: { send: () => Promise<unknown> } };
   fake.client = {
     send: async () => {
@@ -85,7 +85,7 @@ test('S3 storage distinguishes absent objects from backend failures', async () =
 test('local storage reads empty ranges and rejects invalid offsets', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-storage-'));
   try {
-    const storage = new LocalWorldStorage(root);
+    const storage = new LocalStorage(root);
     await storage.write('world/file', new Uint8Array([1, 2, 3]));
     await storage.write('world/nested/second', new Uint8Array([4]));
     assert.deepEqual(
@@ -127,14 +127,14 @@ test('sync reuses source bytes when a same-size target file differs', async () =
       return sourceBytes;
     },
     list: async () => [{ path: 'region.mca', size: 3 }],
-  } as unknown as WorldStorage;
+  } as unknown as ObjectStorage;
   const target = {
     stat: async () => ({ path: 'region.mca', size: 3 }),
     read: async () => new Uint8Array([3, 2, 1]),
     write: async (_path: string, bytes: Uint8Array) => {
       written = bytes;
     },
-  } as unknown as WorldStorage;
+  } as unknown as ObjectStorage;
 
   const result = await syncWorld(source, target);
   assert.deepEqual(result.copied, ['region.mca']);
