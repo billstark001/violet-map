@@ -13,6 +13,14 @@ function isMissingPath(error: unknown): boolean {
   return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
+/** Adopt an exclusive filesystem allocation; trim pooled or short-read views so
+ * one retained object never pins unrelated pool bytes or an unused read tail. */
+function ownedFileBytes(bytes: Uint8Array): Uint8Array {
+  return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+    ? new Uint8Array(bytes.buffer)
+    : new Uint8Array(bytes);
+}
+
 /** Node filesystem implementation. `root` is never exposed through storage paths. */
 export class LocalStorage implements ObjectStorage {
   readonly kind = 'local' as const;
@@ -33,7 +41,7 @@ export class LocalStorage implements ObjectStorage {
 
   async read(filePath: string): Promise<Uint8Array | null> {
     try {
-      return new Uint8Array(await fs.readFile(this.abs(filePath)));
+      return ownedFileBytes(await fs.readFile(this.abs(filePath)));
     } catch (error) {
       if (!isMissingPath(error)) throw error;
       return null;
@@ -51,7 +59,7 @@ export class LocalStorage implements ObjectStorage {
       if (available === 0) return new Uint8Array();
       const buffer = Buffer.allocUnsafe(available);
       const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, start);
-      return new Uint8Array(buffer.buffer, buffer.byteOffset, bytesRead).slice();
+      return ownedFileBytes(buffer.subarray(0, bytesRead));
     } catch (error) {
       if (!isMissingPath(error)) throw error;
       return null;

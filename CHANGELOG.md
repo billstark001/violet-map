@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Local storage adopts exclusive filesystem read buffers instead of copying large files twice; pooled and short-read buffers are trimmed to exact-size owned arrays.
+
 - Curve sampling and area-mask layout reject nonfinite budgets and inverted bounds before generating invalid GPU dimensions; public geometry helpers document coordinate units and ownership.
 
 - Area triangulation uses Earcut with local coordinates and an area-deviation guard, improving large concave overlays while preserving original vertex indices and winding.

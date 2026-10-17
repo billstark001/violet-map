@@ -180,3 +180,21 @@ test('content comparison hashes only the supplied view and accepts shared backin
   assert.equal(changed.same, false);
   assert.equal(changed.sourceBytes, source);
 });
+
+test('local reads adopt exclusive allocations but copy pooled views to exact-size ordinary arrays', async (t) => {
+  const exact = Buffer.alloc(8192, 3);
+  const read = t.mock.method(fs, 'readFile', async () => exact);
+  const storage = new LocalStorage('/tmp');
+  const large = (await storage.read('sample'))!;
+  assert.equal(Buffer.isBuffer(large), false);
+  assert.equal(large.buffer, exact.buffer, 'large reads do not copy an already exclusive allocation');
+  const pooled = Buffer.from([1, 2, 3]);
+  assert.ok(pooled.buffer.byteLength > pooled.byteLength);
+  read.mock.mockImplementation(async () => pooled);
+  const small = (await storage.read('sample'))!;
+  assert.deepEqual([...small], [1, 2, 3]);
+  assert.notEqual(small.buffer, pooled.buffer);
+  assert.equal(small.buffer.byteLength, 3);
+  pooled[0] = 9;
+  assert.equal(small[0], 1);
+});
