@@ -37,6 +37,7 @@ test('invalid world names and create inputs fail before any backend access', asy
       () => world.worldManifest(name),
       () => world.saveWorldFile(name, 'file', new Uint8Array()),
       () => world.getChunkMetadata(name, 'overworld', 0, 0),
+      () => world.deleteChunks(name, 'overworld', []),
       () => top.getTopMapManifest(name),
     ])
       await assert.rejects(operation(), /invalid world name/);
@@ -44,6 +45,8 @@ test('invalid world names and create inputs fail before any backend access', asy
   await assert.rejects(world.ensureLevelDat('valid', 'name', ['../invalid']), /invalid dimension/);
   await assert.rejects(world.ensureLevelDat('valid', 'name', 'bad' as unknown as string[]), /invalid dimensions/);
   await assert.rejects(world.ensureLevelDat('valid', 3 as unknown as string), /invalid level name/);
+  await assert.rejects(world.deleteChunks('valid', 'overworld', [{ cx: 0, cz: 0 }, null as never]), /invalid chunk/);
+  await assert.rejects(world.deleteChunks('valid', '..:bad', []), /invalid dimension/);
   assert.equal(calls, 0);
 });
 
@@ -84,6 +87,17 @@ test('world HTTP mutations reject malformed input without partial worlds and pre
   assert.deepEqual(await services.mounts.worlds.list(), []);
   assert.equal((await app.request('/api/admin/worlds/a%2Fb', { method: 'DELETE', headers })).status, 400);
   assert.equal((await app.request('/api/worlds/a%2Fb/capabilities')).status, 400);
+  for (const body of [{ chunks: [{ cx: 0, cz: 0 }, null] }, { chunks: [{ cx: 0x80000000, cz: 0 }] }, null])
+    assert.equal(
+      (
+        await app.request('/api/admin/worlds/foo/minecraft:overworld/chunks', {
+          method: 'DELETE',
+          headers,
+          body: JSON.stringify(body),
+        })
+      ).status,
+      400,
+    );
   const uploaded = await app.request('/api/admin/worlds/%66oo/files/test.bin', {
     method: 'PUT',
     headers,

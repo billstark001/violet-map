@@ -19,6 +19,7 @@ export function mountWorldWrite(context: RouteContext) {
     requireRole,
     adminStoragePath,
     REQUIRED_ROLE,
+    parseChunkCoordinates,
   } = context;
   app.put(
     '/api/admin/storage/files/*',
@@ -128,10 +129,10 @@ export function mountWorldWrite(context: RouteContext) {
     async (c) => {
       const dimension = c.req.param('dim');
       if (dimension && !isDimensionId(dimension)) return c.json({ error: 'invalid dimension id' }, 400);
-      const body = await c.req.json<{ chunks?: { cx: number; cz: number }[] }>();
-      return c.json(
-        await deleteChunks(c.req.param('world'), c.req.param('dim'), Array.isArray(body.chunks) ? body.chunks : []),
-      );
+      const body = await c.req.json().catch(() => null);
+      const chunks = parseChunkCoordinates(body, Number.MAX_SAFE_INTEGER);
+      if (!chunks) return c.json({ error: 'invalid chunk coordinates' }, 400);
+      return c.json(await deleteChunks(c.req.param('world'), c.req.param('dim'), chunks));
     },
   );
   app.post(

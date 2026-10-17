@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Chunk deletion validates the entire batch before touching storage, preventing malformed later entries from causing partial deletion followed by an error.
+
 - Dimension validation rejects `.`/`..` namespaces; malformed encoded archive directories no longer break world discovery. CLI and server share dimension paths, including custom paths containing a `region` segment.
 
 - Overlay resource pools reject invalid budgets/concurrency immediately, preventing NaN limits from disabling bounds and zero concurrency from leaving promises pending forever.

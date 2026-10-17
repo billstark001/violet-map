@@ -779,12 +779,18 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     dim: string,
     chunks: { cx: number; cz: number }[],
   ): Promise<{ deletedOverrides: number; clearedRegionChunks: number }> {
+    assertWorldName(world);
+    assertDimensionId(dim);
+    if (
+      !Array.isArray(chunks) ||
+      chunks.some((chunk) => !chunk || !isChunkCoordinate(chunk.cx) || !isChunkCoordinate(chunk.cz))
+    )
+      throw new Error('invalid chunk coordinates');
     let deletedOverrides = 0;
     let clearedRegionChunks = 0;
     const byRegion = new Map<string, { filePath: string; locals: Map<string, { localX: number; localZ: number }> }>();
 
     for (const { cx, cz } of chunks) {
-      if (!isChunkCoordinate(cx) || !isChunkCoordinate(cz)) continue;
       const overridePath = `${chunkOverrideDir(world, dim)}/c.${cx}.${cz}.nbt`;
       if (await worldStorage.stat(overridePath)) {
         await worldStorage.delete(overridePath);
