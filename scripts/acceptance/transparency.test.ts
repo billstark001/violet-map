@@ -90,6 +90,7 @@ test(
         }
         const order = await page.evaluate(() => window.transparencyHarness.reorder());
         assert.ok(order.maxDifference <= 1, `${kind}/${projection}: submission order affected the image`);
+        if (result.status.transparentDraws > 1) assert.notDeepEqual(order.beforeOrder, order.afterOrder);
         results.push({ kind, projection, ...result, order });
       }
     }
@@ -120,6 +121,7 @@ test(
       assert.ok(world.status.transparentDraws >= 6);
       const order = await page.evaluate(() => window.transparencyHarness.reorder());
       assert.ok(order.maxDifference <= 2 && order.changed < 100, `voxel ${projection}: ${JSON.stringify(order)}`);
+      assert.notDeepEqual(order.beforeOrder, order.afterOrder);
       await page.screenshot({ path: path.join(output, `world-${projection}.png`) });
       const benchmark = await page.evaluate(() => window.transparencyHarness.benchmark());
       worlds.push({ projection, ...world, order, benchmark });

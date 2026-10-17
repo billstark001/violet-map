@@ -118,14 +118,25 @@ const harness = {
     };
   },
   reorder() {
-    const before = image();
-    scene.children.reverse();
-    scene.children.forEach((object, index) => {
-      object.renderOrder = index * -7;
+    const submitted: number[] = [];
+    const callbacks = new Map<THREE.Mesh, THREE.Mesh['onBeforeRender']>();
+    scene.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const previous = object.onBeforeRender;
+      callbacks.set(object, previous);
+      object.onBeforeRender = (...args) => {
+        submitted.push(object.id);
+        previous.apply(object, args);
+      };
     });
+    const before = image();
+    const beforeOrder = submitted.splice(0);
+    let drawOrder = 0;
     scene.traverse((object) => {
       object.children.reverse();
-      if (!(object instanceof THREE.Mesh) || !object.geometry.index) return;
+      if (!(object instanceof THREE.Mesh)) return;
+      object.renderOrder = ++drawOrder * 7;
+      if (!object.geometry.index) return;
       const index = object.geometry.index;
       const original = index.array.slice();
       for (let i = 0; i < index.count; i += 3) {
@@ -135,6 +146,7 @@ const harness = {
       index.needsUpdate = true;
     });
     const after = image();
+    for (const [object, callback] of callbacks) object.onBeforeRender = callback;
     let maxDifference = 0,
       changed = 0;
     for (let i = 0; i < before.length; i++) {
@@ -142,7 +154,7 @@ const harness = {
       maxDifference = Math.max(maxDifference, difference);
       if (difference > 1) changed++;
     }
-    return { maxDifference, changed };
+    return { maxDifference, changed, beforeOrder, afterOrder: submitted };
   },
   benchmark(frames = 60) {
     const values = [];
