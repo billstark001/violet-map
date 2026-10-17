@@ -276,7 +276,7 @@ export class ModelBaker {
   /** Bake a registered entity model using the block-model dialect. Rotations
    * are quarter turns expressed in degrees; returned quads share the cache. */
   getModelQuads(model: string, rotationY = 0, rotationX = 0, uvlock = false): BakedQuad[] {
-    return this.bakeVariant({ model: normalizeId(model), x: rotationX, y: rotationY, uvlock });
+    return this.bakeVariant({ model, x: rotationX, y: rotationY, uvlock });
   }
 
   private build(state: BlockStateRef): WeightedQuads[] {
@@ -308,10 +308,14 @@ export class ModelBaker {
   }
 
   private bakeVariant(variant: BlockStateVariantJson): BakedQuad[] {
-    const key = `${variant.model}|${variant.x ?? 0}|${variant.y ?? 0}|${variant.uvlock ? 1 : 0}`;
+    const model = normalizeId(variant.model);
+    const rotX = ((variant.x ?? 0) / 90) & 3;
+    const rotY = ((variant.y ?? 0) / 90) & 3;
+    const uvlock = !!variant.uvlock;
+    const key = `${model}|${rotX}|${rotY}|${uvlock ? 1 : 0}`;
     let baked = this.variantCache.get(key);
     if (!baked) {
-      baked = this.bake(variant.model, ((variant.x ?? 0) / 90) & 3, ((variant.y ?? 0) / 90) & 3, !!variant.uvlock);
+      baked = this.bake(model, rotX, rotY, uvlock);
       this.variantCache.set(key, baked);
     }
     return baked;

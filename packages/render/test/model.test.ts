@@ -89,7 +89,10 @@ test('texture variables may use prototype names without breaking inheritance or 
 
 test('registered models reuse baked variants across entity instances and block states', () => {
   const bundle: AssetBundle = {
-    blockstates: { 'minecraft:test': { variants: { '': { model: 'minecraft:block/test' } } } },
+    blockstates: {
+      'minecraft:test': { variants: { '': { model: 'minecraft:block/test' } } },
+      'minecraft:short_reference': { variants: { '': { model: 'block/test' } } },
+    },
     models: {
       'minecraft:block/test': {
         elements: [{ from: [0, 0, 0], to: [8, 16, 16], faces: { up: { texture: 'minecraft:block/stone' } } }],
@@ -101,9 +104,13 @@ test('registered models reuse baked variants across entity instances and block s
   const original = quads[0].positions.slice();
   assert.equal(baker.getModelQuads('minecraft:block/test'), quads);
   assert.equal(baker.getQuads({ name: 'minecraft:test', properties: {} }, 0), quads);
+  assert.equal(baker.getQuads({ name: 'minecraft:short_reference', properties: {} }, 0), quads);
   const rotated = baker.getModelQuads('block/test', 90);
   assert.notEqual(rotated, quads);
   assert.equal(baker.getModelQuads('block/test', 90), rotated);
+  assert.equal(baker.getModelQuads('block/test', 450), rotated);
+  assert.equal(baker.getModelQuads('block/test', -270), rotated);
+  assert.equal(baker.getModelQuads('block/test', 360), quads);
   assert.notDeepEqual(rotated[0].positions, original);
   assert.deepEqual(quads[0].positions, original);
 });
