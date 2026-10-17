@@ -1,7 +1,7 @@
 import { batch, signal } from '@preact/signals';
 import { uploadDiagnosticSnapshot } from '../api';
 import { apiTokenKey, serviceCapabilities } from '../runtime';
-import { browserStorage, readStored } from './settings';
+import { browserStorage, readStored } from '../browserStorage';
 import { diagnosticProvider } from './viewer';
 
 export const diagnosticToken = signal('');

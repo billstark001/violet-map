@@ -3,7 +3,7 @@ import { clearDebugLog } from '../logger';
 import { clearMeshCache } from '../meshCache';
 import { serviceCapabilities } from '../runtime';
 import { cacheStats, diagnosticProvider, refreshCacheStats, settings } from '../state/viewer';
-import { browserStorage } from '../state/settings';
+import { browserStorage } from '../browserStorage';
 import {
   diagnosticToken,
   downloadDiagnosticSnapshot,

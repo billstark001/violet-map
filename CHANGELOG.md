@@ -32,6 +32,7 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 - Storage metadata caches now bound retained keys and aggregate list items, including negative lookups; long-running read-only servers no longer retain every path ever probed.
 - Legacy overworld entity sidecars resolve to `entities/` rather than rereading terrain from `region/`. Warm chunk reads reuse entity NBT and hashes, and world deletion releases cached region/header bytes immediately.
 - Unavailable or failing IndexedDB now falls back to worker meshing instead of repeatedly retrying a failed cache read with missing terrain.
+- Partial camera/look-at URLs retain unspecified coordinates instead of turning them into zero; restricted browser storage no longer prevents viewer initialization.
 
 ### Changed
 

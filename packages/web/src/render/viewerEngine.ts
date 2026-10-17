@@ -24,8 +24,15 @@ import { TopMapManager, type TopMapDiagnosticSnapshot } from './topMapManager';
 import { OverlayManager, type OverlayDiagnosticSnapshot } from './overlayManager';
 import { serviceCapabilities } from '../runtime';
 import type { WorkerInit } from '../worker/protocol';
+import { browserStorage, readStored } from '../browserStorage';
+import {
+  VIEW_STORAGE_KEY,
+  readInitialView,
+  buildViewUrl,
+  lookAtTargetFromParams,
+  type InitialView,
+} from './cameraState';
 
-const VIEW_STORAGE_KEY = 'violet-map:view';
 // Fluid UVs, exterior AO for partial models, and special-model transforms all
 // changed mesh bytes. Keep stale IndexedDB entries from reviving the old
 // water/stair artifacts after an upgrade.
@@ -37,7 +44,6 @@ const TOP_PERSPECTIVE_FOV = 50;
 const TOP_MAP_FREE_VIEW_MAX_DISTANCE_CHUNKS = 1024;
 const TOP_MAP_FREE_VIEW_MAX_DISTANCE_BLOCKS = TOP_MAP_FREE_VIEW_MAX_DISTANCE_CHUNKS * 16;
 const LONG_RANGE_CAMERA_FAR = TOP_MAP_FREE_VIEW_MAX_DISTANCE_BLOCKS + 2 * 512;
-const DEFAULT_VIEW: FlyView = { x: 8, y: 120, z: 8, yaw: 0, pitch: 0 };
 const DEFAULT_DIMENSION_DEF = {
   hasSkyLight: true,
   ambientLight: 0.18,
@@ -102,8 +108,6 @@ export interface ViewerDiagnosticSnapshot {
 }
 
 type ActiveCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
-
-type InitialView = FlyView & { hasAngles: boolean };
 
 type ViewerBundle = Awaited<ReturnType<typeof fetchBundle>>;
 
@@ -192,90 +196,13 @@ function clamp01(value: number): number {
   return Math.min(Math.max(value, 0), 1);
 }
 
-function finiteNumber(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
-}
-
-function finiteParam(params: URLSearchParams, key: string, fallback: number): number {
-  const value = Number(params.get(key));
-  return Number.isFinite(value) ? value : fallback;
-}
-
-function fixed(value: number, digits: number): string {
-  return Number.isFinite(value) ? value.toFixed(digits) : '0';
-}
-
-function viewFromParams(params: URLSearchParams, defaults: FlyView = DEFAULT_VIEW): InitialView | null {
-  const hasPosition = params.has('x') || params.has('y') || params.has('z');
-  const hasAngles = params.has('yaw') || params.has('pitch');
-  if (!hasPosition && !hasAngles) return null;
-  return {
-    x: finiteParam(params, 'x', defaults.x),
-    y: finiteParam(params, 'y', defaults.y),
-    z: finiteParam(params, 'z', defaults.z),
-    yaw: normalizeFlyYaw(finiteParam(params, 'yaw', defaults.yaw)),
-    pitch: clampFlyPitch(finiteParam(params, 'pitch', defaults.pitch)),
-    hasAngles,
-  };
-}
-
-function parseSavedView(raw: string | null): Partial<FlyView> | null {
-  try {
-    return JSON.parse(raw ?? 'null') as Partial<FlyView> | null;
-  } catch {
-    return null;
-  }
-}
-
-function viewFromSaved(saved: Partial<FlyView> | null, defaults: FlyView = DEFAULT_VIEW): InitialView | null {
-  if (!saved) return null;
-  return {
-    x: finiteNumber(saved.x, defaults.x),
-    y: finiteNumber(saved.y, defaults.y),
-    z: finiteNumber(saved.z, defaults.z),
-    yaw: normalizeFlyYaw(finiteNumber(saved.yaw, defaults.yaw)),
-    pitch: clampFlyPitch(finiteNumber(saved.pitch, defaults.pitch)),
-    hasAngles: Number.isFinite(saved.yaw) || Number.isFinite(saved.pitch),
-  };
-}
-
-function readInitialView(): InitialView {
-  return (
-    viewFromParams(new URLSearchParams(location.search)) ??
-    viewFromSaved(parseSavedView(localStorage.getItem(VIEW_STORAGE_KEY))) ?? { ...DEFAULT_VIEW, hasAngles: false }
-  );
-}
-
-function buildViewUrl(pathname: string, search: string, hash: string, view: FlyView): string {
-  const params = new URLSearchParams(search);
-  params.set('x', fixed(view.x, 2));
-  params.set('y', fixed(view.y, 2));
-  params.set('z', fixed(view.z, 2));
-  params.set('yaw', fixed(normalizeFlyYaw(view.yaw), 4));
-  params.set('pitch', fixed(clampFlyPitch(view.pitch), 4));
-  params.delete('lookAtX');
-  params.delete('lookAtY');
-  params.delete('lookAtZ');
-  return `${pathname}?${params.toString()}${hash}`;
-}
-
 function persistView(view: FlyView, updateUrl: boolean) {
   try {
-    localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify(view));
+    browserStorage('localStorage')?.setItem(VIEW_STORAGE_KEY, JSON.stringify(view));
   } catch {
     // Storage can be unavailable in private or restricted contexts.
   }
-  if (!updateUrl) return;
-  history.replaceState(null, '', buildViewUrl(location.pathname, location.search, location.hash, view));
-}
-
-function lookAtTargetFromParams(params: URLSearchParams, fallback: THREE.Vector3): [number, number, number] | null {
-  if (!params.has('lookAtX') && !params.has('lookAtY') && !params.has('lookAtZ')) return null;
-  return [
-    finiteParam(params, 'lookAtX', fallback.x),
-    finiteParam(params, 'lookAtY', fallback.y),
-    finiteParam(params, 'lookAtZ', fallback.z - 1),
-  ];
+  if (updateUrl) history.replaceState(null, '', buildViewUrl(location.pathname, location.search, location.hash, view));
 }
 
 function cameraView(camera: THREE.Camera, yaw: number, pitch: number): FlyView {
@@ -1182,7 +1109,7 @@ export class ViewerController {
       const engine = createEngine(
         this.container,
         resources,
-        readInitialView(),
+        readInitialView(location.search, readStored(browserStorage('localStorage'), VIEW_STORAGE_KEY)),
         props.viewMode,
         props.fastMoveMultiplier,
         props.inertiaEnabled,

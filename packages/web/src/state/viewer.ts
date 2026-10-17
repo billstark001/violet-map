@@ -12,7 +12,8 @@ import type {
   ViewerOptions,
   ViewerStatsPayload,
 } from '../render/viewerEngine';
-import { browserStorage, createSettingsStore, readStored } from './settings';
+import { createSettingsStore } from './settings';
+import { browserStorage, readStored } from '../browserStorage';
 
 export const settings = createSettingsStore(
   typeof location === 'undefined' ? '' : location.search,

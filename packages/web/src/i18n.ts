@@ -1,7 +1,7 @@
 import i18n from 'i18next';
 import type { TOptions } from 'i18next';
 import { signal } from '@preact/signals';
-import { browserStorage, readStored } from './state/settings';
+import { browserStorage, readStored } from './browserStorage';
 
 const resources = {
   en: {
