@@ -166,6 +166,8 @@ export function loadServerConfig(options: ConfigurationOptions = {}) {
       atlasQueue: number('ATLAS_BUILD_QUEUE', 16, 0, 65536, 'limits.atlasQueue'),
       mediaImports: number('MEDIA_IMPORT_CONCURRENCY', 1, 1, 1024, 'limits.mediaImports'),
       mediaQueue: number('MEDIA_IMPORT_QUEUE', 8, 0, 65536, 'limits.mediaQueue'),
+      contentMutations: number('CONTENT_MUTATION_CONCURRENCY', 1, 1, 1024, 'limits.contentMutations'),
+      contentQueue: number('CONTENT_MUTATION_QUEUE', 32, 0, 65536, 'limits.contentQueue'),
     },
   };
 }

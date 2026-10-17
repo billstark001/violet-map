@@ -1,4 +1,4 @@
-import { Hono, type Context } from 'hono';
+import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { ContentValidationError, revisionTag } from '@violet-map/core/overlays';
 import { ContentError, type PublishedMedia } from '../content.js';
 import type { ServerConfig } from '../configuration.js';
@@ -143,20 +143,26 @@ export function mountContent(app: Hono, config: ServerConfig, services: AppServi
       bytesResponse(c, await content.openMedia(c.req.param('id'), c.req.param('versionId'))),
     );
     if (config.features.contentWrites) {
-      routes.post('/api/admin/maps', async (c) =>
+      const mutations = new WorkLimiter(
+        config.limits.contentMutations,
+        config.limits.contentQueue,
+        () => new ContentError('CONTENT_BUSY', 503, 'content mutation capacity is exhausted'),
+      );
+      const reserveMutation: MiddlewareHandler = (_c, next) => mutations.run(next);
+      routes.post('/api/admin/maps', reserveMutation, async (c) =>
         documentResponse(c, await content.createMap(await jsonBody(c, config.limits.uploadBytes)), true),
       );
-      routes.put('/api/admin/maps/:id', async (c) =>
+      routes.put('/api/admin/maps/:id', reserveMutation, async (c) =>
         documentResponse(
           c,
           await content.replaceMap(c.req.param('id'), await jsonBody(c, config.limits.uploadBytes), condition(c)),
         ),
       );
-      routes.delete('/api/admin/maps/:id', async (c) => {
+      routes.delete('/api/admin/maps/:id', reserveMutation, async (c) => {
         await content.deleteMap(c.req.param('id'), condition(c));
         return c.json({ ok: true });
       });
-      routes.put('/api/admin/maps/:id/bindings/:bindingId', async (c) =>
+      routes.put('/api/admin/maps/:id/bindings/:bindingId', reserveMutation, async (c) =>
         documentResponse(
           c,
           await content.setBinding(
@@ -167,25 +173,25 @@ export function mountContent(app: Hono, config: ServerConfig, services: AppServi
           ),
         ),
       );
-      routes.delete('/api/admin/maps/:id/bindings/:bindingId', async (c) =>
+      routes.delete('/api/admin/maps/:id/bindings/:bindingId', reserveMutation, async (c) =>
         documentResponse(c, await content.setBinding(c.req.param('id'), c.req.param('bindingId'), null, condition(c))),
       );
-      routes.post('/api/admin/overlays/layers', async (c) =>
+      routes.post('/api/admin/overlays/layers', reserveMutation, async (c) =>
         documentResponse(c, await content.createLayer(await jsonBody(c, config.limits.uploadBytes)), true),
       );
-      routes.put('/api/admin/overlays/layers/:id', async (c) =>
+      routes.put('/api/admin/overlays/layers/:id', reserveMutation, async (c) =>
         documentResponse(
           c,
           await content.replaceLayer(c.req.param('id'), await jsonBody(c, config.limits.uploadBytes), condition(c)),
         ),
       );
-      routes.post('/api/admin/overlays/layers/:id/copy', async (c) => {
+      routes.post('/api/admin/overlays/layers/:id/copy', reserveMutation, async (c) => {
         const body = await jsonBody(c, config.limits.uploadBytes);
         if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((k) => k !== 'name'))
           throw new ContentValidationError('copy accepts only a name');
         return documentResponse(c, await content.copyLayer(c.req.param('id'), (body as { name?: string }).name), true);
       });
-      routes.delete('/api/admin/overlays/layers/:id', async (c) => {
+      routes.delete('/api/admin/overlays/layers/:id', reserveMutation, async (c) => {
         await content.deleteLayer(c.req.param('id'), condition(c));
         return c.json({ ok: true });
       });
@@ -216,11 +222,11 @@ export function mountContent(app: Hono, config: ServerConfig, services: AppServi
       };
       routes.post('/api/admin/media', (c) => upload(c));
       routes.post('/api/admin/media/:id/versions', (c) => upload(c, c.req.param('id')));
-      routes.delete('/api/admin/media/:id', async (c) => {
+      routes.delete('/api/admin/media/:id', reserveMutation, async (c) => {
         await content.deleteMedia(c.req.param('id'), condition(c));
         return c.json({ ok: true });
       });
-      routes.delete('/api/admin/media/:id/versions/:versionId', async (c) => {
+      routes.delete('/api/admin/media/:id/versions/:versionId', reserveMutation, async (c) => {
         await content.deleteMedia(c.req.param('id'), condition(c), c.req.param('versionId'));
         return c.json({ ok: true });
       });

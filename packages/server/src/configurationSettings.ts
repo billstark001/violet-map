@@ -60,6 +60,8 @@ const fields = [
   'limits.atlasQueue',
   'limits.mediaImports',
   'limits.mediaQueue',
+  'limits.contentMutations',
+  'limits.contentQueue',
 ];
 
 export function configurationSettings(options: ConfigurationOptions & { env: NodeJS.ProcessEnv }) {

@@ -17,6 +17,11 @@ test('configuration validates values, names, secrets, and authentication combina
   assert.equal(load({ MEDIA_IMPORT_QUEUE: '0' }).limits.mediaQueue, 0);
   assert.throws(() => load({ MEDIA_IMPORT_CONCURRENCY: '0' }), /MEDIA_IMPORT_CONCURRENCY/);
   assert.throws(() => load({ MEDIA_IMPORT_QUEUE: '-1' }), /MEDIA_IMPORT_QUEUE/);
+  assert.equal(load({}).limits.contentMutations, 1);
+  assert.equal(load({}).limits.contentQueue, 32);
+  assert.equal(load({ CONTENT_MUTATION_QUEUE: '0' }).limits.contentQueue, 0);
+  assert.throws(() => load({ CONTENT_MUTATION_CONCURRENCY: '0' }), /CONTENT_MUTATION_CONCURRENCY/);
+  assert.throws(() => load({ CONTENT_MUTATION_QUEUE: '-1' }), /CONTENT_MUTATION_QUEUE/);
   assert.throws(() => load({ DEPLOYMENT_PROFILE: 'sync' }), /STATIC_API_TOKEN/);
   assert.throws(() => load({ USERS_ENABLED: 'false' }), /require authentication/);
   assert.throws(() => load({ AUTH_MODE: 'static', STATIC_API_TOKEN: 'secret' }), /conflicts/);

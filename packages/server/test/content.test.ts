@@ -523,6 +523,55 @@ test('media import capacity is reserved before reading queued bodies; excess req
   assert.equal(imports.mock.callCount(), 2);
 });
 
+test('metadata mutation capacity is reserved before JSON bodies are read across routes', async (t) => {
+  const { config, services, content } = await fixture(t);
+  const app = createApp({ ...config, limits: { ...config.limits, contentMutations: 1, contentQueue: 1 } }, services);
+  const original = content.createMap.bind(content);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  const create = t.mock.method(content, 'createMap', async (input) => {
+    await gate;
+    return original(input);
+  });
+  const reads = [0, 0, 0];
+  const request = (index: number) =>
+    app.request(index === 1 ? '/api/admin/overlays/layers' : '/api/admin/maps', {
+      method: 'POST',
+      headers: { authorization: 'Bearer test', 'content-type': 'application/json' },
+      body: new ReadableStream(
+        {
+          pull(controller) {
+            reads[index]++;
+            controller.enqueue(
+              new TextEncoder().encode(JSON.stringify(index === 1 ? layer : { name: 'queued', worldKey: 'world' })),
+            );
+            controller.close();
+          },
+        },
+        { highWaterMark: 0 },
+      ),
+      duplex: 'half',
+    } as RequestInit);
+  const active = request(0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(create.mock.callCount(), 1);
+  const queued = request(1);
+  const rejected = await request(2);
+  assert.equal(rejected.status, 503);
+  assert.equal(rejected.headers.get('retry-after'), '1');
+  assert.equal((await rejected.json()).code, 'CONTENT_BUSY');
+  assert.deepEqual(reads, [1, 0, 0]);
+  release();
+  assert.deepEqual(
+    (await Promise.all([active, queued])).map((response) => response.status),
+    [201, 201],
+  );
+  assert.deepEqual(reads, [1, 1, 0]);
+});
+
 test('media read failures return JSON without stale representation length, MIME, validators or range headers', async (t) => {
   const { app, content, services } = await fixture(t);
   const asset = await content.importMedia(

@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Content metadata mutations reserve configurable bounded capacity before buffering JSON; queued requests keep bodies unread and excess traffic gets retryable `CONTENT_BUSY`, independently of media imports.
+
 - Small valid overlay regions near the world border no longer fail zero-area validation because large absolute-coordinate products cancel; either winding remains supported.
 
 - Published map/layer/media metadata must match its object-key identity and revision; misplaced but otherwise valid JSON reports `CORRUPT_CONTENT` instead of serving another publication. Map discovery matches literal `.json` suffixes.
