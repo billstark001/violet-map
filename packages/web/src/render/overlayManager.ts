@@ -29,6 +29,7 @@ import { OVERLAY_LIMITS } from './overlayLimits';
 
 const REFRESH_MS = 30_000;
 const RETRY_MS = 12_000;
+const MANIFEST_TIMEOUT_MS = 30_000;
 
 export interface OverlayDiagnosticSnapshot {
   mapId: string | null;
@@ -146,7 +147,10 @@ export class OverlayManager {
     try {
       const response = await (this.dependencies.manifest ?? apiFetch)(
         `api/maps/${encodeURIComponent(mapId)}/overlays?dimension=${encodeURIComponent(dimension)}&delivery=${mediaDelivery.value}`,
-        { signal: controller.signal, headers: this.etag ? { 'if-none-match': this.etag } : undefined },
+        {
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(MANIFEST_TIMEOUT_MS)]),
+          headers: this.etag ? { 'if-none-match': this.etag } : undefined,
+        },
       );
       if (controller.signal.aborted || generation !== this.generation || this.disposed) return;
       if (response.status === 304) {

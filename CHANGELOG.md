@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Overlay manifest requests time out after 30 seconds, allowing retries after stalled connections while retaining the last valid same-context content.
+
 - Remote uploads accept shared-backed byte arrays and preserve subarray boundaries without an extra full-file JavaScript copy for ordinary buffers.
 
 - S3-compatible range reads also handle full 200 responses correctly; object bodies use the SDK's typed stream conversion instead of a separate hand-written compatibility collector.

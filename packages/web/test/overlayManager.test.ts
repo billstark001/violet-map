@@ -114,6 +114,34 @@ test('ETag refresh retains pinned revision objects and transient errors remain l
   assert.equal(manager.group.children.length, 0);
 });
 
+test('a stalled manifest times out, releases loading state and can be retried', async (t) => {
+  let timeout = new AbortController();
+  t.mock.method(AbortSignal, 'timeout', (milliseconds: number) => {
+    assert.equal(milliseconds, 30_000);
+    return timeout.signal;
+  });
+  let calls = 0;
+  const manager = new OverlayManager(new THREE.Scene(), createSharedUniforms(), {
+    manifest: async (_path, init) => {
+      if (++calls > 1) return Response.json(manifest('m'));
+      return new Promise((_resolve, reject) => {
+        init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true });
+      });
+    },
+  });
+  t.after(() => manager.dispose());
+  manager.configure('m', 'overworld', true);
+  assert.equal(manager.diagnosticSnapshot().loading, true);
+  timeout.abort(new DOMException('overlay manifest timed out', 'TimeoutError'));
+  await setImmediate();
+  assert.equal(manager.diagnosticSnapshot().loading, false);
+  assert.match(manager.diagnosticSnapshot().errors[0].message, /timed out/);
+  timeout = new AbortController();
+  await manager.refresh();
+  assert.equal(manager.diagnosticSnapshot().features, 1);
+  assert.deepEqual(manager.diagnosticSnapshot().errors, []);
+});
+
 test('unknown and failed media leave unrelated curves active and identify the failing feature', async () => {
   const versionId = 'a'.repeat(64);
   const base = manifest('m');
