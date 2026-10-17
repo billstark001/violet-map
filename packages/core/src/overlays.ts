@@ -167,7 +167,9 @@ export function validateFeature(value: unknown): asserts value is OverlayFeature
       if (a[0] === b[0] && a[1] === b[1]) fail('ring has duplicate adjacent vertices');
       if (orient(a, b, c) === 0 && (a[0] - b[0]) * (c[0] - b[0]) + (a[1] - b[1]) * (c[1] - b[1]) > 0)
         fail('ring has overlapping adjacent edges');
-      area += a[0] * b[1] - b[0] * a[1];
+      // Use a local origin so small areas near the world border do not cancel
+      // when subtracting products of large absolute coordinates.
+      area += orient(ring[0], a, b);
       for (let j = i + 1; j < n; j++)
         if (j !== i + 1 && !(i === 0 && j === n - 1) && intersects(a, b, ring[j], ring[(j + 1) % n]))
           fail('ring must not self-intersect or touch');

@@ -97,6 +97,20 @@ test('curve handles remain relative, closure does not smooth, degenerate open se
   assert.throws(() => parseLayerDocument(layer({ ...curve, nodes: [node, { ...node, out: [Infinity, 0, 0] }] })));
 });
 
+test('small valid areas near the world border survive area cancellation in either winding', () => {
+  for (const origin of [30_000_000, -30_000_000]) {
+    const ring = [
+      [origin, origin],
+      [origin + 0.125, origin],
+      [origin + 0.125, origin + 0.125],
+      [origin, origin + 0.125],
+    ];
+    for (const points of [ring, ring.toReversed()])
+      assert.doesNotThrow(() => parseLayerDocument(layer({ ...area, ring: points })));
+    assert.throws(() => parseLayerDocument(layer({ ...area, ring: ring.map(([x]) => [x, origin]) })));
+  }
+});
+
 test('map dimensions normalize and capabilities default new fields while retaining strict old fields', () => {
   const map = {
     schemaVersion: 1,

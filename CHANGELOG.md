@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Small valid overlay regions near the world border no longer fail zero-area validation because large absolute-coordinate products cancel; either winding remains supported.
+
 - Published map/layer/media metadata must match its object-key identity and revision; misplaced but otherwise valid JSON reports `CORRUPT_CONTENT` instead of serving another publication. Map discovery matches literal `.json` suffixes.
 
 - Mesh cache and pending-clone budgets count complete retained buffers instead of only attribute views, deduplicating shared attribute backing. The derived IndexedDB cache rebuilds once to remove obsolete byte accounting.
