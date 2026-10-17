@@ -60,7 +60,7 @@ export interface CameraPositionRequest {
   seq: number;
 }
 
-export interface ViewerProps {
+export interface ViewerOptions {
   world: string;
   overlayMapId?: string;
   overlaysEnabled?: boolean;
@@ -183,7 +183,7 @@ interface FrameContext {
   engine: Engine;
   manager: ChunkManager | null;
   latestStats: ChunkSchedulerStats;
-  props: ViewerProps;
+  props: ViewerOptions;
   capabilities: WorldCapabilities | null;
   state: FrameState;
 }
@@ -907,7 +907,7 @@ function updateActiveControls(engine: Engine, viewMode: ViewMode, dt: number) {
 function updateChunksAndTopMap(
   engine: Engine,
   manager: ChunkManager | null,
-  props: ViewerProps,
+  props: ViewerOptions,
   capabilities: WorldCapabilities | null,
   now: number,
 ): ViewerDimensionDef {
@@ -980,7 +980,7 @@ function applyFogRange(engine: Engine, topView: boolean, dense: boolean, viewDis
 function applyLightingAndFog(
   engine: Engine,
   manager: ChunkManager | null,
-  props: ViewerProps,
+  props: ViewerOptions,
   dimDef: ViewerDimensionDef,
   topView: boolean,
   skyColor: THREE.Color,
@@ -1045,7 +1045,7 @@ function maybeReportStats(
   latestStats: ChunkSchedulerStats,
   camera: THREE.Camera,
   viewMode: ViewMode,
-  onStats?: ViewerProps['onStats'],
+  onStats?: ViewerOptions['onStats'],
 ) {
   if (now - state.lastStatsReport <= 250) return;
   onStats?.(statsForCamera(latestStats, camera, viewMode));
@@ -1101,7 +1101,7 @@ function renderFrame({ engine, manager, latestStats, props, capabilities, state 
   engine.renderer.render(engine.scene, camera);
 }
 
-function createWorldManager(engine: Engine, props: ViewerProps): ChunkManager {
+function createWorldManager(engine: Engine, props: ViewerOptions): ChunkManager {
   const dimDef = dimensionDefinition(engine.dimensions, props.dimension);
   return new ChunkManager(engine.scene, engine.materials, engine.initPayload, {
     world: props.world,
@@ -1141,7 +1141,7 @@ function moveCameraToTarget(engine: Engine, target: CameraPositionRequest, viewM
   setControlsEnabled(engine, viewMode);
 }
 
-function updateManagerAfterCameraTarget(engine: Engine, manager: ChunkManager | null, props: ViewerProps) {
+function updateManagerAfterCameraTarget(engine: Engine, manager: ChunkManager | null, props: ViewerOptions) {
   const topView = isTopViewMode(props.viewMode);
   manager?.update(engine.activeCamera, performance.now(), true, topView, props.topClipRange);
 }
@@ -1164,8 +1164,9 @@ export class ViewerController {
 
   constructor(
     private readonly container: HTMLElement,
-    private props: ViewerProps,
+    private props: ViewerOptions,
     private readonly onError: (message: string) => void,
+    private readonly onReady?: () => void,
   ) {
     this.loadCapabilities(props.world);
     this.registerDiagnostics(props.onDiagnosticSnapshotProvider);
@@ -1203,6 +1204,7 @@ export class ViewerController {
           state,
         }),
       );
+      this.onReady?.();
     } catch (error) {
       if (!this.disposed) this.onError(error instanceof Error ? error.message : String(error));
     }
@@ -1219,7 +1221,7 @@ export class ViewerController {
       .catch(() => {});
   }
 
-  private registerDiagnostics(register: ViewerProps['onDiagnosticSnapshotProvider']): void {
+  private registerDiagnostics(register: ViewerOptions['onDiagnosticSnapshotProvider']): void {
     register?.(() =>
       this.engine
         ? diagnosticSnapshotForViewer(
@@ -1234,7 +1236,7 @@ export class ViewerController {
   }
 
   /** Update live options without recreating the renderer or animation loop. */
-  update(props: ViewerProps): void {
+  update(props: ViewerOptions): void {
     if (this.disposed) return;
     const previous = this.props;
     this.props = props;
@@ -1246,7 +1248,7 @@ export class ViewerController {
     this.syncEngine(previous);
   }
 
-  private syncEngine(previous: ViewerProps | null): void {
+  private syncEngine(previous: ViewerOptions | null): void {
     const engine = this.engine;
     if (!engine) return;
     const props = this.props;

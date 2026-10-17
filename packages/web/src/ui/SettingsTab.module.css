@@ -1,0 +1,22 @@
+.hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #a4afbc;
+  line-height: 1.5;
+}
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.token {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.message {
+  composes: text from './controls.module.css';
+  margin: 0;
+  overflow-wrap: anywhere;
+}

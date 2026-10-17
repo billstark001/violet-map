@@ -22,10 +22,16 @@ const FAST_KEYS = ['ControlLeft', 'ControlRight'];
 const FLY_KEYS = new Set([...HORIZONTAL_KEYS, ...FAST_KEYS, 'Space', 'ShiftLeft', 'ShiftRight']);
 const TOP_KEYS = new Set([...HORIZONTAL_KEYS, ...FAST_KEYS, 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 
-function isEditableTarget(target: EventTarget | null): boolean {
+function isInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName.toLowerCase();
-  return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
+  for (let element: HTMLElement | null = target; element; element = element.parentElement) {
+    if (
+      ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A', 'SUMMARY'].includes(element.tagName) ||
+      element.isContentEditable
+    )
+      return true;
+  }
+  return false;
 }
 
 /** Consume only camera keys, preserving editing shortcuts and clearing releases
@@ -35,7 +41,7 @@ function handleMovementKey(e: KeyboardEvent, keys: Set<string>, supported: Reado
     keys.delete(e.code);
     return;
   }
-  if (!supported.has(e.code) || isEditableTarget(e.target)) return;
+  if (e.defaultPrevented || !supported.has(e.code) || isInteractiveTarget(e.target)) return;
   e.preventDefault();
   keys.add(e.code);
 }
@@ -207,7 +213,7 @@ export class TopDownControls {
   };
   private readonly onPointerDown = (e: PointerEvent) => {
     if (!this.enabled) return;
-    if (isEditableTarget(e.target) || e.button !== 0) return;
+    if (isInteractiveTarget(e.target) || e.button !== 0) return;
     this.dragging = true;
     this.dom.setPointerCapture(e.pointerId);
     this.capturedPointerId = e.pointerId;

@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "jsx": "react-jsx", "lib": ["ES2022", "DOM", "WebWorker"] },
+  "compilerOptions": { "jsx": "react-jsx", "jsxImportSource": "preact", "lib": ["ES2022", "DOM", "WebWorker"] },
   "include": ["src"]
 }

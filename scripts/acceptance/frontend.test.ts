@@ -158,6 +158,28 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
   assert.ok(pixels.exposedEtag);
   assert.ok(pixels.sizes.every((alpha) => alpha > 0));
   assert.deepEqual(errors, []);
+  // Native Preact controls retain keyboard, input and camera behavior without
+  // replacing the independently owned canvas during UI changes.
+  const originalCanvas = await viewer.locator('canvas').first().elementHandle();
+  assert.equal(
+    await originalCanvas!.evaluate((canvas) => document.getElementById('root')!.contains(canvas)),
+    false,
+    'canvas must be outside the UI tree',
+  );
+  await viewer.getByRole('tab', { name: 'View', exact: true }).focus();
+  await viewer.keyboard.press('ArrowRight');
+  await viewer.getByRole('tab', { name: 'Settings', exact: true }).waitFor();
+  assert.equal(await viewer.getByRole('tab', { name: 'Settings', exact: true }).getAttribute('aria-selected'), 'true');
+  await viewer.getByRole('combobox', { name: 'Language', exact: true }).selectOption('zh-CN');
+  await viewer.getByRole('tab', { name: '视图', exact: true }).click();
+  await viewer.locator('#coord-x').fill('123');
+  await viewer.locator('#coord-x').press('Control+a');
+  assert.equal(await viewer.locator('#coord-x').evaluate((node: HTMLInputElement) => node.value), '123');
+  await viewer.getByRole('button', { name: '前往', exact: true }).click();
+  assert.equal(await originalCanvas!.evaluate((canvas) => canvas.isConnected), true);
+  await viewer.getByRole('tab', { name: '设置', exact: true }).click();
+  await viewer.getByRole('combobox', { name: '语言', exact: true }).selectOption('en');
+  await viewer.getByRole('tab', { name: 'View', exact: true }).click();
   const consolePage = await context.newPage();
   await consolePage.goto(admin.url);
   await consolePage.locator('#admin-token').fill('browser-service-token');

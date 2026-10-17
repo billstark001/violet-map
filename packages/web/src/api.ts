@@ -20,10 +20,14 @@ async function json<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export const fetchWorlds = () => json<WorldInfo[]>('api/worlds');
+export const fetchWorlds = (signal?: AbortSignal) => json<WorldInfo[]>('api/worlds', { signal });
+
 export const fetchBundle = () => json<AssetBundle>('api/assets/bundle');
+
 export const fetchBlockInfo = () => json<BlockInfoMap>('api/data/blocks');
+
 export const fetchBiomes = () => json<BiomeMap>('api/data/biomes');
+
 export const fetchDimensions = () => json<DimensionMap>('api/data/dimensions');
 
 function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {

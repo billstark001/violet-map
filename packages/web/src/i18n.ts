@@ -1,9 +1,12 @@
 import i18n from 'i18next';
-import { initReactI18next } from 'react-i18next';
+import type { TOptions } from 'i18next';
+import { signal } from '@preact/signals';
+import { browserStorage, readStored } from './state/settings';
 
 const resources = {
   en: {
     translation: {
+      retry: 'Retry',
       overlays: 'Map overlays',
       overlayMap: 'Overlay map',
       overlaysLoading: 'Loading overlays…',
@@ -92,6 +95,7 @@ const resources = {
   },
   'zh-CN': {
     translation: {
+      retry: '重试',
       overlays: '地图覆盖图层',
       overlayMap: '覆盖地图',
       overlaysLoading: '正在加载图层…',
@@ -182,6 +186,7 @@ const resources = {
     translation: {
       world: '世界',
       dimension: '維度',
+      retry: '重試',
       overlays: '地圖覆蓋圖層',
       overlayMap: '覆蓋地圖',
       overlaysLoading: '正在載入圖層…',
@@ -268,6 +273,7 @@ const resources = {
   },
   ja: {
     translation: {
+      retry: '再試行',
       overlays: '地図オーバーレイ',
       overlayMap: 'オーバーレイ地図',
       overlaysLoading: '読み込み中…',
@@ -357,21 +363,33 @@ const resources = {
 } as const;
 
 function initialLanguage(): string {
-  const saved = localStorage.getItem('violet-map:language');
+  const saved = readStored(browserStorage('localStorage'), 'violet-map:language');
   if (saved && resources[saved as keyof typeof resources]) return saved;
-  const lang = navigator.language;
+  const lang = typeof navigator === 'undefined' ? 'en' : navigator.language;
   if (lang.startsWith('zh-TW') || lang.startsWith('zh-HK') || lang.startsWith('zh-MO')) return 'zh-TW';
   if (lang.startsWith('zh')) return 'zh-CN';
   if (lang.startsWith('ja')) return 'ja';
   return 'en';
 }
 
-void i18n.use(initReactI18next).init({
+void i18n.init({
   resources,
   lng: initialLanguage(),
   fallbackLng: 'en',
   interpolation: { escapeValue: false },
 });
+
+export const language = signal(i18n.resolvedLanguage ?? i18n.language);
+
+i18n.on('languageChanged', () => {
+  language.value = i18n.resolvedLanguage ?? i18n.language;
+});
+
+/** Translate with a signal dependency so only rendered language consumers update. */
+export function t(key: string, options?: TOptions): string {
+  void language.value;
+  return i18n.t(key, options);
+}
 
 export const languageOptions = [
   { value: 'en', label: 'English' },

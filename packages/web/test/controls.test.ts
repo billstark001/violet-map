@@ -34,6 +34,7 @@ class FakeEvents {
 
 class FakeElement extends FakeEvents {
   isContentEditable = false;
+  parentElement: FakeElement | null = null;
   clientHeight = 100;
   private readonly captured = new Set<number>();
 
@@ -124,7 +125,7 @@ test('camera shortcuts prevent browser selection and scrolling without intercept
             true,
           );
         }
-        for (const tag of ['INPUT', 'TEXTAREA', 'SELECT', 'DIV']) {
+        for (const tag of ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A', 'SUMMARY', 'DIV']) {
           const target = new FakeElement(tag);
           if (tag === 'DIV') target.isContentEditable = true;
           assert.equal(documentEvents.emit('keydown', { code: 'KeyA', target, ctrlKey: true }).defaultPrevented, false);

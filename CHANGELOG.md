@@ -38,6 +38,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 - Server region, chunk, texture and manifest caches share bounded LRU accounting; oversized region/chunk buffers bypass retention without flushing useful residents. Texture-path and world-directory lookups are also bounded.
 - A 32 MiB / 64-entry CPU mesh cache reuses immutable full/LOD buffers before IndexedDB cloning. Disabling or clearing the mesh cache releases these references as well.
 - WebGL initialization, camera controls, world changes and disposal now live in an independent viewer controller. The frame timer uses page visibility to avoid movement jumps after background tabs resume.
+- Web uses native Preact, signals-backed translations and accessible native form/tab controls, removing React, Radix and react-i18next from the viewer. React aliases/compat are disabled and checked by the package-boundary tooling. Admin continues to use React.
+- Viewer UI is split into view/settings/diagnostic panels and camera fields with CSS Modules. Shared world loading, capabilities, settings and diagnostics use signals; the canvas lives outside the UI tree. World-list failures can be retried, URL overrides remain session-local, and blank camera inputs no longer silently become zero.
 - Removed deprecated `WorldReader`/`WorldStorage`, world-named local/S3/cache/scope class aliases, `createWorldStorage`, and `AppServices.storage`. Consumers now use object-storage names and `services.mounts.worlds`; the distinct remote `ServerWorldStorage` protocol remains supported.
 
 ### Added

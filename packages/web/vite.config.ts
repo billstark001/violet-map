@@ -1,4 +1,4 @@
-import react from '@vitejs/plugin-react';
+import preact from '@preact/preset-vite';
 import { createLogger, defineConfig, type Rolldown } from 'vite';
 
 type CodeSplittingGroup = NonNullable<
@@ -29,10 +29,11 @@ const vendorGroups: CodeSplittingGroup[] = [
     priority: 50,
   },
   { name: 'vendor-three', test: (id) => includesPackage(id, 'three'), priority: 40 },
-  { name: 'vendor-radix', test: (id) => normalizedModuleId(id).includes('/node_modules/@radix-ui/'), priority: 30 },
   {
-    name: 'vendor-react',
-    test: (id) => ['react', 'react-dom', 'i18next', 'react-i18next'].some((pkg) => includesPackage(id, pkg)),
+    name: 'vendor-ui',
+    test: (id) =>
+      ['preact', 'i18next'].some((pkg) => includesPackage(id, pkg)) ||
+      normalizedModuleId(id).includes('/node_modules/@preact/'),
     priority: 20,
   },
   { name: 'vendor-storage', test: (id) => includesPackage(id, 'idb'), priority: 10 },
@@ -50,17 +51,19 @@ function isKnownThirdPartyWarning(message: string): boolean {
 const logger = createLogger();
 const warn = logger.warn.bind(logger);
 const warnOnce = logger.warnOnce.bind(logger);
+
 logger.warn = (message, options) => {
   if (isKnownThirdPartyWarning(message)) return;
   warn(message, options);
 };
+
 logger.warnOnce = (message, options) => {
   if (isKnownThirdPartyWarning(message)) return;
   warnOnce(message, options);
 };
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [preact({ reactAliasesEnabled: false })],
   base: process.env.VITE_BASE_PATH ?? '/',
   customLogger: logger,
   build: {
