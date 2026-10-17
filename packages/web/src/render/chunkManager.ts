@@ -339,6 +339,7 @@ export class ChunkManager {
   private lastUpdate = 0;
   private lodReleaseStep: LodStep = DEFAULT_LOD_RELEASE_STEP;
   private disposed = false;
+  private readonly requests = new AbortController();
   private coverageSeq = 0;
   private chunkCoverage: ChunkSourceCoverage | null = null;
   private topDownView = false;
@@ -456,7 +457,7 @@ export class ChunkManager {
     const seq = ++this.coverageSeq;
     this.chunkCoverage = null;
     try {
-      const payload = await fetchChunkSourceCoverage(this.opts.world, this.opts.dimension);
+      const payload = await fetchChunkSourceCoverage(this.opts.world, this.opts.dimension, this.requests.signal);
       if (this.disposed || seq !== this.coverageSeq) return;
       this.chunkCoverage = normalizeChunkSourceCoverage(payload);
       let markedAbsent = 0;
@@ -1238,6 +1239,7 @@ export class ChunkManager {
   }
 
   private flushIoQueue(kind: IoQueueKind) {
+    if (this.disposed) return;
     while (true) {
       const keys = this.nextIoBatch(kind);
       if (!keys.length) break;
@@ -1280,7 +1282,7 @@ export class ChunkManager {
   }
 
   private scheduleIoFlush(kind: IoQueueKind, delayMs: number) {
-    if (this.ioTimer(kind)) return;
+    if (this.disposed || this.ioTimer(kind)) return;
     this.setIoTimer(
       kind,
       setTimeout(() => {
@@ -1546,6 +1548,7 @@ export class ChunkManager {
   }
 
   private async fetchHashBatch(keys: string[]) {
+    if (this.disposed) return;
     const entries = keys
       .map((key) => this.chunks.get(key))
       .filter((e): e is ChunkEntry => !!e && e.state === 'checking');
@@ -1559,7 +1562,9 @@ export class ChunkManager {
         this.opts.world,
         this.opts.dimension,
         entries.map((e) => ({ cx: e.cx, cz: e.cz })),
+        this.requests.signal,
       );
+      if (this.disposed) return;
       let missing = 0;
       for (const payload of payloads) {
         seen.add(this.key(payload.cx, payload.cz));
@@ -1571,6 +1576,7 @@ export class ChunkManager {
       }
       debugLog('chunk-manager', 'hash-batch', { requested: entries.length, returned: payloads.length, missing });
     } catch (error) {
+      if (this.disposed) return;
       debugLog('chunk-manager', 'hash-batch-error', {
         requested: entries.length,
         error: error instanceof Error ? error.message : String(error),
@@ -1621,6 +1627,7 @@ export class ChunkManager {
   }
 
   private async fetchBatch(keys: string[]) {
+    if (this.disposed) return;
     const entries = keys
       .map((key) => this.chunks.get(key))
       .filter((e): e is ChunkEntry => !!e && (e.state === 'hashed' || e.state === 'fetching'));
@@ -1635,7 +1642,9 @@ export class ChunkManager {
         this.opts.world,
         this.opts.dimension,
         entries.map((e) => ({ cx: e.cx, cz: e.cz })),
+        this.requests.signal,
       );
+      if (this.disposed) return;
       let missing = 0;
       let bytes = 0;
       for (const payload of payloads) {
@@ -1654,6 +1663,7 @@ export class ChunkManager {
         bytes,
       });
     } catch (error) {
+      if (this.disposed) return;
       debugLog('chunk-manager', 'chunk-batch-error', {
         requested: entries.length,
         error: error instanceof Error ? error.message : String(error),
@@ -2183,7 +2193,9 @@ export class ChunkManager {
   // #region Cleanup
 
   dispose() {
+    if (this.disposed) return;
     this.disposed = true;
+    this.requests.abort();
     this.coverageSeq++;
     for (const e of this.chunks.values()) this.removeMesh(e);
     this.chunks.clear();

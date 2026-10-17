@@ -37,6 +37,7 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 - Admin actions report HTTP/network failures without unhandled promises, serialize duplicate submissions and cancel stale panel reads. Restricted browser storage is tolerated during language/session initialization.
 - World names reject `.` and `..` before storage access; `.` previously normalized to the entire worlds mount during direct deletion/synchronization. Server, CLI and content registration share this validation. Invalid creation metadata is rejected before partial writes, and encoded world names no longer shift uploaded file paths.
 - Local filesystem-root mounts now resolve children correctly; S3 listings normalize root-equivalent prefixes consistently. Metadata caches reuse canonical paths instead of retaining duplicate spellings.
+- Disposing/switching a world aborts chunk/coverage/hash requests and suppresses late IO callbacks. Capability requests are also cancelled on world changes. Malformed batch payloads fail explicitly instead of marking valid terrain absent.
 
 ### Changed
 

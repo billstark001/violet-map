@@ -1085,6 +1085,7 @@ export class ViewerController {
   private latestStats: ChunkSchedulerStats = { ...EMPTY_CHUNK_SCHEDULER_STATS };
   private capabilities: WorldCapabilities | null = null;
   private capabilityGeneration = 0;
+  private capabilityRequest: AbortController | null = null;
   private disposed = false;
   private onResize: (() => void) | null = null;
   private frameState: FrameState | null = null;
@@ -1138,10 +1139,14 @@ export class ViewerController {
   }
 
   private loadCapabilities(world: string): void {
+    this.capabilityRequest?.abort();
+    this.capabilityRequest = null;
     const generation = ++this.capabilityGeneration;
     this.capabilities = null;
     if (!world) return;
-    void fetchWorldCapabilities(world)
+    const controller = new AbortController();
+    this.capabilityRequest = controller;
+    void fetchWorldCapabilities(world, controller.signal)
       .then((value) => {
         if (!this.disposed && generation === this.capabilityGeneration) this.capabilities = value;
       })
@@ -1228,6 +1233,8 @@ export class ViewerController {
     if (this.disposed) return;
     this.disposed = true;
     this.capabilityGeneration++;
+    this.capabilityRequest?.abort();
+    this.capabilityRequest = null;
     this.props.onDiagnosticSnapshotProvider?.(null);
     if (this.onResize) window.removeEventListener('resize', this.onResize);
     this.frameState?.timer.dispose();

@@ -30,50 +30,43 @@ export const fetchBiomes = () => json<BiomeMap>('api/data/biomes');
 
 export const fetchDimensions = () => json<DimensionMap>('api/data/dimensions');
 
-function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-}
-
-export async function fetchChunk(world: string, dim: string, cx: number, cz: number): Promise<ArrayBuffer | null> {
-  const res = await apiFetch(`api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/chunk/${cx}/${cz}`);
-  if (res.status === 204 || res.status === 404) return null;
-  if (!res.ok) throw new Error(`chunk fetch failed: ${res.status}`);
-  const payload = decode(new Uint8Array(await res.arrayBuffer())) as ChunkPayload;
-  return payload.data ? bytesToArrayBuffer(payload.data) : null;
-}
-
-export async function fetchChunkHashes(
+async function fetchChunkBatch<T>(
+  endpoint: 'chunk-hashes' | 'chunks',
   world: string,
   dim: string,
   chunks: { cx: number; cz: number }[],
+  signal?: AbortSignal,
+): Promise<T[]> {
+  if (!chunks.length) return [];
+  const body = encode({ chunks });
+  const res = await apiFetch(`api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/${endpoint}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/msgpack', accept: 'application/msgpack' },
+    body,
+    signal,
+  });
+  if (!res.ok) throw new Error(`${endpoint} fetch failed: ${res.status}`);
+  const payload = decode(new Uint8Array(await res.arrayBuffer())) as { chunks?: unknown } | null;
+  if (!payload || !Array.isArray(payload.chunks)) throw new Error(`invalid ${endpoint} response`);
+  return payload.chunks as T[];
+}
+
+export function fetchChunkHashes(
+  world: string,
+  dim: string,
+  chunks: { cx: number; cz: number }[],
+  signal?: AbortSignal,
 ): Promise<ChunkHashPayload[]> {
-  if (!chunks.length) return [];
-  const body = encode({ chunks });
-  const res = await apiFetch(`api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/chunk-hashes`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/msgpack', accept: 'application/msgpack' },
-    body,
-  });
-  if (!res.ok) throw new Error(`chunk hash fetch failed: ${res.status}`);
-  const payload = decode(new Uint8Array(await res.arrayBuffer())) as { chunks?: ChunkHashPayload[] };
-  return payload.chunks ?? [];
+  return fetchChunkBatch('chunk-hashes', world, dim, chunks, signal);
 }
 
-export async function fetchChunks(
+export function fetchChunks(
   world: string,
   dim: string,
   chunks: { cx: number; cz: number }[],
+  signal?: AbortSignal,
 ): Promise<ChunkPayload[]> {
-  if (!chunks.length) return [];
-  const body = encode({ chunks });
-  const res = await apiFetch(`api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/chunks`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/msgpack', accept: 'application/msgpack' },
-    body,
-  });
-  if (!res.ok) throw new Error(`chunk batch fetch failed: ${res.status}`);
-  const payload = decode(new Uint8Array(await res.arrayBuffer())) as { chunks?: ChunkPayload[] };
-  return payload.chunks ?? [];
+  return fetchChunkBatch('chunks', world, dim, chunks, signal);
 }
 
 export const fetchTextureAtlas = (ids: string[]) =>
@@ -85,16 +78,16 @@ export const fetchTextureAtlas = (ids: string[]) =>
 
 export const textureUrl = (id: string) => apiUrl(`api/assets/texture/${encodeURIComponent(id)}`);
 
-export const fetchWorldCapabilities = (world: string) =>
-  json<WorldCapabilities>(`api/worlds/${encodeURIComponent(world)}/capabilities`);
+export const fetchWorldCapabilities = (world: string, signal?: AbortSignal) =>
+  json<WorldCapabilities>(`api/worlds/${encodeURIComponent(world)}/capabilities`, { signal });
 
 export const fetchTopMapManifest = (world: string, dim: string, signal?: AbortSignal) =>
   json<TopMapDimensionManifest>(`api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/top-map/manifest`, {
     signal,
   });
 
-export const fetchChunkSourceCoverage = (world: string, dim: string) =>
-  json<ChunkCoverage>(`api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/chunk-coverage`);
+export const fetchChunkSourceCoverage = (world: string, dim: string, signal?: AbortSignal) =>
+  json<ChunkCoverage>(`api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/chunk-coverage`, { signal });
 
 export async function uploadDiagnosticSnapshot(snapshot: unknown, token?: string): Promise<DiagnosticUploadResponse> {
   const res = await apiFetch('api/diagnostics', {
