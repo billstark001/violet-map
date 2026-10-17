@@ -1,3 +1,4 @@
+import { packNormalizedUint8, packIndices, boundsOfPositions } from '../meshPacking.js';
 import { AIR, AIR_NAMES, type ChunkColumn } from '@violet-map/core/domain';
 import { type BlockInfo, type Direction, DIR_VEC } from '@violet-map/core/assets';
 import { type BlockStateRef } from '@violet-map/core/domain';
@@ -142,12 +143,6 @@ class LodBuilder {
   }
 }
 
-function packNormalizedUint8(values: Float32Array): Uint8Array {
-  const out = new Uint8Array(values.length);
-  for (let i = 0; i < values.length; i++) out[i] = Math.round(Math.min(1, Math.max(0, values[i])) * 255);
-  return out;
-}
-
 function packLodPositions(values: Float32Array): Uint16Array {
   const out = new Uint16Array(values.length);
   for (let i = 0; i < values.length; i += 3) {
@@ -158,27 +153,6 @@ function packLodPositions(values: Float32Array): Uint16Array {
     out[i + 2] = Math.round(Math.min(1, Math.max(0, values[i + 2] / LOD_POSITION_XZ_SCALE)) * 65535);
   }
   return out;
-}
-
-function packIndices(values: Uint32Array, vertexCount: number): Uint16Array | Uint32Array {
-  if (vertexCount > 65535) return values;
-  const out = new Uint16Array(values.length);
-  for (let i = 0; i < values.length; i++) out[i] = values[i];
-  return out;
-}
-
-function boundsOfPositions(values: Float32Array): { min: [number, number, number]; max: [number, number, number] } {
-  const min: [number, number, number] = [Infinity, Infinity, Infinity];
-  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
-  for (let i = 0; i < values.length; i += 3) {
-    min[0] = Math.min(min[0], values[i]);
-    min[1] = Math.min(min[1], values[i + 1]);
-    min[2] = Math.min(min[2], values[i + 2]);
-    max[0] = Math.max(max[0], values[i]);
-    max[1] = Math.max(max[1], values[i + 1]);
-    max[2] = Math.max(max[2], values[i + 2]);
-  }
-  return { min, max };
 }
 
 const FACE_DIRECTIONS: Direction[] = ['up', 'down', 'north', 'south', 'west', 'east'];

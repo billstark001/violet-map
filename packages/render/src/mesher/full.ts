@@ -1,3 +1,4 @@
+import { packNormalizedUint8, packIndices, packNormalizedUint16 } from '../meshPacking.js';
 import { type ModelBaker, type BakedQuad, MISSING_TEXTURE } from '../model.js';
 import { AIR, AIR_NAMES, type ChunkColumn } from '@violet-map/core/domain';
 import {
@@ -428,18 +429,6 @@ export function hash3(x: number, y: number, z: number): number {
   return h >>> 16;
 }
 
-function packNormalizedUint8(values: Float32Array): Uint8Array {
-  const out = new Uint8Array(values.length);
-  for (let i = 0; i < values.length; i++) out[i] = Math.round(Math.min(1, Math.max(0, values[i])) * 255);
-  return out;
-}
-
-function packNormalizedUint16(values: Float32Array): Uint16Array {
-  const out = new Uint16Array(values.length);
-  for (let i = 0; i < values.length; i++) out[i] = Math.round(Math.min(1, Math.max(0, values[i])) * 65535);
-  return out;
-}
-
 function packUint16(values: Float32Array): Uint16Array {
   const out = new Uint16Array(values.length);
   for (let i = 0; i < values.length; i++) out[i] = Math.round(Math.min(65535, Math.max(0, values[i])));
@@ -453,13 +442,6 @@ function packSectionPositions(values: Float32Array): Uint16Array {
       Math.min(1, Math.max(0, (values[i] - SECTION_POSITION_OFFSET) / SECTION_POSITION_SCALE)) * 65535,
     );
   }
-  return out;
-}
-
-function packIndices(values: Uint32Array, vertexCount: number): Uint16Array | Uint32Array {
-  if (vertexCount > 65535) return values;
-  const out = new Uint16Array(values.length);
-  for (let i = 0; i < values.length; i++) out[i] = values[i];
   return out;
 }
 
