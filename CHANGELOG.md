@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Mesh resource identities include biome definitions and dimension lighting rules, preventing stale IndexedDB meshes from retaining old tint/light after configuration edits and reloads.
+
 - Local game-data overrides now use the same atomic object replacement as mounted overrides; failed publication preserves the previous complete JSON file and cleans temporary files.
 
 - Biome edits validate finite climate values, complete RGB effects and supported modifiers before publication, and use bounded JSON reads; rejected edits leave the last usable data intact.

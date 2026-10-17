@@ -1,3 +1,4 @@
+import { buildRenderKey } from './resourceKey';
 import * as THREE from 'three';
 import type { BiomeMap, DimensionMap } from '@violet-map/core/domain';
 import { hexToRgb } from '@violet-map/render';
@@ -36,7 +37,6 @@ import {
 // Fluid UVs, exterior AO for partial models, and special-model transforms all
 // changed mesh bytes. Keep stale IndexedDB entries from reviving the old
 // water/stair artifacts after an upgrade.
-const MESH_CACHE_SCHEMA = 'mesh-v15-face-culling-visibility-union';
 const SKY_PLANE_FORWARD = new THREE.Vector3(0, 0, 1);
 const TOP_CAMERA_HEIGHT = 1024;
 const TOP_ORTHO_HEIGHT = 512;
@@ -295,47 +295,6 @@ function dimensionDefinition(dimensions: DimensionMap, dimension: string): Viewe
   return dimensions[dimension] ?? DEFAULT_DIMENSION_DEF;
 }
 
-function hashString(input: string, seed = 2166136261): number {
-  let h = seed;
-  for (let i = 0; i < input.length; i++) {
-    h ^= input.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-
-function hashBytes(bytes: Uint8Array | null, seed = 2166136261): number {
-  let h = seed;
-  if (!bytes) return h >>> 0;
-  for (const byte of bytes) {
-    h ^= byte;
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-
-function stableStringify(value: unknown): string {
-  if (!value || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
-  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(',')}}`;
-}
-
-function buildRenderKey(
-  atlasKey: string,
-  bundle: unknown,
-  blockInfo: unknown,
-  grassMap: Uint8Array | null,
-  foliageMap: Uint8Array | null,
-): string {
-  let h = hashString(`${MESH_CACHE_SCHEMA}:${atlasKey}`);
-  h = hashString(stableStringify(bundle), h);
-  h = hashString(stableStringify(blockInfo), h);
-  h = hashBytes(grassMap, h);
-  h = hashBytes(foliageMap, h);
-  return `${MESH_CACHE_SCHEMA}:${atlasKey}:${h.toString(36)}`;
-}
-
 async function loadViewerResources(): Promise<ViewerResources> {
   const [bundle, blockInfo, biomes, dimensions, grassMap, foliageMap] = await Promise.all([
     fetchBundle(),
@@ -357,7 +316,15 @@ async function loadViewerResources(): Promise<ViewerResources> {
     grassMap,
     foliageMap,
     atlas,
-    renderKey: buildRenderKey(atlas.cacheKey, bundle, blockInfo, grassMap, foliageMap),
+    renderKey: buildRenderKey({
+      atlasKey: atlas.cacheKey,
+      bundle,
+      blockInfo,
+      biomes,
+      dimensions,
+      grassMap,
+      foliageMap,
+    }),
   };
 }
 
