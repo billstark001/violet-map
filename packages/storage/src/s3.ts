@@ -6,6 +6,7 @@ import {
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
+  type GetObjectCommandOutput,
 } from '@aws-sdk/client-s3';
 import { cleanStoragePath } from './paths.js';
 import { validateReadRange } from './range.js';
@@ -23,22 +24,8 @@ function isMissingObject(error: unknown): boolean {
   return failure.name === 'NoSuchKey' || failure.name === 'NotFound' || failure.$metadata?.httpStatusCode === 404;
 }
 
-async function bodyToBytes(body: unknown): Promise<Uint8Array> {
-  if (!body) return new Uint8Array();
-  if (body instanceof Uint8Array) return body;
-  if (typeof (body as { transformToByteArray?: unknown }).transformToByteArray === 'function') {
-    return (body as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray();
-  }
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of body as AsyncIterable<Uint8Array | string>)
-    chunks.push(typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk);
-  const out = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
+async function bodyToBytes(body: GetObjectCommandOutput['Body']): Promise<Uint8Array> {
+  return body ? body.transformToByteArray() : new Uint8Array();
 }
 
 /** S3 and S3-compatible implementation. */
@@ -89,17 +76,16 @@ export class S3Storage implements ObjectStorage {
     validateReadRange(start, length);
     if (length === 0) return (await this.stat(filePath)) ? new Uint8Array() : null;
     try {
-      return bodyToBytes(
-        (
-          await this.client.send(
-            new GetObjectCommand({
-              Bucket: this.bucket,
-              Key: this.key(filePath),
-              Range: `bytes=${start}-${start + length - 1}`,
-            }),
-          )
-        ).Body,
+      const result = await this.client.send(
+        new GetObjectCommand({
+          Bucket: this.bucket,
+          Key: this.key(filePath),
+          Range: `bytes=${start}-${start + length - 1}`,
+        }),
       );
+      const bytes = await bodyToBytes(result.Body);
+      if (result.$metadata.httpStatusCode === 200) return bytes.slice(start, start + length);
+      return bytes.length > length ? bytes.slice(0, length) : bytes;
     } catch (error) {
       const failure = error as { name?: string; $metadata?: { httpStatusCode?: number } };
       if (failure.name === 'InvalidRange' || failure.$metadata?.httpStatusCode === 416)
