@@ -172,3 +172,39 @@ test('warm chunk reads reuse entity NBT and deleting a world releases its cached
   assert.equal(store.cacheStats().chunks, 1);
   assert.equal(store.cacheStats().chunkBytes, 4);
 });
+
+test('region-only batches avoid per-chunk negative HEADs and still discover newly written overrides', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-override-probes-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const { LocalStorage } = await import('@violet-map/storage/local');
+  const { CachedStorage } = await import('@violet-map/storage');
+  const { loadServerConfig } = await import('../src/configuration.js');
+  const { createWorldStore } = await import('../src/worldStore.js');
+  const { createTopMapService } = await import('../src/topMap.js');
+  let probes = 0;
+  class CountingStorage extends LocalStorage {
+    override async stat(file: string) {
+      if (file.includes('/chunks/')) probes++;
+      return super.stat(file);
+    }
+  }
+  const storage = new CachedStorage(new CountingStorage(root), { listTtlMs: 60_000 });
+  const config = loadServerConfig({ env: { DEPLOYMENT_PROFILE: 'public' }, cwd: root });
+  const store = createWorldStore(storage, createTopMapService(storage, config), config);
+  const region = new Uint8Array(3 * 4096);
+  const view = new DataView(region.buffer);
+  for (let index = 0; index < 128; index++) view.setUint32(index * 4, (2 << 8) | 1);
+  await storage.write('world/region/r.0.0.mca', region);
+  const chunks = Array.from({ length: 128 }, (_, index) => ({ cx: index % 32, cz: Math.floor(index / 32) }));
+  assert.ok(
+    (await store.getChunkMetadataBatch('world', 'minecraft:overworld', chunks)).every(
+      (meta) => meta.source === 'region',
+    ),
+  );
+  assert.equal(probes, 0);
+  await storage.write('world/chunks/minecraft%3Aoverworld/c.0.0.nbt', new Uint8Array([10, 0, 0, 0]));
+  assert.equal((await store.getChunkMetadata('world', 'minecraft:overworld', 0, 0)).source, 'chunk');
+  assert.equal(probes, 1, 'a cached empty directory listing must be invalidated by the write');
+  await storage.delete('world/chunks/minecraft%3Aoverworld/c.0.0.nbt');
+  assert.equal((await store.getChunkMetadata('world', 'minecraft:overworld', 0, 0)).source, 'region');
+});

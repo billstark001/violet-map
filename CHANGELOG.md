@@ -49,6 +49,7 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 - Removed deprecated `WorldReader`/`WorldStorage`, world-named local/S3/cache/scope class aliases, `createWorldStorage`, and `AppServices.storage`. Consumers now use object-storage names and `services.mounts.worlds`; the distinct remote `ServerWorldStorage` protocol remains supported.
 - Admin is split into a small application shell, independent panels and shared async/session controls. Account menus show verified identity/role, check sessions and revoke user credentials on logout; destructive actions use retryable confirmation dialogs.
 - S3 prefix deletion uses up to four concurrent SDK `DeleteObjects` batches of at most 1000 keys, rather than one request per object. Per-object errors in HTTP-success responses reject the operation explicitly.
+- Region-only chunk batches avoid one missing override-object stat/HEAD per coordinate. A shared directory probe discovers whether overrides exist, and normal writes invalidate that probe immediately.
 
 ### Added
 

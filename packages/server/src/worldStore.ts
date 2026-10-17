@@ -526,7 +526,16 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     chunks: { cx: number; cz: number }[],
   ): Promise<ChunkMetadata[]> {
     assertWorldName(world);
-    const [regionBase, entityBase] = await Promise.all([regionDir(world, dim), entityDir(world, dim)]);
+    const overrideDirectory = chunkOverrideDir(world, dim);
+    const [regionBase, entityBase, overrideDirectories] = await Promise.all([
+      regionDir(world, dim),
+      entityDir(world, dim),
+      worldStorage.listDirectories(`${world}/chunks`),
+    ]);
+    // Most archives contain only MCA regions. One delimiter listing avoids a
+    // missing-object HEAD for every requested chunk; writes invalidate the
+    // storage directory cache, and external changes follow its configured TTL.
+    const hasOverrides = overrideDirectories.includes(dimDirName(dim));
     const out = new Array<ChunkMetadata>(chunks.length);
     const byRegion = new Map<
       string,
@@ -539,8 +548,8 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
         return;
       }
 
-      const chunkPath = `${chunkOverrideDir(world, dim)}/c.${cx}.${cz}.nbt`;
-      const chunkInfo = await worldStorage.stat(chunkPath);
+      const chunkPath = `${overrideDirectory}/c.${cx}.${cz}.nbt`;
+      const chunkInfo = hasOverrides ? await worldStorage.stat(chunkPath) : null;
       if (chunkInfo) {
         const fileHash = sourceHashForInfo(chunkInfo);
         out[index] = { cx, cz, hash: fileHash, fileHash, source: 'chunk', sourcePath: chunkPath };
