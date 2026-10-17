@@ -12,10 +12,17 @@ function hasZlibHeader(data: Uint8Array): boolean {
   return (cmf & 0x0f) === 8 && cmf >> 4 <= 7 && ((cmf << 8) | flg) % 31 === 0;
 }
 
+/** Identify a supported NBT wrapper without decoding or validating its payload. */
+export function detectNbtCompression(data: Uint8Array): 'gzip' | 'zlib' | null {
+  if (data.length > 1 && data[0] === 0x1f && data[1] === 0x8b) return 'gzip';
+  return hasZlibHeader(data) ? 'zlib' : null;
+}
+
 /** Decode gzip or zlib wrapped NBT, leaving raw NBT unchanged. */
 export function decompress(data: Uint8Array): Uint8Array {
-  if (data.length > 1 && data[0] === 0x1f && data[1] === 0x8b) return pako.ungzip(data);
-  if (hasZlibHeader(data)) return pako.inflate(data);
+  const compression = detectNbtCompression(data);
+  if (compression === 'gzip') return pako.ungzip(data);
+  if (compression === 'zlib') return pako.inflate(data);
   return data;
 }
 

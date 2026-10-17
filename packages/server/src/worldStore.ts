@@ -3,11 +3,11 @@ import type { ObjectStorage } from '@violet-map/core/storage';
 import type { TopMapService } from './topMap.js';
 import type { WorldInfo, WorldFileManifestEntry, ChunkCoverage, ChunkHashPayload } from '@violet-map/core/contracts';
 import { createHash } from 'node:crypto';
-import { getRegionChunk } from '@violet-map/core/region';
 import { assertDimensionId } from '@violet-map/core/domain';
 import { mapWithConcurrency } from '@violet-map/core/async';
 import { LruCache } from '@violet-map/core/cache';
-import { parseNbt, decompress } from '@violet-map/core/nbt';
+import { parseNbt } from '@violet-map/core/nbt';
+import { decodeRegionChunk, decompressNbt } from './nbtCodec.js';
 import { createMinimalLevelDat } from './levelDat.js';
 import { cleanStoragePath } from '@violet-map/storage';
 import { type StoredFileInfo } from '@violet-map/core/storage';
@@ -638,7 +638,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
 
       if (meta.source === 'chunk') {
         const bytes = await worldStorage.read(meta.sourcePath);
-        const data = bytes ? decompress(bytes) : null;
+        const data = bytes ? await decompressNbt(bytes) : null;
         if (!data) return;
         out[index] = { ...meta, data, nbtHash: chunkPayloadHash(data) } as ChunkReadResult;
         return;
@@ -654,7 +654,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
       if (!region) return;
       for (const { meta, index } of items) {
         if (!meta.fileHash || !meta.sourcePath) continue;
-        const data = getRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31);
+        const data = await decodeRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31);
         if (!data) continue;
         out[index] = { ...meta, data, nbtHash: chunkPayloadHash(data) } as ChunkReadResult;
       }
@@ -674,7 +674,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
       for (const { meta, index } of items) {
         const result = out[index];
         if (!result) continue;
-        const entities = getRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31) ?? undefined;
+        const entities = (await decodeRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31)) ?? undefined;
         result.entities = entities;
         result.nbtHash = chunkPayloadHash(result.data, entities);
       }
@@ -719,12 +719,12 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
   }
 
   async function saveChunkNbt(world: string, dim: string, bytes: Uint8Array): Promise<{ x: number; z: number }> {
-    const root = parseNbt(bytes);
+    const data = await decompressNbt(bytes);
+    const root = parseNbt(data);
     const r = root.Level ?? root;
     const x = r.xPos,
       z = r.zPos;
     if (!isChunkCoordinate(x) || !isChunkCoordinate(z)) throw new Error('chunk NBT has invalid xPos/zPos');
-    const data = decompress(bytes);
     const filePath = `${chunkOverrideDir(world, dim)}/c.${x}.${z}.nbt`;
     await worldStorage.write(filePath, data, 'application/octet-stream');
     invalidatePath(filePath);

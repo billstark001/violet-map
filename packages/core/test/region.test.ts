@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { getRegionChunk } from '../src/region.js';
+import { getRegionChunk, getRegionChunkRecord } from '../src/region.js';
 
 function regionWithRecord(length: number, sectorCount = 1): Uint8Array {
   const bytes = new Uint8Array(3 * 4096);
@@ -13,7 +13,20 @@ function regionWithRecord(length: number, sectorCount = 1): Uint8Array {
 }
 
 test('region reader accepts an in-sector uncompressed record', () => {
-  assert.deepEqual(getRegionChunk(regionWithRecord(2), 0, 0), new Uint8Array([42]));
+  const region = regionWithRecord(2);
+  const record = getRegionChunkRecord(region, 0, 0)!;
+  assert.equal(record.compression, 3);
+  assert.equal(record.payload.buffer, region.buffer);
+  const decoded = getRegionChunk(region, 0, 0)!;
+  assert.deepEqual(decoded, new Uint8Array([42]));
+  assert.notEqual(decoded.buffer, region.buffer);
+});
+
+test('both region readers reject unsupported compression consistently', () => {
+  const region = regionWithRecord(2);
+  region[2 * 4096 + 4] = 4;
+  assert.throws(() => getRegionChunkRecord(region, 0, 0), /Unknown region compression type 4/);
+  assert.throws(() => getRegionChunk(region, 0, 0), /Unknown region compression type 4/);
 });
 
 test('region reader ignores truncated or sector-overlapping records', () => {

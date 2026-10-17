@@ -4,12 +4,20 @@ const REGION_HEADER_BYTES = 8192;
 const REGION_SECTOR_BYTES = 4096;
 const REGION_SIDE_CHUNKS = 32;
 
+export interface RegionChunkRecord {
+  /** Anvil compression id: gzip, zlib or uncompressed NBT. */
+  compression: 1 | 2 | 3;
+  /** Borrowed view into the region; copy it before retaining beyond the region's lifetime. */
+  payload: Uint8Array;
+}
+
 /**
- * Return a chunk's decompressed NBT from an Anvil `.mca` region, or null when
- * its location is absent or its declared record extends outside its sectors.
- * Unknown compression types and invalid compressed payloads throw.
+ * Locate a validated Anvil record without decoding it, allowing platform-native
+ * codecs to share the same sector, length and compression validation.
+ * Returns null when its location is absent or its declared record extends outside its sectors.
+ * Unknown compression types throw; the payload itself has not been validated.
  */
-export function getRegionChunk(region: Uint8Array, localX: number, localZ: number): Uint8Array | null {
+export function getRegionChunkRecord(region: Uint8Array, localX: number, localZ: number): RegionChunkRecord | null {
   if (
     region.length < REGION_HEADER_BYTES ||
     !Number.isInteger(localX) ||
@@ -33,16 +41,24 @@ export function getRegionChunk(region: Uint8Array, localX: number, localZ: numbe
     return null;
   }
   const compression = view.getUint8(base + 4);
+  if (compression !== 1 && compression !== 2 && compression !== 3)
+    throw new Error(`Unknown region compression type ${compression}`);
   const payload = region.subarray(base + 5, base + 4 + length);
-  switch (compression) {
+  return { compression, payload };
+}
+
+/** Return owned decompressed NBT, or null for an absent/truncated Anvil record.
+ * Unsupported compression and invalid compressed data throw. */
+export function getRegionChunk(region: Uint8Array, localX: number, localZ: number): Uint8Array | null {
+  const record = getRegionChunkRecord(region, localX, localZ);
+  if (!record) return null;
+  switch (record.compression) {
     case 1:
-      return pako.ungzip(payload);
+      return pako.ungzip(record.payload);
     case 2:
-      return pako.inflate(payload);
+      return pako.inflate(record.payload);
     case 3:
-      return payload.slice();
-    default:
-      throw new Error(`Unknown region compression type ${compression}`);
+      return record.payload.slice();
   }
 }
 
