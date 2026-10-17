@@ -12,7 +12,7 @@ interface RenderKeyResources {
   foliageMap: Uint8Array | null;
 }
 
-const MESH_CACHE_SCHEMA = 'mesh-v16-biome-dimension-resources';
+const MESH_CACHE_SCHEMA = 'mesh-v17-model-and-coordinate-fixes';
 
 function stableStringify(value: unknown): string {
   if (!value || typeof value !== 'object') return JSON.stringify(value) ?? 'null';

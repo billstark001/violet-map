@@ -19,6 +19,7 @@ test('biome and dimension edits miss stale persistent meshes while reordered JSO
   await clearMeshCache();
   t.after(() => clearMeshCache());
   const renderKey = buildRenderKey(resources);
+  assert.ok(renderKey.startsWith('mesh-v17-model-and-coordinate-fixes:'));
   assert.equal(buildRenderKey({ ...resources, bundle: { blockstates: {}, models: {} } }), renderKey);
   const parts = { world: 'world', dimension: 'overworld', renderKey, cx: 0, cz: 0, contentKey: 'same-nbt' };
   await putCachedFull(parts, []);
