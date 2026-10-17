@@ -1,6 +1,9 @@
 import { toLongs, toBytes } from './binary.js';
 import { BlockStateRef, normalizeId } from '@violet-map/core/domain';
 
+const HEIGHTMAP_VALUES = 16 * 16;
+const MAX_HEIGHTMAP_BITS = 16;
+
 export const AIR: BlockStateRef = Object.freeze({ name: 'minecraft:air', properties: {} });
 export const AIR_NAMES = new Set(['minecraft:air', 'minecraft:cave_air', 'minecraft:void_air']);
 
@@ -171,7 +174,7 @@ export class ChunkColumn {
   }
   /** 最高非空气方块上方一格的 y（无方块返回 minY）。 */
   heightAt(x: number, z: number): number {
-    if (this.heightMap) return this.heightMap.get((z << 4) | x) + this.heightMapOffset;
+    if (this.heightMap) return this.heightMap.get(((z & 15) << 4) | (x & 15)) + this.heightMapOffset;
     return this.scanHeightAt(x, z);
   }
   /** 保证 [minSectionY, maxSectionY] 范围内每个 section 存在（光照引擎需要空气 section 承载亮度）。 */
@@ -237,9 +240,10 @@ function hasAnyLight(a: Uint8Array | null): boolean {
   return false;
 }
 
-function calibrateHeightMap(col: ChunkColumn) {
-  if (!col.heightMap) return;
+function calibrateHeightMap(col: ChunkColumn, minSectionY: unknown): number {
+  if (!col.heightMap) return Infinity;
   const offsets = Array.from(new Set([0, 1, col.minY, col.minY + 1]));
+  if (Number.isSafeInteger(minSectionY)) offsets.push((minSectionY as number) * 16);
   const samples: [number, number][] = [
     [0, 0],
     [4, 4],
@@ -265,6 +269,29 @@ function calibrateHeightMap(col: ChunkColumn) {
     }
   }
   col.heightMapOffset = bestOffset;
+  return bestScore;
+}
+
+/** Infer non-spanning packing from record length, including light-only boundary
+ * sections that can make the observed section range differ from build height. */
+function restoreHeightMap(col: ChunkColumn, value: unknown, minSectionY: unknown): void {
+  let data: BigUint64Array;
+  try {
+    data = toLongs(value);
+  } catch {
+    return;
+  } // Height maps are optional acceleration; terrain remains usable.
+  const guessedBits = Math.ceil(Math.log2(col.maxY - col.minY + 1));
+  const candidates = Array.from({ length: MAX_HEIGHTMAP_BITS }, (_, i) => i + 1)
+    .filter((bits) => Math.ceil(HEIGHTMAP_VALUES / Math.floor(64 / bits)) === data.length)
+    .sort((a, b) => Math.abs(a - guessedBits) - Math.abs(b - guessedBits));
+  for (const bits of candidates) {
+    col.heightMap = new BitArray(bits, data);
+    if (calibrateHeightMap(col, minSectionY) === 0) return;
+  }
+  // Fall back when sampled heights disagree or the packed length is invalid.
+  col.heightMap = null;
+  col.heightMapOffset = 0;
 }
 
 /** 解析 1.18+ 区块 NBT（simplify 后的对象）。 */
@@ -306,14 +333,8 @@ export function parseChunkColumn(root: any): ChunkColumn {
       col.maxSectionY = Math.max(col.maxSectionY, sy);
     }
   }
-  const hm = r.HeightMaps?.WORLD_SURFACE;
-  if (hm) {
-    const height = col.maxY - col.minY;
-    if (height > 0) {
-      col.heightMap = new BitArray(Math.ceil(Math.log2(height + 1)), toLongs(hm));
-      calibrateHeightMap(col);
-    }
-  }
+  const hm = r.Heightmaps?.WORLD_SURFACE;
+  if (hm && col.maxY > col.minY) restoreHeightMap(col, hm, r.yPos);
   // Names changed over time; supporting both costs little and lets modern
   // renderer resources work for legacy chunks too.
   appendEntityRecords(col.blockEntities, r.block_entities ?? r.BlockEntities ?? r.TileEntities, true);

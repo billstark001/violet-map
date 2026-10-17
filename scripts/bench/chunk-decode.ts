@@ -1,30 +1,14 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { gunzip, gunzipSync, inflate, inflateSync } from 'node:zlib';
-import { getRegionChunk, getRegionChunkRecord } from '../../packages/core/src/region.js';
+import { getRegionChunk } from '../../packages/core/src/region.js';
+import { loadHardRegionSamples } from './helpers/region-samples.js';
 
 // Select only the eight largest compressed records from each explicitly supplied
 // region. No world files are copied into the repository or benchmark output.
-const paths = process.argv.slice(2);
-assert.ok(paths.length > 0, 'provide one or two representative .mca paths');
-assert.ok(paths.length <= 2, 'at most two regions are needed for this benchmark');
 const inflateAsync = promisify(inflate);
 const gunzipAsync = promisify(gunzip);
-const samples = [];
-for (const path of paths) {
-  const region = await readFile(resolve(path));
-  const records = [];
-  for (let z = 0; z < 32; z++) {
-    for (let x = 0; x < 32; x++) {
-      const record = getRegionChunkRecord(region, x, z);
-      if (record) records.push({ region, x, z, ...record });
-    }
-  }
-  samples.push(...records.toSorted((a, b) => b.payload.byteLength - a.payload.byteLength).slice(0, 8));
-}
-assert.ok(samples.length > 0, 'regions contain no supported chunks');
+const samples = await loadHardRegionSamples(process.argv.slice(2));
 const codecs = {
   pako: (sample: (typeof samples)[number]) => getRegionChunk(sample.region, sample.x, sample.z)!,
   'node-sync': (sample: (typeof samples)[number]) => {
