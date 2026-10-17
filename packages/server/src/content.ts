@@ -16,7 +16,6 @@ import {
   type MediaVersion,
   type OverlayManifest,
 } from '@violet-map/core/overlays';
-import { inspectMedia } from './mediaInspection.js';
 import type { ByteRange } from './httpRange.js';
 
 /** Published metadata with deferred blob access; ranges are inclusive and must be in bounds. */
@@ -368,6 +367,8 @@ export class ContentService {
   ): Promise<{ document: MediaDocument; version: MediaVersion }> {
     const assetId = id ?? randomUUID();
     contentId(assetId);
+    // Read-only/content-disabled servers do not need native image decoders.
+    const { inspectMedia } = await import('./mediaInspection.js');
     const version = await inspectMedia(assetId, bytes, type);
     const candidate = parseMediaDocument({
       schemaVersion: 1,

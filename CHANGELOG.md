@@ -113,6 +113,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Changed
 
+- Media inspection and its native/XML decoder dependencies load on the first media import, avoiding their startup memory cost for read-only or content-disabled servers.
+
 - Registered entity models reuse the same baked-variant cache as block models, avoiding repeated base-geometry baking for each instance while keeping transforms independent.
 
 - Binary HTTP responses reuse exact ordinary byte views across media, textures, top-map, storage and MessagePack routes, avoiding redundant whole-payload copies and using Hono Node's typed-array response path. Shared backing is copied before delivery.

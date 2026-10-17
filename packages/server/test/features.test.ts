@@ -4,11 +4,20 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { encode } from '@msgpack/msgpack';
+import { createRequire } from 'node:module';
 import { createApp } from '../src/app.js';
 import { createServices } from '../src/services.js';
 import { createAuthorization } from '../src/auth.js';
 import { loadServerConfig } from '../src/configuration.js';
 import type { UserService } from '../src/users.js';
+
+test('server application imports do not eagerly load optional media inspection runtimes', () => {
+  const modules = Object.keys(createRequire(import.meta.url).cache);
+  assert.equal(
+    modules.some((file) => /\/(?:sharp|@img\/sharp[^/]+|gltf-validator|@xmldom\/xmldom)\//.test(file)),
+    false,
+  );
+});
 
 test('all feature combinations remove disabled routes even with root authorization', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-features-'));
