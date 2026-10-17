@@ -46,6 +46,7 @@ jobs:
       - run: pnpm test:release
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:overlays
+      - run: pnpm test:transparency
       - run: VITE_BASE_PATH=/map/ pnpm --filter @violet-map/web build
       - run: VITE_BASE_PATH=/console/ pnpm --filter @violet-map/admin build
       - run: pnpm test:frontend

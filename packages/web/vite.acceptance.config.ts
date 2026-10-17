@@ -13,6 +13,7 @@ export default defineConfig({
       input: {
         viewer: fileURLToPath(new URL('./index.html', import.meta.url)),
         harness: fileURLToPath(new URL('./test/overlay-browser.html', import.meta.url)),
+        transparency: fileURLToPath(new URL('./test/transparency-browser.html', import.meta.url)),
       },
     },
   },

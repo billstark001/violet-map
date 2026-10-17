@@ -35,6 +35,7 @@ pnpm test:containers
 pnpm exec playwright install chromium
 pnpm test:frontend
 pnpm test:overlays
+pnpm test:transparency
 ```
 
 To exercise the real OS credential store on a machine with an unlocked keychain, run `pnpm --filter @violet-map/cli test:keychain` explicitly. This integration test uses a temporary CLI home and its isolated random keychain namespace, checks native write/read/update/delete and the application's replacement lifecycle, and verifies cleanup of every test entry and the temporary directory. It never reads or changes existing CLI credentials. It is excluded from `pnpm test` and CI because those environments may not have an accessible credential store.
