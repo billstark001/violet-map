@@ -1,10 +1,10 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import { LruCache } from '@violet-map/core/cache';
-import type { MeshBuffers } from '@violet-map/render';
+import { meshByteLength, type MeshBuffers } from '@violet-map/render';
 import type { SectionMeshMsg } from './worker/protocol';
 
 const DB_NAME = 'violet-map-mesh-cache';
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 const STORE = 'meshes';
 const MAX_ENTRIES = 1000;
 const MAX_BYTES = 192 * 1024 * 1024;
@@ -68,10 +68,12 @@ const memory = new LruCache<string, MeshCacheRecord>({
 function database() {
   if (!dbPromise) {
     const pending = openDB<MeshCacheDb>(DB_NAME, DB_VERSION, {
-      upgrade(db, _oldVersion, _newVersion, tx) {
+      upgrade(db, oldVersion, _newVersion, tx) {
         const store = db.objectStoreNames.contains(STORE)
           ? tx.objectStore(STORE)
           : db.createObjectStore(STORE, { keyPath: 'key' });
+        // Old records counted view lengths and could hide large retained buffers.
+        if (oldVersion > 0) store.clear();
         if (!store.indexNames.contains('accessedAt')) store.createIndex('accessedAt', 'accessedAt');
         if (!store.indexNames.contains('createdAt')) store.createIndex('createdAt', 'createdAt');
         if (!store.indexNames.contains('bytes')) store.createIndex('bytes', 'bytes');
@@ -118,23 +120,11 @@ function cacheKey(parts: MeshCacheKeyParts): string {
     .join('|');
 }
 
-function bufferBytes(b: MeshBuffers): number {
-  return (
-    b.positions.byteLength +
-    (b.uvs?.byteLength ?? 0) +
-    (b.atlasRects?.byteLength ?? 0) +
-    b.colors.byteLength +
-    b.lights.byteLength +
-    (b.animations?.byteLength ?? 0) +
-    b.indices.byteLength
-  );
-}
-
 function sectionBytes(sections: SectionMeshMsg[]): number {
   let total = 0;
   for (const section of sections) {
     for (const buffers of Object.values(section.layers)) {
-      if (buffers) total += bufferBytes(buffers);
+      if (buffers) total += meshByteLength(buffers, 'retained');
     }
   }
   return total;
@@ -265,7 +255,7 @@ export async function putCachedLod(
     mode: 'lod',
     createdAt: now,
     accessedAt: now,
-    bytes: lod ? bufferBytes(lod) : 0,
+    bytes: lod ? meshByteLength(lod, 'retained') : 0,
     lod,
   });
 }

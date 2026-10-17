@@ -7,6 +7,7 @@ import {
 } from '@violet-map/core/assets';
 import { type ChunkColumn, appendChunkEntities, parseChunkColumn } from '@violet-map/core/domain';
 import {
+  meshByteLength,
   ChunkNeighborhood,
   SECTION_VISIBILITY_ALL,
   type MeshBuffers,
@@ -210,23 +211,10 @@ function transfersOf(buffers: (MeshBuffers | null | undefined)[]): Transferable[
   return t;
 }
 
-function meshBytes(b: MeshBuffers | null | undefined): number {
-  if (!b) return 0;
-  return (
-    b.positions.byteLength +
-    (b.uvs?.byteLength ?? 0) +
-    (b.atlasRects?.byteLength ?? 0) +
-    b.colors.byteLength +
-    b.lights.byteLength +
-    (b.animations?.byteLength ?? 0) +
-    b.indices.byteLength
-  );
-}
-
 function sectionBytes(sections: SectionMeshMsg[]): number {
   let total = 0;
   for (const section of sections) {
-    for (const buffers of Object.values(section.layers)) total += meshBytes(buffers);
+    for (const buffers of Object.values(section.layers)) if (buffers) total += meshByteLength(buffers);
   }
   return total;
 }
@@ -469,7 +457,11 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
             version: msg.version,
             step: msg.step,
             mesh,
-            profile: { meshBytes: meshBytes(mesh), meshMs: performance.now() - started, storedColumns: columns.size },
+            profile: {
+              meshBytes: mesh ? meshByteLength(mesh) : 0,
+              meshMs: performance.now() - started,
+              storedColumns: columns.size,
+            },
           },
           transfersOf([mesh]),
         );

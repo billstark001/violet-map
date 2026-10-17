@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { openDB } from 'idb';
 import { getCachedFull, getMeshCacheStats } from '../src/meshCache.js';
 
 test('a failed IndexedDB open does not leave a permanent rejected database promise', async () => {
@@ -14,6 +15,22 @@ test('a failed IndexedDB open does not leave a permanent rejected database promi
     if (previous) Object.defineProperty(globalThis, 'indexedDB', previous);
     else delete (globalThis as { indexedDB?: IDBFactory }).indexedDB;
   }
+});
+
+test('upgrading the derived mesh cache discards records with obsolete byte accounting', async () => {
+  await import('fake-indexeddb/auto');
+  const old = await openDB('violet-map-mesh-cache', 6, {
+    upgrade(db) {
+      db.createObjectStore('meshes', { keyPath: 'key' });
+    },
+  });
+  await old.put('meshes', { key: 'obsolete', bytes: 1 });
+  old.close();
+  assert.equal(
+    await getCachedFull({ world: 'upgrade', dimension: 'overworld', renderKey: 'r', cx: 0, cz: 0, contentKey: 'c' }),
+    null,
+  );
+  assert.deepEqual(await getMeshCacheStats(), { entries: 0, bytes: 0 });
 });
 
 test('warm mesh buffers are reused, cold reads remain isolated, and disable/clear release memory residents', async () => {
@@ -75,6 +92,44 @@ test('warm memory mesh retention evicts old keys even for empty meshes', async (
     }
     assert.equal(await getCachedFull({ ...parts, cx: 64 }), last);
     assert.notEqual(await getCachedFull(parts), first, 'an evicted mesh must be read as a new IDB clone');
+  } finally {
+    await clearMeshCache();
+  }
+});
+
+test('mesh caches count retained capacity instead of tiny views into oversized buffers', async () => {
+  await import('fake-indexeddb/auto');
+  const { clearMeshCache, putCachedFull } = await import('../src/meshCache.js');
+  const parts = { world: 'backing', dimension: 'overworld', renderKey: 'r', cx: 0, cz: 0, contentKey: 'c' };
+  const makeSections = () => {
+    const buffer = new ArrayBuffer(9 * 1024 ** 2);
+    return [
+      {
+        sy: 0,
+        visibility: 0,
+        layers: {
+          opaque: {
+            positions: new Uint16Array(buffer, 0, 3),
+            colors: new Uint8Array(buffer, 6, 3),
+            lights: new Uint8Array(buffer, 9, 2),
+            indices: new Uint16Array(buffer, 12, 3),
+          },
+        },
+      },
+    ];
+  };
+  await clearMeshCache();
+  try {
+    const first = makeSections();
+    await putCachedFull(parts, first);
+    let last = first;
+    for (let cx = 1; cx <= 3; cx++) {
+      last = makeSections();
+      await putCachedFull({ ...parts, cx }, last);
+    }
+    assert.equal(await getCachedFull({ ...parts, cx: 3 }), last);
+    assert.notEqual(await getCachedFull(parts), first, '36 MiB of backing exceeds the 32 MiB memory cache');
+    assert.equal((await getMeshCacheStats()).bytes, 36 * 1024 ** 2, 'shared attributes count their backing only once');
   } finally {
     await clearMeshCache();
   }

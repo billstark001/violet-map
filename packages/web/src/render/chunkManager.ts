@@ -1,3 +1,4 @@
+import { meshByteLength } from '@violet-map/render';
 import * as THREE from 'three';
 import type { DimensionDef } from '@violet-map/core/domain';
 import type { MeshBuffers } from '@violet-map/render';
@@ -2100,14 +2101,7 @@ export class ChunkManager {
     }
     return {
       geometry: g,
-      bytes:
-        b.positions.byteLength +
-        (b.uvs?.byteLength ?? 0) +
-        (b.atlasRects?.byteLength ?? 0) +
-        b.colors.byteLength +
-        b.lights.byteLength +
-        (b.animations?.byteLength ?? 0) +
-        b.indices.byteLength,
+      bytes: meshByteLength(b),
     };
   }
 

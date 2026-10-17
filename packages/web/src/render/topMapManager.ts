@@ -1,3 +1,4 @@
+import { meshByteLength } from '@violet-map/render';
 import * as THREE from 'three';
 import { candidateRegionCoords, type RegionCoordinate } from './tileCandidates';
 import { buildTopMapMesh, topMapCoverageChunkCount, topMapCoverageKeyFromMask } from '@violet-map/render/top-map/mesh';
@@ -110,17 +111,6 @@ function prepareTopMap(payload: TopMapTilePayload): TopMapData {
   };
 }
 
-function geometryBytes(b: MeshBuffers): number {
-  return (
-    b.positions.byteLength +
-    (b.uvs?.byteLength ?? 0) +
-    (b.atlasRects?.byteLength ?? 0) +
-    b.colors.byteLength +
-    b.lights.byteLength +
-    b.indices.byteLength
-  );
-}
-
 function buildGeometry(b: MeshBuffers): { geometry: THREE.BufferGeometry; bytes: number } {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(b.positions, 3, true));
@@ -141,7 +131,7 @@ function buildGeometry(b: MeshBuffers): { geometry: THREE.BufferGeometry; bytes:
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
   }
-  return { geometry, bytes: geometryBytes(b) };
+  return { geometry, bytes: meshByteLength(b) };
 }
 
 function buildTileGeometry(
