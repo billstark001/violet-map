@@ -60,8 +60,8 @@ const fields = [
   'limits.atlasQueue',
 ];
 
-export function configurationSettings(options: ConfigurationOptions) {
-  const env = options.env ?? process.env;
+export function configurationSettings(options: ConfigurationOptions & { env: NodeJS.ProcessEnv }) {
+  const env = options.env;
   const cwd = options.cwd ?? process.cwd();
   const yaml = findYamlConfig({ env, cwd, file: options.configFile });
   const base = yaml ? path.dirname(yaml.file) : cwd;

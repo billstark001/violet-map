@@ -17,7 +17,7 @@ const presets = {
 };
 
 export function loadServerConfig(options: ConfigurationOptions = {}) {
-  const setting = configurationSettings(options);
+  const setting = configurationSettings({ ...options, env: options.env ?? process.env });
   const { env, yamlValue, string, number, boolean, filePath, list } = setting;
   const profile = string('DEPLOYMENT_PROFILE', 'full', 'deployment.profile');
   if (!Object.hasOwn(presets, profile)) throw new Error('DEPLOYMENT_PROFILE must be public, sync, or full');

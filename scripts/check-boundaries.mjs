@@ -108,7 +108,7 @@ for (const [owner, dependencies] of Object.entries(allowed)) {
     inspect(source);
     if (
       owner === 'server' &&
-      !['configuration.ts', 'configYaml.ts', 'index.ts', 'db/maintenance.ts'].some(
+      !['configuration.ts', 'adminConfiguration.ts', 'configYaml.ts', 'index.ts', 'db/maintenance.ts'].some(
         (name) => file === `packages/server/src/${name}`,
       ) &&
       /process\.env/.test(source.text)

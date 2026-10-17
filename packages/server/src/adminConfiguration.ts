@@ -6,7 +6,7 @@ import type { RootOptions } from './users.js';
 export function readAdminConfig(
   options: ConfigurationOptions & Partial<DatabaseOptions> = {},
 ): DatabaseOptions & RootOptions {
-  const { env, yamlValue, filePath } = configurationSettings(options);
+  const { env, yamlValue, filePath } = configurationSettings({ ...options, env: options.env ?? process.env });
   const databaseUrl = options.databaseUrl ?? env.DATABASE_URL;
   if (
     !databaseUrl &&
