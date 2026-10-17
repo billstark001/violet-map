@@ -70,3 +70,38 @@ test('S3 directory prefixes never list or delete same-name or sibling objects; w
     ['PutObjectCommand'],
   );
 });
+
+test('metadata caches bound unique misses and total list items without changing returned data', async () => {
+  let calls = 0;
+  const storage = {
+    kind: 'local' as const,
+    stat: async () => {
+      calls++;
+      return null;
+    },
+    list: async (prefix = '') => {
+      calls++;
+      return Array.from({ length: prefix === 'large' ? 4 : 1 }, (_, i) => ({ path: `${prefix}/${i}`, size: i }));
+    },
+    listDirectories: async () => {
+      calls++;
+      return ['one', 'two'];
+    },
+  } as unknown as import('@violet-map/core/storage').ObjectStorage;
+  const cache = new CachedStorage(storage, { maxEntries: 2, maxListItems: 3 });
+  await cache.stat('a');
+  await cache.stat('b');
+  await cache.stat('a');
+  assert.equal(calls, 2);
+  await cache.stat('c');
+  await cache.stat('b');
+  assert.equal(calls, 4, 'least-recently-used negative probes must be evicted');
+  calls = 0;
+  assert.equal((await cache.list('large')).length, 4);
+  assert.equal((await cache.list('large')).length, 4);
+  assert.equal(calls, 2, 'oversized lists must not be retained');
+  await cache.listDirectories('a');
+  await cache.listDirectories('b');
+  await cache.listDirectories('a');
+  assert.equal(calls, 5, 'list item budgets apply across all cached prefixes');
+});

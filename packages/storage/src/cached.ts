@@ -1,9 +1,14 @@
 import type { StoredFileInfo, ObjectStorage } from '@violet-map/core/storage';
+import { LruCache } from '@violet-map/core/cache';
 
 export interface StorageCacheOptions {
   /** Cache metadata probes; defaults are intentionally short to tolerate external writers. */
   statTtlMs?: number;
   listTtlMs?: number;
+  /** Maximum keys retained per metadata cache; defaults to 4096. */
+  maxEntries?: number;
+  /** Maximum total items retained in each list cache; defaults to 65536. */
+  maxListItems?: number;
 }
 
 interface CacheEntry<T> {
@@ -20,9 +25,9 @@ export class CachedStorage implements ObjectStorage {
   readonly kind: ObjectStorage['kind'];
   private readonly statTtlMs: number;
   private readonly listTtlMs: number;
-  private readonly stats = new Map<string, CacheEntry<StoredFileInfo | null>>();
-  private readonly lists = new Map<string, CacheEntry<StoredFileInfo[]>>();
-  private readonly directories = new Map<string, CacheEntry<string[]>>();
+  private readonly stats: LruCache<string, CacheEntry<StoredFileInfo | null>>;
+  private readonly lists: LruCache<string, CacheEntry<StoredFileInfo[]>>;
+  private readonly directories: LruCache<string, CacheEntry<string[]>>;
   private readonly inflight = new Map<string, Promise<unknown>>();
   private generation = 0;
 
@@ -33,6 +38,11 @@ export class CachedStorage implements ObjectStorage {
     this.kind = storage.kind;
     this.statTtlMs = Math.max(0, options.statTtlMs ?? 1_000);
     this.listTtlMs = Math.max(0, options.listTtlMs ?? 2_000);
+    const maxEntries = options.maxEntries ?? 4096;
+    const maxWeight = options.maxListItems ?? 65536;
+    this.stats = new LruCache({ maxEntries });
+    this.lists = new LruCache({ maxEntries, maxWeight, weightOf: (entry) => Math.max(1, entry.value.length) });
+    this.directories = new LruCache({ maxEntries, maxWeight, weightOf: (entry) => Math.max(1, entry.value.length) });
   }
 
   private clearMetadata(): void {
@@ -45,7 +55,8 @@ export class CachedStorage implements ObjectStorage {
   }
 
   private async cached<T>(
-    cache: Map<string, CacheEntry<T>>,
+    namespace: 'stat' | 'list' | 'directories',
+    cache: LruCache<string, CacheEntry<T>>,
     key: string,
     ttlMs: number,
     load: () => Promise<T>,
@@ -53,7 +64,8 @@ export class CachedStorage implements ObjectStorage {
     const now = Date.now();
     const hit = cache.get(key);
     if (hit && hit.expiresAt > now) return hit.value;
-    const pendingKey = `${cache === this.stats ? 's' : cache === this.lists ? 'l' : 'd'}:${key}`;
+    cache.delete(key);
+    const pendingKey = `${namespace}:${key}`;
     const pending = this.inflight.get(pendingKey) as Promise<T> | undefined;
     if (pending) return pending;
     const generation = this.generation;
@@ -96,13 +108,15 @@ export class CachedStorage implements ObjectStorage {
     return deleted;
   }
   stat(filePath: string) {
-    return this.cached(this.stats, filePath, this.statTtlMs, () => this.storage.stat(filePath));
+    return this.cached('stat', this.stats, filePath, this.statTtlMs, () => this.storage.stat(filePath));
   }
   list(prefix = '') {
-    return this.cached(this.lists, prefix, this.listTtlMs, () => this.storage.list(prefix));
+    return this.cached('list', this.lists, prefix, this.listTtlMs, () => this.storage.list(prefix));
   }
   listDirectories(prefix = '') {
-    return this.cached(this.directories, prefix, this.listTtlMs, () => this.storage.listDirectories(prefix));
+    return this.cached('directories', this.directories, prefix, this.listTtlMs, () =>
+      this.storage.listDirectories(prefix),
+    );
   }
 }
 

@@ -52,6 +52,11 @@
       "types": "./dist/defaults.d.ts",
       "default": "./dist/defaults.js"
     },
+    "./cache": {
+      "development": "./src/cache.ts",
+      "types": "./dist/cache.d.ts",
+      "default": "./dist/cache.js"
+    },
     "./async": {
       "development": "./src/async.ts",
       "types": "./dist/async.d.ts",
