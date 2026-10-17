@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Chunk neighborhoods preserve the parser's signed-int chunk range instead of wrapping world block coordinates through a 32-bit shift and treating far chunks as air.
+
 - Precomputed biome-color dictionaries preserve arbitrary keys without inheriting prototype entries or treating them as fallback colors.
 
 - Storage metadata caches invalidate after failed mutation attempts as well, so a partially completed backend write/deletion cannot leave stale stat/list results until TTL expiry.

@@ -23,7 +23,8 @@ export interface WorldView {
   getBlockLight(x: number, y: number, z: number): number;
 }
 
-/** 3x3 邻域，供跨区块面剔除 / AO / 平滑光照。 */
+/** A 3×3 chunk neighborhood anchored at its minimum chunk X/Z. Integer world
+ * block coordinates select columns for culling/AO/light; missing columns are air. */
 export class ChunkNeighborhood implements WorldView {
   private grid: (ChunkColumn | null)[] = new Array(9).fill(null);
   constructor(
@@ -36,8 +37,8 @@ export class ChunkNeighborhood implements WorldView {
     if (gx >= 0 && gx < 3 && gz >= 0 && gz < 3) this.grid[gx + gz * 3] = col;
   }
   private colAt(x: number, z: number): ChunkColumn | null {
-    const gx = (x >> 4) - this.baseX,
-      gz = (z >> 4) - this.baseZ;
+    const gx = Math.floor(x / 16) - this.baseX,
+      gz = Math.floor(z / 16) - this.baseZ;
     if (gx < 0 || gx > 2 || gz < 0 || gz > 2) return null;
     return this.grid[gx + gz * 3];
   }
