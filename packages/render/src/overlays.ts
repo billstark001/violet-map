@@ -23,6 +23,7 @@ const mix = (a: Vec3, b: Vec3): Vec3 => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (
 
 const add = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 
+/** Axis-aligned bounds of finite world points, expanded uniformly by padding. */
 export function boundsOf(points: readonly Vec3[], padding = 0): OverlayBounds {
   const min: Vec3 = [Infinity, Infinity, Infinity],
     max: Vec3 = [-Infinity, -Infinity, -Infinity];
@@ -35,6 +36,7 @@ export function boundsOf(points: readonly Vec3[], padding = 0): OverlayBounds {
   return { min, max };
 }
 
+/** Conservative world bounds using every cubic control point, including closure. */
 export function curveBounds(curve: CurveFeature, padding = 0): OverlayBounds {
   const points: Vec3[] = [];
   for (let i = 0; i < curve.nodes.length - (curve.closed ? 0 : 1); i++) {
@@ -45,6 +47,8 @@ export function curveBounds(curve: CurveFeature, padding = 0): OverlayBounds {
   return boundsOf(points, padding);
 }
 
+/** Project through a column-major matrix into centered CSS-pixel coordinates;
+ * the third result is homogeneous W for eye-plane classification. */
 export function projectPoint(point: Vec3, projection: Projection): Vec3 {
   const m = projection.matrix,
     [x, y, z] = point;
@@ -74,6 +78,7 @@ function distanceToSegment(
   return Math.sqrt(squared);
 }
 
+/** Evaluate a cubic with four control points at parameter t (normally 0..1). */
 export function cubicPoint(points: readonly Vec3[], t: number): Vec3 {
   const u = 1 - t;
   return [0, 1, 2].map(
@@ -82,7 +87,9 @@ export function cubicPoint(points: readonly Vec3[], t: number): Vec3 {
   ) as Vec3;
 }
 
-/** Positive homogeneous weights keep the projected curve inside its projected control hull. */
+/** Sample a validated curve within a world-unit or projected CSS-pixel tolerance.
+ * Positive homogeneous weights bound projected error by the control hull; point
+ * or depth exhaustion retains endpoints and reports capped rather than smoothing. */
 export function sampleCurve(
   curve: CurveFeature,
   options: { projection?: Projection; tolerance?: number; maxPoints?: number; maxDepth?: number } = {},
@@ -90,7 +97,14 @@ export function sampleCurve(
   const tolerance = options.tolerance ?? (options.projection ? 0.5 : 0.125),
     maxPoints = options.maxPoints ?? 65536,
     maxDepth = options.maxDepth ?? 18;
-  if (!(tolerance > 0) || !Number.isSafeInteger(maxPoints) || maxPoints < curve.nodes.length + 1 || maxDepth < 1)
+  if (
+    !Number.isFinite(tolerance) ||
+    !(tolerance > 0) ||
+    !Number.isSafeInteger(maxPoints) ||
+    maxPoints < curve.nodes.length + 1 ||
+    !Number.isSafeInteger(maxDepth) ||
+    maxDepth < 1
+  )
     throw new Error('invalid curve sampling budget');
   const points: Vec3[] = [curve.nodes[0].anchor];
   let capped = false;
@@ -180,6 +194,7 @@ export function triangulateRing(ring: readonly Vec2[]): Uint32Array {
   return new Uint32Array(indices);
 }
 
+/** XZ fill vertices relative to the first ring point, with original-index triangles. */
 export function buildAreaFill(area: AreaFeature) {
   const origin: Vec3 = [area.ring[0][0], 0, area.ring[0][1]];
   return {
@@ -189,6 +204,7 @@ export function buildAreaFill(area: AreaFeature) {
   };
 }
 
+/** Extrude a validated XZ ring between absolute minY/maxY; indices cover each edge. */
 export function buildAreaWall(area: AreaFeature) {
   const origin: Vec3 = [area.ring[0][0], area.minY, area.ring[0][1]],
     positions: number[] = [],
@@ -237,22 +253,31 @@ export interface MaskLayout {
   limited: boolean;
 }
 
+/** Allocate a bounded mask layout with a padded world-XZ extent. limited reports
+ * when the requested world-units-per-CSS-pixel precision exceeds the texture cap. */
 export function areaMaskLayout(bounds: { min: Vec2; max: Vec2 }, worldPerPixel: number, maxSize = 4096): MaskLayout {
-  if (!(worldPerPixel > 0) || !Number.isFinite(worldPerPixel) || maxSize < 16)
+  if (!(worldPerPixel > 0) || !Number.isFinite(worldPerPixel) || !Number.isSafeInteger(maxSize) || maxSize < 16)
     throw new Error('invalid mask resolution');
   const span: Vec2 = [bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1]];
+  if (![...bounds.min, ...bounds.max, ...span].every(Number.isFinite) || span.some((value) => value < 0))
+    throw new Error('invalid mask bounds');
   const desired = worldPerPixel * 0.5;
   const step = Math.max(desired, ...span.map((v) => v / (maxSize - 4)));
+  if (!(step > 0) || !Number.isFinite(step)) throw new Error('invalid mask resolution');
   const origin: Vec2 = [Math.floor(bounds.min[0] / step) * step - step, Math.floor(bounds.min[1] / step) * step - step];
+  if (!origin.every(Number.isFinite)) throw new Error('mask origin exceeds numeric precision');
   const width = Math.max(4, Math.min(maxSize, Math.ceil((bounds.max[0] - origin[0]) / step) + 1)),
     height = Math.max(4, Math.min(maxSize, Math.ceil((bounds.max[1] - origin[1]) / step) + 1));
   return { origin, size: [width * step, height * step], width, height, limited: step > desired * 1.001 };
 }
 
+/** Map world XZ to normalized texture UVs, flipping the image-space vertical axis. */
 export function areaMaskUv(point: Vec2, layout: MaskLayout): Vec2 {
   return [(point[0] - layout.origin[0]) / layout.size[0], 1 - (point[1] - layout.origin[1]) / layout.size[1]];
 }
 
+/** Conservative world bounds after scale and XYZ Euler rotations in radians.
+ * Billboards use a pivot-centered sphere because orientation changes with camera. */
 export function mediaBounds(feature: MediaFeature, version: MediaVersion): OverlayBounds {
   if (feature.placement === 'billboard') {
     const size = feature.size!,

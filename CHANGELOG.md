@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Curve sampling and area-mask layout reject nonfinite budgets and inverted bounds before generating invalid GPU dimensions; public geometry helpers document coordinate units and ownership.
+
 - Area triangulation uses Earcut with local coordinates and an area-deviation guard, improving large concave overlays while preserving original vertex indices and winding.
 
 - Fallback lighting copies contiguous section channels in bulk while preserving independent section buffers and untouched channels; real-world output digests remain unchanged.

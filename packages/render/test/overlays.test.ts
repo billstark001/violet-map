@@ -208,3 +208,16 @@ test('triangulation preserves winding and area for large concave rings far from 
     /degenerate/,
   );
 });
+
+test('sampling and mask numeric budgets reject nonfinite or inverted inputs', () => {
+  for (const tolerance of [NaN, Infinity, 0, -1]) assert.throws(() => sampleCurve(curve, { tolerance }), /budget/);
+  for (const maxDepth of [NaN, Infinity, 0, 1.5]) assert.throws(() => sampleCurve(curve, { maxDepth }), /budget/);
+  for (const maxSize of [NaN, Infinity, 15, 16.5])
+    assert.throws(() => areaMaskLayout({ min: [0, 0], max: [1, 1] }, 1, maxSize), /resolution/);
+  for (const bounds of [
+    { min: [2, 0], max: [1, 1] },
+    { min: [0, 0], max: [Infinity, 1] },
+  ])
+    assert.throws(() => areaMaskLayout(bounds as { min: [number, number]; max: [number, number] }, 1), /bounds/);
+  assert.throws(() => areaMaskLayout({ min: [0, 0], max: [0, 0] }, Number.MIN_VALUE), /resolution/);
+});
