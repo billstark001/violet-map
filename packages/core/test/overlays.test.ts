@@ -111,6 +111,29 @@ test('small valid areas near the world border survive area cancellation in eithe
   }
 });
 
+test('contour bounds rejection preserves nonadjacent edge/vertex touching detection', () => {
+  for (const ring of [
+    [
+      [0, 0],
+      [4, 0],
+      [4, 4],
+      [2, 0],
+      [0, 4],
+    ],
+    [
+      [0, 0],
+      [4, 0],
+      [4, 4],
+      [0, 4],
+      [0, 2],
+      [3, 2],
+      [3, 0],
+    ],
+  ])
+    for (const points of [ring, ring.toReversed()])
+      assert.throws(() => parseLayerDocument(layer({ ...area, ring: points })), /self-intersect or touch/);
+});
+
 test('map dimensions normalize and capabilities default new fields while retaining strict old fields', () => {
   const map = {
     schemaVersion: 1,

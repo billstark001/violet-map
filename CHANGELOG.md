@@ -115,6 +115,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Changed
 
+- Overlay contour validation skips disjoint edge pairs before orientation tests, reducing typical large-ring validation cost while preserving inclusive touch rejection.
+
 - Media inspection and its native/XML decoder dependencies load on the first media import, avoiding their startup memory cost for read-only or content-disabled servers.
 
 - Registered entity models reuse the same baked-variant cache as block models, avoiding repeated base-geometry baking for each instance while keeping transforms independent.

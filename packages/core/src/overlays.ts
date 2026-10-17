@@ -113,6 +113,15 @@ function onSegment(a: number[], b: number[], p: number[]): boolean {
 }
 
 function intersects(a: number[], b: number[], c: number[], d: number[]): boolean {
+  // Most pairs in a valid contour have disjoint bounds. Skip their orientation
+  // tests, keeping equality inclusive so edge/vertex touching is still rejected.
+  if (
+    Math.max(a[0], b[0]) < Math.min(c[0], d[0]) ||
+    Math.max(c[0], d[0]) < Math.min(a[0], b[0]) ||
+    Math.max(a[1], b[1]) < Math.min(c[1], d[1]) ||
+    Math.max(c[1], d[1]) < Math.min(a[1], b[1])
+  )
+    return false;
   const ab1 = orient(a, b, c),
     ab2 = orient(a, b, d),
     cd1 = orient(c, d, a),

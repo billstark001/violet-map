@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { pointInRing, triangulateRing } from '../../packages/render/src/overlays.js';
 import type { Vec2 } from '../../packages/core/src/overlayTypes.js';
+import { validateFeature } from '../../packages/core/src/overlays.js';
 
 const reports = [];
 
@@ -27,14 +28,33 @@ for (const count of [64, 512, 2048])
       assert.ok(pointInRing([(a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3], ring));
     }
     assert.ok(Math.abs(triangleArea / twiceArea - 1) < 1e-10);
-    const timings = [];
+    const timings = [],
+      validationTimings = [];
+    const area = {
+      featureId: 'region',
+      kind: 'area',
+      ring,
+      minY: 0,
+      maxY: 100,
+      fill: { color: '#8844ff', opacity: 0.4 },
+      wall: { color: '#8844ff', opacity: 0.4, occlusion: 'terrain' },
+    };
     for (let round = 0; round < 25; round++) {
       const start = performance.now();
-      assert.equal(triangulateRing(ring).length, triangles.length);
-      if (round >= 5) timings.push(performance.now() - start);
+      const output = triangulateRing(ring);
+      const elapsed = performance.now() - start;
+      assert.equal(output.length, triangles.length);
+      const validationStart = performance.now();
+      validateFeature(area);
+      const validationElapsed = performance.now() - validationStart;
+      if (round >= 5) {
+        timings.push(elapsed);
+        validationTimings.push(validationElapsed);
+      }
     }
     timings.sort((a, b) => a - b);
-    reports.push({ count, shape, p50Ms: timings[10], p95Ms: timings[18] });
+    validationTimings.sort((a, b) => a - b);
+    reports.push({ count, shape, p50Ms: timings[10], p95Ms: timings[18], validationP50Ms: validationTimings[10] });
   }
 
 console.log(
@@ -42,7 +62,7 @@ console.log(
     {
       node: process.version,
       measuredRounds: 20,
-      includes: 'triangulation only; area and centroid validation outside timing',
+      includes: 'triangulation and input geometry validation timed separately; area/centroid assertions excluded',
       reports,
     },
     null,
