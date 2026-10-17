@@ -1,3 +1,4 @@
+import { waitForProcessOutput } from '../acceptance/helpers/process-startup.js';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -13,15 +14,7 @@ const vite = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host',
 });
 
 try {
-  const origin = await new Promise<string>((resolve, reject) => {
-    vite.stdout.on('data', (bytes) => {
-      const match = String(bytes).match(/http:\/\/127\.0\.0\.1:\d+/);
-      if (match) resolve(match[0]);
-    });
-    vite.stderr.on('data', (bytes) => process.stderr.write(bytes));
-    vite.once('error', reject);
-    vite.once('exit', (code) => reject(new Error(`Vite exited ${code}`)));
-  });
+  const [origin] = await waitForProcessOutput(vite, /http:\/\/127\.0\.0\.1:\d+(?=\/|\s)/, 'Vite');
   const browser = await chromium.launch({
     executablePath:
       process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ??

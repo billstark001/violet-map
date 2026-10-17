@@ -1,3 +1,4 @@
+import { waitForProcessOutput } from './process-startup.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,13 +22,13 @@ export async function startStaticSite(root: string, name: 'web' | 'admin', base:
     env: { ...process.env, PORT: '0', STATIC_BASE_PATH: base, API_BASE_URL: undefined },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  const port = await new Promise<number>((resolve, reject) => {
-    child.stdout.on('data', (bytes) => {
-      const match = String(bytes).match(/:(\d+)/);
-      if (match) resolve(Number(match[1]));
-    });
-    child.once('error', reject);
-    child.once('exit', (code) => reject(new Error(`static site exited ${code}`)));
-  });
+  let match: RegExpMatchArray;
+  try {
+    match = await waitForProcessOutput(child, /Static Violet Map on :(\d+)(?=\/|\s)/, 'static site');
+  } catch (error) {
+    child.kill('SIGTERM');
+    throw error;
+  }
+  const port = Number(match[1]);
   return { url: `http://127.0.0.1:${port}${base}`, dist, child };
 }

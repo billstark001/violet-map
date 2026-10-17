@@ -1,3 +1,4 @@
+import { waitForProcessOutput } from './helpers/process-startup.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import fs from 'node:fs/promises';
@@ -335,17 +336,11 @@ test(
       env: { ...process.env, PORT: '0', STATIC_BASE_PATH: '/', API_BASE_URL: undefined },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const fixtureUrl = await new Promise<string>((resolve, reject) => {
-      fixture.stdout.on('data', (data) => {
-        const match = String(data).match(/:(\d+)/);
-        if (match) resolve(`http://127.0.0.1:${match[1]}`);
-      });
-      fixture.on('error', reject);
-      fixture.on('exit', (code) => reject(new Error(`built fixture exited ${code}`)));
-    });
     t.after(() => {
       fixture.kill('SIGTERM');
     });
+    const fixtureMarker = await waitForProcessOutput(fixture, /Static Violet Map on :(\d+)(?=\/|\s)/, 'built fixture');
+    const fixtureUrl = `http://127.0.0.1:${fixtureMarker[1]}`;
     const browser = await chromium.launch({
       executablePath:
         process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ??
@@ -722,14 +717,8 @@ test(
     t.after(() => {
       built.kill('SIGTERM');
     });
-    const builtUrl = await new Promise<string>((resolve, reject) => {
-      built.stdout.on('data', (data) => {
-        const match = String(data).match(/:(\d+)/);
-        if (match) resolve(`http://127.0.0.1:${match[1]}/map`);
-      });
-      built.on('error', reject);
-      built.on('exit', (code) => reject(new Error(`built viewer exited ${code}`)));
-    });
+    const builtMarker = await waitForProcessOutput(built, /Static Violet Map on :(\d+)(?=\/|\s)/, 'built viewer');
+    const builtUrl = `http://127.0.0.1:${builtMarker[1]}/map`;
     const builtHtml = await fs.readFile(path.join(builtRoot, 'index.html'), 'utf8');
     assert.ok(!builtHtml.includes('overlay-gltf'), 'optional GLB chunk must not be preloaded');
     assert.ok((await fs.readdir(path.join(builtRoot, 'assets'))).some((name) => name.startsWith('overlay-gltf')));

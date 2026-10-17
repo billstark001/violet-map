@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { stripVTControlCharacters } from 'node:util';
+import { waitForProcessOutput } from './helpers/process-startup.js';
 import { serve } from '@hono/node-server';
 import { chromium } from 'playwright';
 import type { OverlayMediaReference } from '../../packages/core/src/overlayTypes.js';
@@ -66,30 +66,9 @@ test(
       vite.kill('SIGTERM');
     });
     stage = 'starting Vite';
-    const origin = await new Promise<string>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error(`Vite startup timed out: ${diagnostics.join('\n')}`)), 15_000);
-      let output = '';
-      vite.stderr.on('data', (bytes) => diagnostics.push(String(bytes)));
-      vite.stdout.on('data', (bytes) => {
-        diagnostics.push(String(bytes));
-      });
-      vite.stdout.on('data', (bytes) => {
-        output += String(bytes);
-        const match = stripVTControlCharacters(output).match(/http:\/\/127\.0\.0\.1:\d+/);
-        if (match) {
-          clearTimeout(timeout);
-          resolve(match[0]);
-        }
-      });
-      vite.once('error', (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      });
-      vite.once('exit', (code) => {
-        clearTimeout(timeout);
-        reject(new Error(`Vite exited ${code}`));
-      });
-    });
+    vite.stderr.on('data', (bytes) => diagnostics.push(String(bytes)));
+    vite.stdout.on('data', (bytes) => diagnostics.push(String(bytes)));
+    const [origin] = await waitForProcessOutput(vite, /http:\/\/127\.0\.0\.1:\d+(?=\/|\s)/, 'Vite');
     stage = 'launching browser';
     const browser = await chromium.launch({
       timeout: 15_000,
