@@ -42,7 +42,7 @@ To exercise the real OS credential store on a machine with an unlocked keychain,
 
 ## Versions and changelog
 
-The root workspace and all seven packages currently share the `0.3.0` development release line. Each package's `package.json` is the source of truth for its version; executable versions are read from that metadata. Run `pnpm violet-map --version` to inspect the CLI version; every subcommand uses that package version.
+Each package's `package.json` is the source of truth for its version; executable versions are read from that metadata. Run `pnpm violet-map --version` to inspect the CLI version; every subcommand uses that package version.
 
 [CHANGELOG.md](../CHANGELOG.md) records releases and the version policy. `pnpm version:check` validates every package's semantic version and enforces a shared MAJOR, plus a shared MINOR while MAJOR is `0`. Package PATCH versions may differ; after `1.0.0`, MINOR versions may also differ. CI runs this check.
 
@@ -61,7 +61,7 @@ The workflow accepts the checked-in archive directory, target world name, destin
 
 Production artifacts and independent Docker services are described in [deployment](deployment.md). CI also runs AST package-boundary checks, relocated production server tests, package publication checks and three-origin browser acceptance with static/API prefixes.
 
-The overlay release gate, isolated S3 option, measured resource budgets and paired binary/config rollback are described in [overlay release acceptance](overlay-release-acceptance.md). `test:release` builds the pre-overlay Git revision to exercise actual old binaries and uses temporary directories. `VIOLET_ACCEPTANCE_ENV_FILE` opts into an existing S3/R2 bucket under a random isolated prefix; no extra hosted service is required. Without it only that S3 case is skipped. Use local PostgreSQL with `TEST_DATABASE_URL` to include all database cases.
+Overlay validation, the isolated S3 option, resource budgets and paired binary/config rollback are described in [overlay release acceptance](overlay-release-acceptance.md). `test:release` builds the pre-overlay Git revision to exercise actual old binaries and uses temporary directories. `VIOLET_ACCEPTANCE_ENV_FILE` opts into an existing S3/R2 bucket under a random isolated prefix; no extra hosted service is required. Without it only that S3 case is skipped. Use local PostgreSQL with `TEST_DATABASE_URL` to include all database cases.
 
 ## Performance measurements
 
