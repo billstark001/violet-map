@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { DimensionDef } from '@violet-map/core/domain';
 import type { MeshBuffers } from '@violet-map/render';
+import { SECTION_VISIBILITY_ALL } from '@violet-map/render';
 import type { RenderLayer } from '@violet-map/core/assets';
 import { fetchChunkHashes, fetchChunks, fetchChunkSourceCoverage } from '../api';
 import { type ChunkHashPayload, type ChunkPayload, type ChunkCoverage } from '@violet-map/core/contracts';
@@ -65,15 +66,6 @@ const DIAGNOSTIC_MIN_DELAY_MS: Record<ChunkDiagnosticOp, number> = {
   lodMesh: 1800,
 };
 const SECTION_VISIBILITY_DIRS = ['down', 'up', 'north', 'south', 'west', 'east'] as const;
-const SECTION_VISIBILITY_ALL = (() => {
-  let mask = 0;
-  for (let from = 0; from < 6; from++) {
-    for (let to = 0; to < 6; to++) {
-      if (from !== to) mask += 2 ** (from * 6 + to);
-    }
-  }
-  return mask;
-})();
 const SECTION_NEIGHBOR: [number, number, number][] = [
   [0, -1, 0],
   [0, 1, 0],
@@ -352,6 +344,7 @@ export class ChunkManager {
   private lastVisibilityStartKey = '';
   private lastVisibilityAboveSurface = false;
   private visibleSectionKeys = new Set<string>();
+  private visibilityEntryMasks = new Map<string, number>();
   private visibilityQueueSections: FullSectionRender[] = [];
   private visibilityQueueEntries: number[] = [];
   private sectionVisibilityRevision = 0;
@@ -1877,7 +1870,10 @@ export class ChunkManager {
     const visible = this.visibleSectionKeys;
     const queueSections = this.visibilityQueueSections;
     const queueEntries = this.visibilityQueueEntries;
+    const entryMasks = this.visibilityEntryMasks;
     visible.clear();
+    entryMasks.clear();
+    entryMasks.set(start.key, (1 << SECTION_VISIBILITY_DIRS.length) - 1);
     queueSections.length = 1;
     queueEntries.length = 1;
     queueSections[0] = start;
@@ -1888,7 +1884,7 @@ export class ChunkManager {
     while (head < queueSections.length) {
       const section = queueSections[head];
       const entry = queueEntries[head++];
-      const mask = section.visibility || SECTION_VISIBILITY_ALL;
+      const mask = section.visibility;
       for (let dir = 0; dir < SECTION_VISIBILITY_DIRS.length; dir++) {
         if (entry >= 0 && !this.visibilityAllows(mask, entry, dir)) continue;
         const delta = SECTION_NEIGHBOR[dir];
@@ -1896,14 +1892,29 @@ export class ChunkManager {
           this.sectionKey(section.cx + delta[0], section.sy + delta[1], section.cz + delta[2]),
         );
         if (!next) continue;
-        if (visible.has(next.key)) continue;
         visible.add(next.key);
+        // Visibility belongs to an entrance, not just to the section. Separate
+        // tunnels can be reached from different sides at different BFS depths.
+        // A solid neighbor is visible at its boundary but cannot transmit sight.
+        if (next.visibility === 0) continue;
+        const entrance = SECTION_OPPOSITE[dir];
+        const entered = entryMasks.get(next.key) ?? 0;
+        if (entered & (1 << entrance)) continue;
+        entryMasks.set(
+          next.key,
+          next.visibility === SECTION_VISIBILITY_ALL
+            ? (1 << SECTION_VISIBILITY_DIRS.length) - 1
+            : entered | (1 << entrance),
+        );
         queueSections.push(next);
-        queueEntries.push(SECTION_OPPOSITE[dir]);
+        queueEntries.push(entrance);
       }
     }
 
     for (const section of this.fullSectionIndex.values()) this.setSectionVisible(section, visible.has(section.key));
+    // Do not retain removed section objects/GPU geometry through the scratch queue.
+    queueSections.length = 0;
+    queueEntries.length = 0;
   }
 
   private specialRenderRadiusChunks(): number {
@@ -2215,6 +2226,10 @@ export class ChunkManager {
     this.versionWorker.clear();
     this.meshDiagnosticByVersion.clear();
     this.activeDiagnostics.clear();
+    this.visibleSectionKeys.clear();
+    this.visibilityEntryMasks.clear();
+    this.visibilityQueueSections.length = 0;
+    this.visibilityQueueEntries.length = 0;
     for (const worker of this.workers) worker.terminate();
     this.workers = [];
     this.workerLoads = [];

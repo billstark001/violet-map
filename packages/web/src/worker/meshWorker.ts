@@ -3,6 +3,7 @@ import { BlockInfo, type RendererDefinitions, type RendererModelDef, type TintTy
 import { ChunkColumn, appendChunkEntities, parseChunkColumn } from '@violet-map/core/domain';
 import {
   ChunkNeighborhood,
+  SECTION_VISIBILITY_ALL,
   MeshBuffers,
   MesherResources,
   ModelBaker,
@@ -21,15 +22,6 @@ import type { SectionMeshMsg, WorkerRequest, WorkerResponse } from './protocol';
 const DEFAULT_INFO: BlockInfo = { occludes: false, emit: 0, filter: 0, layer: 'cutout', tint: 'none' };
 const WHITE: Rgb = [1, 1, 1];
 const TOP_COLOR_CACHE_LIMIT = 12000;
-const SECTION_VISIBILITY_ALL = (() => {
-  let mask = 0;
-  for (let from = 0; from < 6; from++) {
-    for (let to = 0; to < 6; to++) {
-      if (from !== to) mask += 2 ** (from * 6 + to);
-    }
-  }
-  return mask;
-})();
 
 let res: MesherResources | null = null;
 let avgColors: Record<string, [number, number, number]> = {};

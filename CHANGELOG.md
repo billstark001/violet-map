@@ -29,6 +29,7 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 - Camera movement consumes browser selection/scroll shortcuts outside editable controls, including Ctrl+A on Windows; right Control and Shift now match their left-hand counterparts.
 - Glass and ice remove touching internal faces through explicit block metadata, while leaves and different glass colors retain theirs. Inset/rotated model faces no longer cull neighbors solely by their projected bounding box. Existing mesh cache entries are invalidated.
 - Disconnected tunnels now union section-visibility connections correctly; duplicate connections previously carried into other bits and could hide reachable terrain.
+- Visibility traversal tracks section entrances separately, preserving reachable independent tunnels, while zero-connectivity solid boundaries stop traversal. Scratch queues release section references after use; worker/viewer share the mesher's full-connectivity constant.
 - Storage metadata caches now bound retained keys and aggregate list items, including negative lookups; long-running read-only servers no longer retain every path ever probed.
 - Legacy overworld entity sidecars resolve to `entities/` rather than rereading terrain from `region/`. Warm chunk reads reuse entity NBT and hashes, and world deletion releases cached region/header bytes immediately.
 - Unavailable or failing IndexedDB now falls back to worker meshing instead of repeatedly retrying a failed cache read with missing terrain.

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ChunkManager } from '../src/render/chunkManager.js';
 import { encode } from '@msgpack/msgpack';
+import { chunkKey } from '../src/worker/protocol.js';
 
 // Drive a mesh request through the real cache/error path, with only the worker
 // boundary replaced. No browser globals or WebGL context are needed.
@@ -63,6 +64,71 @@ test('unavailable IndexedDB falls back to worker meshing for both full and LOD t
   }
 });
 
+test('section visibility revisits independent entrances and stops at a solid neighbor', () => {
+  const mask = (pairs: number[][]) =>
+    pairs.reduce((value, [from, to]) => value + 2 ** (from * 6 + to) + 2 ** (to * 6 + from), 0);
+  const all = mask(
+    Array.from({ length: 6 }, (_, from) =>
+      Array.from({ length: 5 - from }, (_, offset) => [from, from + offset + 1]),
+    ).flat(),
+  );
+  const sections = [
+    [0, 0, mask([[2, 3]])],
+    [1, 0, all],
+    [
+      2,
+      0,
+      mask([
+        [4, 5],
+        [2, 3],
+      ]),
+    ],
+    [0, -1, all],
+    [1, -1, all],
+    [2, -1, all],
+    [2, 1, all],
+    [3, 0, 0],
+    [4, 0, all],
+  ].map(([cx, cz, visibility]) => ({
+    key: `${cx},0,${cz}`,
+    cx,
+    sy: 0,
+    cz,
+    visibility,
+    visible: true,
+    meshes: [{ visible: true }],
+  }));
+  const manager = Object.assign(Object.create(ChunkManager.prototype), {
+    opts: { world: 'test', dimension: 'minecraft:overworld' },
+    fullSectionIndex: new Map(sections.map((section) => [section.key, section])),
+    chunks: new Map([[chunkKey('test', 'minecraft:overworld', 0, 0), { surfaceY: 100 }]]),
+    topDownView: false,
+    visibilityRevision: 1,
+    lastVisibilityRevision: -1,
+    visibleSectionKeys: new Set(),
+    visibilityEntryMasks: new Map(),
+    visibilityQueueSections: [],
+    visibilityQueueEntries: [],
+    sectionVisibilityRevision: 0,
+  });
+  manager.updateFullSectionVisibility({ position: { x: 1, y: 1, z: 1 } });
+  assert.equal(
+    manager.fullSectionIndex.get('2,0,1').visible,
+    true,
+    'the north entrance must reveal the south corridor even after a west entry',
+  );
+  assert.equal(
+    manager.fullSectionIndex.get('3,0,0').visible,
+    true,
+    'the visible face of a solid boundary still renders',
+  );
+  assert.equal(
+    manager.fullSectionIndex.get('4,0,0').visible,
+    false,
+    'zero connectivity must stop traversal behind the boundary',
+  );
+});
+
 test('disposing a manager cancels pending IO and ignores even an unabortable late response', async (t) => {
   const original = globalThis.fetch;
   t.after(() => {
@@ -101,6 +167,10 @@ test('disposing a manager cancels pending IO and ignores even an unabortable lat
         scheduler: { clear() {} },
         scene: { remove() {} },
         root: {},
+        visibleSectionKeys: new Set(),
+        visibilityEntryMasks: new Map(),
+        visibilityQueueSections: [],
+        visibilityQueueEntries: [],
         hashTimer: null,
         fetchTimer: null,
         deferredMeshTimers: new Map(),

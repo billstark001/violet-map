@@ -89,7 +89,7 @@ const OCCLUSION_DIRECTIONS: Direction[] = ['down', 'up', 'north', 'south', 'west
 export const SECTION_VISIBILITY_DIRECTIONS: Direction[] = ['down', 'up', 'north', 'south', 'west', 'east'];
 const DIRECTION_INDEX: Record<Direction, number> = { down: 0, up: 1, north: 2, south: 3, west: 4, east: 5 };
 const ALL_DIRECTIONS_OCCLUDED = (1 << SECTION_VISIBILITY_DIRECTIONS.length) - 1;
-const SECTION_VISIBILITY_ALL = (() => {
+export const SECTION_VISIBILITY_ALL = (() => {
   let mask = 0;
   for (let from = 0; from < 6; from++) {
     for (let to = 0; to < 6; to++) {
