@@ -155,3 +155,20 @@ test('inset model faces do not falsely cover a neighboring glass face', () => {
     10,
   );
 });
+
+test('disconnected tunnels union section visibility bits without arithmetic carries', () => {
+  const res = resources({ 'test:stone': { info: { occludes: true, layer: 'opaque' } } });
+  res.textureHasAlpha = {};
+  const solid: BlockStateRef = { name: 'test:stone', properties: {} };
+  const view: WorldView = {
+    getBlock: (x, y, z) => {
+      if (x < 0 || x >= 16 || y < 0 || y >= 16 || z < 0 || z >= 16) return AIR;
+      return (y === 1 && z === 1) || (y === 3 && z === 3) ? AIR : solid;
+    },
+    getBiome: () => 'minecraft:plains',
+    getSkyLight: () => 15,
+    getBlockLight: () => 0,
+  };
+  const result = meshSection(res, view, 0, 0, 0, false);
+  assert.equal(result.visibility, 2 ** (4 * 6 + 5) + 2 ** (5 * 6 + 4));
+});

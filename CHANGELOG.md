@@ -28,6 +28,7 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 - Camera movement consumes browser selection/scroll shortcuts outside editable controls, including Ctrl+A on Windows; right Control and Shift now match their left-hand counterparts.
 - Glass and ice remove touching internal faces through explicit block metadata, while leaves and different glass colors retain theirs. Inset/rotated model faces no longer cull neighbors solely by their projected bounding box. Existing mesh cache entries are invalidated.
+- Disconnected tunnels now union section-visibility connections correctly; duplicate connections previously carried into other bits and could hide reachable terrain.
 
 ## [0.2.0] - 2026-10-17
 

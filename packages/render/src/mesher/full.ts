@@ -361,14 +361,14 @@ class SectionViewCache implements WorldView {
 
   visibilityMask(): number {
     const total = 16 * 16 * 16;
-    const visited = new Uint8Array(total);
-    const queue = new Int32Array(total);
-    const idxOf = (x: number, y: number, z: number) => (y << 8) | (z << 4) | x;
     const passableCount = this.passableCount;
     if (passableCount === 0) return 0;
     if (passableCount === total) return SECTION_VISIBILITY_ALL;
 
-    let mask = 0;
+    const visited = new Uint8Array(total);
+    const queue = new Int32Array(total);
+    const idxOf = (x: number, y: number, z: number) => (y << 8) | (z << 4) | x;
+    const connections = new Uint8Array(SECTION_VISIBILITY_DIRECTIONS.length);
     for (let start = 0; start < total; start++) {
       const sy = start >> 8;
       const sz = (start >> 4) & 15;
@@ -409,11 +409,14 @@ class SectionViewCache implements WorldView {
 
       for (let from = 0; from < 6; from++) {
         if (!(faces & (1 << from))) continue;
-        for (let to = 0; to < 6; to++) {
-          if (from !== to && faces & (1 << to)) mask += visibilityBit(from, to);
-        }
+        connections[from] |= faces & ~(1 << from);
       }
     }
+    // Multiple disconnected cavities can connect the same pair of borders.
+    // Union their bits before encoding the 36-bit number; adding each cavity's
+    // mask would carry into unrelated bits and hide visible sections.
+    let mask = 0;
+    for (let from = 0; from < connections.length; from++) mask += connections[from] * 2 ** (from * connections.length);
     return mask;
   }
 }
@@ -1572,8 +1575,4 @@ export function meshSection(
     if (builder && !builder.empty) layers[layer] = builder.build();
   }
   return { layers, visibility: cachedView.visibilityMask() };
-}
-
-function visibilityBit(from: number, to: number): number {
-  return 2 ** (from * SECTION_VISIBILITY_DIRECTIONS.length + to);
 }
