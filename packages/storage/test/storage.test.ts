@@ -40,6 +40,39 @@ test('a metadata request from before a write cannot refill the cache', async () 
   assert.equal(statCalls, 2);
 });
 
+test('partially failed backend mutations cannot leave stale cached metadata', async () => {
+  for (const operation of ['write', 'replace', 'delete', 'deletePrefix'] as const) {
+    let size = 1;
+    const fail = async () => {
+      size = 2;
+      throw new Error('partial backend mutation');
+    };
+    const backend = {
+      kind: 'local' as const,
+      stat: async () => ({ path: 'object', size }),
+      list: async () => [{ path: 'object', size }],
+      listDirectories: async () => [String(size)],
+      write: fail,
+      replace: fail,
+      delete: fail,
+      deletePrefix: fail,
+    } as unknown as import('@violet-map/core/storage').AtomicObjectStorage;
+    const cache = new CachedStorage(backend, { statTtlMs: 60_000, listTtlMs: 60_000 });
+    assert.equal((await cache.stat('object'))!.size, 1);
+    assert.equal((await cache.list())[0].size, 1);
+    assert.deepEqual(await cache.listDirectories(), ['1']);
+    await assert.rejects(
+      operation === 'write' || operation === 'replace'
+        ? cache[operation]('object', new Uint8Array())
+        : cache[operation]('object'),
+      /partial backend mutation/,
+    );
+    assert.equal((await cache.stat('object'))!.size, 2);
+    assert.equal((await cache.list())[0].size, 2);
+    assert.deepEqual(await cache.listDirectories(), ['2']);
+  }
+});
+
 test('S3 storage distinguishes absent objects from backend failures', async () => {
   const storage = new S3Storage({ bucket: 'test' });
   const fake = storage as unknown as { client: { send: () => Promise<unknown> } };

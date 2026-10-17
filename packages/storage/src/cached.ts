@@ -19,8 +19,8 @@ interface CacheEntry<T> {
 
 /**
  * Short-TTL metadata cache for a shared storage backend. It coalesces repeated
- * stat/list calls without caching world bytes. Writes clear every metadata entry
- * so normal server mutations are visible immediately.
+ * stat/list calls without caching world bytes. Mutation attempts clear every
+ * metadata entry, including backend failures that may have partially written.
  */
 export class CachedStorage implements ObjectStorage {
   readonly kind: ObjectStorage['kind'];
@@ -53,6 +53,14 @@ export class CachedStorage implements ObjectStorage {
     this.lists.clear();
     this.directories.clear();
     this.inflight.clear();
+  }
+
+  private async mutate<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } finally {
+      this.clearMetadata();
+    }
   }
 
   private async cached<T>(
@@ -89,24 +97,19 @@ export class CachedStorage implements ObjectStorage {
   readRange(filePath: string, start: number, length: number) {
     return this.storage.readRange(filePath, start, length);
   }
-  async write(filePath: string, bytes: Uint8Array, contentType?: string): Promise<void> {
-    await this.storage.write(filePath, bytes, contentType);
-    this.clearMetadata();
+  write(filePath: string, bytes: Uint8Array, contentType?: string): Promise<void> {
+    return this.mutate(() => this.storage.write(filePath, bytes, contentType));
   }
   async replace(filePath: string, bytes: Uint8Array, contentType?: string): Promise<void> {
     const backend = this.storage as Partial<import('@violet-map/core/storage').AtomicObjectStorage>;
     if (!backend.replace) throw new Error('storage does not support atomic replacement');
-    await backend.replace(filePath, bytes, contentType);
-    this.clearMetadata();
+    return this.mutate(() => backend.replace!(filePath, bytes, contentType));
   }
-  async delete(filePath: string): Promise<void> {
-    await this.storage.delete(filePath);
-    this.clearMetadata();
+  delete(filePath: string): Promise<void> {
+    return this.mutate(() => this.storage.delete(filePath));
   }
-  async deletePrefix(prefix: string): Promise<number> {
-    const deleted = await this.storage.deletePrefix(prefix);
-    this.clearMetadata();
-    return deleted;
+  deletePrefix(prefix: string): Promise<number> {
+    return this.mutate(() => this.storage.deletePrefix(prefix));
   }
   stat(filePath: string) {
     const key = cleanStoragePath(filePath);

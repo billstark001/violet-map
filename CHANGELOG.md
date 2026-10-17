@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Storage metadata caches invalidate after failed mutation attempts as well, so a partially completed backend write/deletion cannot leave stale stat/list results until TTL expiry.
+
 - CLI `overlay manifest` supports public read-only servers without requiring an admin capability or login; its anonymous requests omit saved/injected credentials.
 
 - Restricted browser history no longer interrupts camera targeting or animation; URL persistence tolerates sandbox restrictions and history rate limits, independently of local-storage persistence.
