@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Dimension validation rejects `.`/`..` namespaces; malformed encoded archive directories no longer break world discovery. CLI and server share dimension paths, including custom paths containing a `region` segment.
+
 - Overlay resource pools reject invalid budgets/concurrency immediately, preventing NaN limits from disabling bounds and zero concurrency from leaving promises pending forever.
 
 - Chunk parsing rejects out-of-range/duplicate section coordinates, oversized palettes and invalid chunk coordinates before height-dependent work, avoiding runaway loops on malformed archives. Resource namespace normalization and signed chunk-coordinate validation now have one shared implementation.

@@ -92,3 +92,30 @@ test('world HTTP mutations reject malformed input without partial worlds and pre
   assert.equal(uploaded.status, 200);
   assert.deepEqual(await services.mounts.worlds.read('foo/test.bin'), new Uint8Array([42]));
 });
+
+test('world discovery skips malformed encoded directories and metadata while retaining valid nested dimensions', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-discovery-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const config = loadServerConfig({
+    env: { DEPLOYMENT_PROFILE: 'public', DATA_DIR: root, WORLDS_DIR: path.join(root, 'worlds') },
+    cwd: root,
+  });
+  const services = await createServices(config);
+  t.after(() => services.close());
+  const storage = services.mounts.worlds;
+  for (const file of [
+    'valid/dimensions/custom/region/inner/region/r.0.0.mca',
+    'valid/dimensions/%E0%A4%A/other/region/r.0.0.mca',
+    'valid/chunks/%E0%A4%A/c.0.0.nbt',
+    'valid/chunks/custom%3Aother/c.0.0.nbt',
+    'valid/chunks/..%3Abad/c.0.0.nbt',
+  ])
+    await storage.write(file, new Uint8Array(8192));
+  await storage.write(
+    'valid/.violet-map/world.json',
+    new TextEncoder().encode(JSON.stringify({ dimensions: ['..:bad', 'custom:valid'] })),
+  );
+  assert.deepEqual(await services.worldStore.listWorlds(), [
+    { id: 'valid', dimensions: ['custom:other', 'custom:region/inner', 'custom:valid'] },
+  ]);
+});

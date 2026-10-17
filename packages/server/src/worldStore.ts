@@ -3,7 +3,14 @@ import type { ObjectStorage } from '@violet-map/core/storage';
 import type { TopMapService } from './topMap.js';
 import type { WorldInfo, WorldFileManifestEntry, ChunkCoverage, ChunkHashPayload } from '@violet-map/core/contracts';
 import { createHash } from 'node:crypto';
-import { assertDimensionId, assertWorldName, isWorldName } from '@violet-map/core/domain';
+import {
+  assertDimensionId,
+  assertWorldName,
+  isWorldName,
+  isDimensionId,
+  dimensionRegionPaths,
+  VANILLA_DIMENSION_IDS,
+} from '@violet-map/core/domain';
 import { mapWithConcurrency } from '@violet-map/core/async';
 import { LruCache } from '@violet-map/core/cache';
 import { parseNbt } from '@violet-map/core/nbt';
@@ -31,11 +38,6 @@ export interface ChunkReadResult extends ChunkMetadata {
 export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapService, config: ServerConfig) {
   const { invalidateTopMapManifest } = topMap;
 
-  const VANILLA_DIMS: Record<string, string[]> = {
-    'minecraft:overworld': ['region', 'dimensions/minecraft/overworld/region'],
-    'minecraft:the_nether': ['DIM-1/region', 'dimensions/minecraft/the_nether/region'],
-    'minecraft:the_end': ['DIM1/region', 'dimensions/minecraft/the_end/region'],
-  };
   const DEFAULT_DIMS = ['minecraft:overworld'];
   const REGION_RE = /^r\.(-?\d+)\.(-?\d+)\.mca$/;
   const CHUNK_RE = /^c\.(-?\d+)\.(-?\d+)\.nbt$/;
@@ -197,16 +199,8 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     return hash;
   }
 
-  function dimensionRegionCandidates(dim: string): string[] {
-    assertDimensionId(dim);
-    if (VANILLA_DIMS[dim]) return VANILLA_DIMS[dim];
-    const [namespace, rawPath = ''] = dim.includes(':') ? dim.split(':') : ['minecraft', dim];
-    const dimPath = rawPath.split('/').map(encodeURIComponent).join('/');
-    return [`dimensions/${encodeURIComponent(namespace)}/${dimPath}/region`];
-  }
-
   function dimensionEntityCandidates(dim: string): string[] {
-    return dimensionRegionCandidates(dim).map((candidate) => candidate.replace(/(^|\/)region$/, '$1entities'));
+    return dimensionRegionPaths(dim).map((candidate) => candidate.replace(/(^|\/)region$/, '$1entities'));
   }
 
   async function prefixHasRegionFiles(prefix: string): Promise<boolean> {
@@ -220,7 +214,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     const cached = regionDirCache.get(key);
     if (cached) return cached;
     const generation = storageCacheGeneration;
-    const candidates = dimensionRegionCandidates(dim).map((sub) => `${world}/${sub}`);
+    const candidates = dimensionRegionPaths(dim).map((sub) => `${world}/${sub}`);
     for (const candidate of candidates) {
       if (await prefixHasRegionFiles(candidate)) {
         if (generation === storageCacheGeneration) regionDirCache.set(key, candidate);
@@ -392,19 +386,26 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     invalidateWorldList();
   }
 
+  function addEncodedDimension(encoded: string, dimensions: Set<string>): void {
+    try {
+      const dimension = decodeURIComponent(encoded);
+      if (isDimensionId(dimension)) dimensions.add(dimension);
+    } catch {
+      // A malformed directory name must not hide otherwise valid worlds.
+    }
+  }
+
   function addDimensionFromPath(rest: string[], dims: Set<string>) {
     if (rest[0] === 'region' && REGION_RE.test(rest.at(-1) ?? '')) dims.add('minecraft:overworld');
     else if (rest[0] === 'DIM-1' && rest[1] === 'region' && REGION_RE.test(rest.at(-1) ?? ''))
       dims.add('minecraft:the_nether');
     else if (rest[0] === 'DIM1' && rest[1] === 'region' && REGION_RE.test(rest.at(-1) ?? ''))
       dims.add('minecraft:the_end');
-    else if (rest[0] === 'chunks' && rest[1]) dims.add(decodeURIComponent(rest[1]));
+    else if (rest[0] === 'chunks' && rest[1]) addEncodedDimension(rest[1], dims);
     else if (rest[0] === 'dimensions' && rest.length >= 5) {
-      const regionIndex = rest.indexOf('region');
-      if (regionIndex > 2 && REGION_RE.test(rest.at(-1) ?? '')) {
-        const namespace = decodeURIComponent(rest[1]);
-        const dimPath = rest.slice(2, regionIndex).map(decodeURIComponent).join('/');
-        dims.add(`${namespace}:${dimPath}`);
+      const regionIndex = rest.length - 2;
+      if (rest[regionIndex] === 'region' && REGION_RE.test(rest.at(-1) ?? '')) {
+        addEncodedDimension(`${rest[1]}:${rest.slice(2, regionIndex).join('/')}`, dims);
       }
     }
   }
@@ -415,19 +416,20 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
       if (!isWorldName(world)) continue;
       const dims = new Set<string>();
       const meta = await readJson<WorldMeta>(worldMetaPath(world));
-      for (const dim of meta?.dimensions ?? []) dims.add(dim);
+      for (const dim of Array.isArray(meta?.dimensions) ? meta.dimensions : []) if (isDimensionId(dim)) dims.add(dim);
       if (await worldStorage.stat(levelDatPath(world))) {
-        for (const dim of meta?.dimensions ?? DEFAULT_DIMS) dims.add(dim);
+        for (const dim of Array.isArray(meta?.dimensions) ? meta.dimensions : DEFAULT_DIMS)
+          if (isDimensionId(dim)) dims.add(dim);
       }
-      for (const dim of Object.keys(VANILLA_DIMS)) {
-        if (await prefixHasRegionFiles(`${world}/${dimensionRegionCandidates(dim)[0]}`)) dims.add(dim);
+      for (const dim of VANILLA_DIMENSION_IDS) {
+        if (await prefixHasRegionFiles(`${world}/${dimensionRegionPaths(dim)[0]}`)) dims.add(dim);
         else {
-          const [, modern] = dimensionRegionCandidates(dim);
+          const [, modern] = dimensionRegionPaths(dim);
           if (modern && (await prefixHasRegionFiles(`${world}/${modern}`))) dims.add(dim);
         }
       }
       for (const chunkDim of await worldStorage.listDirectories(`${world}/chunks`)) {
-        dims.add(decodeURIComponent(chunkDim));
+        addEncodedDimension(chunkDim, dims);
       }
       for (const file of await worldStorage.list(`${world}/dimensions`)) {
         addDimensionFromPath(file.path.split('/').slice(1), dims);
@@ -457,7 +459,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
 
   async function listRegions(world: string, dim: string): Promise<{ x: number; z: number }[]> {
     const out = new Map<string, { x: number; z: number }>();
-    for (const sub of dimensionRegionCandidates(dim)) {
+    for (const sub of dimensionRegionPaths(dim)) {
       for (const file of await worldStorage.list(`${world}/${sub}`)) {
         const match = REGION_RE.exec(file.path.split('/').pop() ?? '');
         if (!match) continue;
@@ -477,7 +479,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
   async function listRegionChunkMasks(world: string, dim: string): Promise<{ x: number; z: number; mask: string }[]> {
     const out = new Map<string, { x: number; z: number; mask: string }>();
     const regionFiles: { path: string; x: number; z: number }[] = [];
-    for (const sub of dimensionRegionCandidates(dim)) {
+    for (const sub of dimensionRegionPaths(dim)) {
       const prefix = `${world}/${sub}`;
       for (const file of await worldStorage.list(prefix)) {
         const match = REGION_RE.exec(file.path.split('/').pop() ?? '');

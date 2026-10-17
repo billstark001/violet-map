@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { ChunkColumn, parseChunkColumn } from '@violet-map/core/domain';
+import { ChunkColumn, parseChunkColumn, dimensionRegionPaths } from '@violet-map/core/domain';
 import { parseNbt } from '@violet-map/core/nbt';
 import { iterateRegionChunks } from '@violet-map/core/region';
 import { isMissingPath, resolvePath } from './paths.js';
@@ -35,7 +35,7 @@ export async function loadRegionColumns(file: string, sourceBytes?: Uint8Array):
 
 export async function findRegionFiles(worldDir: string, dim: string): Promise<RegionFile[]> {
   const world = resolvePath(worldDir);
-  const candidates = dimensionRegionDirs(world, dim);
+  const candidates = dimensionRegionPaths(dim).map((directory) => path.join(world, directory));
   const out: RegionFile[] = [];
   for (const dir of candidates) {
     let entries;
@@ -53,17 +53,6 @@ export async function findRegionFiles(worldDir: string, dim: string): Promise<Re
     }
   }
   return out.sort((a, b) => a.rx - b.rx || a.rz - b.rz);
-}
-
-export function dimensionRegionDirs(world: string, dim: string): string[] {
-  if (dim === 'minecraft:overworld')
-    return [path.join(world, 'region'), path.join(world, 'dimensions/minecraft/overworld/region')];
-  if (dim === 'minecraft:the_nether')
-    return [path.join(world, 'DIM-1/region'), path.join(world, 'dimensions/minecraft/the_nether/region')];
-  if (dim === 'minecraft:the_end')
-    return [path.join(world, 'DIM1/region'), path.join(world, 'dimensions/minecraft/the_end/region')];
-  const [namespace, rawPath = ''] = dim.includes(':') ? dim.split(':') : ['minecraft', dim];
-  return [path.join(world, 'dimensions', namespace, rawPath, 'region')];
 }
 
 export function defaultTopMapOut(worldDir: string): string {
