@@ -3,6 +3,7 @@ import type { ServerConfig } from './configuration.js';
 import type { ObjectReader } from '@violet-map/core/storage';
 import type { WorldCapabilities } from '@violet-map/core/contracts';
 import { cleanStoragePath } from '@violet-map/storage';
+import { LruCache } from '@violet-map/core/cache';
 import { type TopMapManifest } from '@violet-map/core/formats/top-map';
 export function createTopMapService(worldStorage: ObjectReader, config: ServerConfig) {
   const WORLD_RE = /^[A-Za-z0-9_.-]+$/;
@@ -14,7 +15,7 @@ export function createTopMapService(worldStorage: ObjectReader, config: ServerCo
     checkedAt: number;
   }
 
-  const manifestCache = new Map<string, ManifestCacheEntry>();
+  const manifestCache = new LruCache<string, ManifestCacheEntry>({ maxEntries: 128 });
   const MANIFEST_REVALIDATE_MS = config.cache.manifestMs;
   let manifestGeneration = 0;
 

@@ -30,6 +30,11 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 - Glass and ice remove touching internal faces through explicit block metadata, while leaves and different glass colors retain theirs. Inset/rotated model faces no longer cull neighbors solely by their projected bounding box. Existing mesh cache entries are invalidated.
 - Disconnected tunnels now union section-visibility connections correctly; duplicate connections previously carried into other bits and could hide reachable terrain.
 - Storage metadata caches now bound retained keys and aggregate list items, including negative lookups; long-running read-only servers no longer retain every path ever probed.
+- Legacy overworld entity sidecars resolve to `entities/` rather than rereading terrain from `region/`. Warm chunk reads reuse entity NBT and hashes, and world deletion releases cached region/header bytes immediately.
+
+### Changed
+
+- Server region, chunk, texture and manifest caches share bounded LRU accounting; oversized region/chunk buffers bypass retention without flushing useful residents. Texture-path and world-directory lookups are also bounded.
 
 ### Added
 

@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { getRegionChunk } from '@violet-map/core/region';
 import { assertDimensionId } from '@violet-map/core/domain';
 import { mapWithConcurrency } from '@violet-map/core/async';
+import { LruCache } from '@violet-map/core/cache';
 import { parseNbt, decompress } from '@violet-map/core/nbt';
 import { createMinimalLevelDat } from './levelDat.js';
 import { cleanStoragePath } from '@violet-map/storage';
@@ -70,25 +71,25 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     entities?: Uint8Array;
   }
 
-  const fileHashCache = new Map<string, HashCacheEntry>();
-  const regionCache = new Map<string, RegionCacheEntry>();
-  const regionHeaderCache = new Map<string, RegionHeaderCacheEntry>();
+  const fileHashCache = new LruCache<string, HashCacheEntry>({ maxEntries: 4096 });
+  const regionCache = new LruCache<string, RegionCacheEntry>({
+    maxEntries: 16,
+    maxWeight: config.cache.regionBytes,
+    weightOf: (entry) => entry.bytes.byteLength,
+  });
+  const regionHeaderCache = new LruCache<string, RegionHeaderCacheEntry>({ maxEntries: 256 });
   const regionReadInflight = new Map<string, Promise<RegionCacheEntry | null>>();
   const regionHeaderInflight = new Map<string, Promise<RegionHeaderCacheEntry | null>>();
-  const regionDirCache = new Map<string, string>();
-  const entityDirCache = new Map<string, string>();
-  const chunkNbtCache = new Map<string, ChunkCacheEntry>();
-  const MAX_REGION_CACHE = 16;
-  const MAX_REGION_HEADER_CACHE = 256;
-  const MAX_CHUNK_NBT_CACHE = 512;
-  const MAX_FILE_HASH_CACHE = 4096;
-  const MAX_REGION_CACHE_BYTES = config.cache.regionBytes;
-  const MAX_CHUNK_NBT_CACHE_BYTES = config.cache.chunkNbtBytes;
+  const regionDirCache = new LruCache<string, string>({ maxEntries: 1024 });
+  const entityDirCache = new LruCache<string, string>({ maxEntries: 1024 });
+  const chunkNbtCache = new LruCache<string, ChunkCacheEntry>({
+    maxEntries: 512,
+    maxWeight: config.cache.chunkNbtBytes,
+    weightOf: (entry) => entry.data.byteLength + (entry.entities?.byteLength ?? 0),
+  });
   const REGION_LOCATION_BYTES = 4096;
   const MAX_PARALLEL_STORAGE_READS = 16;
   const MAX_PARALLEL_HASH_READS = 4;
-  let regionCacheBytes = 0;
-  let chunkNbtCacheBytes = 0;
   let storageCacheGeneration = 0;
   const WORLD_LIST_CACHE_MS = config.cache.worldListMs;
   let worldListCache: { expiresAt: number; worlds: WorldInfo[] } | null = null;
@@ -129,72 +130,16 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     return `v2:${validator(info)}`;
   }
 
-  function rememberLru<K, V>(map: Map<K, V>, key: K, value: V, max: number): V {
-    map.delete(key);
-    map.set(key, value);
-    if (map.size > max) map.delete(map.keys().next().value!);
-    return value;
-  }
-
-  function touchLru<K, V>(map: Map<K, V>, key: K, value: V) {
-    map.delete(key);
-    map.set(key, value);
-  }
-
-  function rememberRegionCache(key: string, value: RegionCacheEntry): RegionCacheEntry {
-    const previous = regionCache.get(key);
-    if (previous) regionCacheBytes -= previous.bytes.byteLength;
-    touchLru(regionCache, key, value);
-    regionCacheBytes += value.bytes.byteLength;
-    while (regionCache.size > MAX_REGION_CACHE || regionCacheBytes > MAX_REGION_CACHE_BYTES) {
-      const oldestKey = regionCache.keys().next().value;
-      if (!oldestKey) break;
-      deleteRegionCache(oldestKey);
-    }
-    return value;
-  }
-
-  function deleteRegionCache(key: string) {
-    const hit = regionCache.get(key);
-    if (!hit) return;
-    regionCacheBytes -= hit.bytes.byteLength;
-    regionCache.delete(key);
-  }
-
-  function rememberChunkNbtCache(key: string, value: ChunkCacheEntry): ChunkCacheEntry {
-    const previous = chunkNbtCache.get(key);
-    if (previous) chunkNbtCacheBytes -= chunkCacheEntryBytes(previous);
-    touchLru(chunkNbtCache, key, value);
-    chunkNbtCacheBytes += chunkCacheEntryBytes(value);
-    while (chunkNbtCache.size > MAX_CHUNK_NBT_CACHE || chunkNbtCacheBytes > MAX_CHUNK_NBT_CACHE_BYTES) {
-      const oldestKey = chunkNbtCache.keys().next().value;
-      if (!oldestKey) break;
-      deleteChunkNbtCache(oldestKey);
-    }
-    return value;
-  }
-
-  function deleteChunkNbtCache(key: string) {
-    const hit = chunkNbtCache.get(key);
-    if (!hit) return;
-    chunkNbtCacheBytes -= chunkCacheEntryBytes(hit);
-    chunkNbtCache.delete(key);
-  }
-
-  function chunkCacheEntryBytes(entry: ChunkCacheEntry): number {
-    return entry.data.byteLength + (entry.entities?.byteLength ?? 0);
-  }
-
   function invalidatePath(filePath: string) {
     storageCacheGeneration++;
     const clean = cleanStoragePath(filePath);
     fileHashCache.delete(clean);
-    deleteRegionCache(clean);
+    regionCache.delete(clean);
     regionHeaderCache.delete(clean);
     regionReadInflight.delete(clean);
     regionHeaderInflight.delete(clean);
     for (const [key, entry] of chunkNbtCache) {
-      if (entry.sourcePath === clean) deleteChunkNbtCache(key);
+      if (entry.sourcePath === clean) chunkNbtCache.delete(key);
     }
   }
 
@@ -202,13 +147,20 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     storageCacheGeneration++;
     const prefix = dim ? `${world}|${dim}|` : `${world}|`;
     for (const key of [...chunkNbtCache.keys()]) {
-      if (key.startsWith(prefix)) deleteChunkNbtCache(key);
+      if (key.startsWith(prefix)) chunkNbtCache.delete(key);
     }
   }
 
   function clearWorldDirectoryCaches(world: string): void {
     for (const key of regionDirCache.keys()) if (key.startsWith(`${world}|`)) regionDirCache.delete(key);
     for (const key of entityDirCache.keys()) if (key.startsWith(`${world}|`)) entityDirCache.delete(key);
+  }
+
+  function clearWorldObjectCaches(world: string): void {
+    const prefix = `${world}/`;
+    for (const cache of [fileHashCache, regionCache, regionHeaderCache, regionReadInflight, regionHeaderInflight]) {
+      for (const key of cache.keys()) if (key.startsWith(prefix)) cache.delete(key);
+    }
   }
 
   /** Notify world-facing caches after a protected storage file changes. */
@@ -243,8 +195,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     const bytes = await worldStorage.read(clean);
     if (!bytes) throw new Error(`file disappeared while hashing: ${clean}`);
     const hash = sha256(bytes);
-    if (generation === storageCacheGeneration)
-      rememberLru(fileHashCache, clean, { validator: v, hash }, MAX_FILE_HASH_CACHE);
+    if (generation === storageCacheGeneration) fileHashCache.set(clean, { validator: v, hash });
     return hash;
   }
 
@@ -257,7 +208,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
   }
 
   function dimensionEntityCandidates(dim: string): string[] {
-    return dimensionRegionCandidates(dim).map((candidate) => candidate.replace(/\/region$/, '/entities'));
+    return dimensionRegionCandidates(dim).map((candidate) => candidate.replace(/(^|\/)region$/, '$1entities'));
   }
 
   async function prefixHasRegionFiles(prefix: string): Promise<boolean> {
@@ -270,10 +221,11 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     const key = `${world}|${dim}`;
     const cached = regionDirCache.get(key);
     if (cached) return cached;
+    const generation = storageCacheGeneration;
     const candidates = dimensionRegionCandidates(dim).map((sub) => `${world}/${sub}`);
     for (const candidate of candidates) {
       if (await prefixHasRegionFiles(candidate)) {
-        regionDirCache.set(key, candidate);
+        if (generation === storageCacheGeneration) regionDirCache.set(key, candidate);
         return candidate;
       }
     }
@@ -287,10 +239,11 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     const key = `${world}|${dim}`;
     const cached = entityDirCache.get(key);
     if (cached) return cached;
+    const generation = storageCacheGeneration;
     const candidates = dimensionEntityCandidates(dim).map((sub) => `${world}/${sub}`);
     for (const candidate of candidates) {
       if (await prefixHasRegionFiles(candidate)) {
-        entityDirCache.set(key, candidate);
+        if (generation === storageCacheGeneration) entityDirCache.set(key, candidate);
         return candidate;
       }
     }
@@ -335,11 +288,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     const clean = cleanStoragePath(filePath);
     const v = validator(info);
     const hit = regionCache.get(clean);
-    if (hit?.validator === v) {
-      regionCache.delete(clean);
-      regionCache.set(clean, hit);
-      return hit;
-    }
+    if (hit?.validator === v) return hit;
     const pending = regionReadInflight.get(clean);
     if (pending) return pending;
     let load!: Promise<RegionCacheEntry | null>;
@@ -348,19 +297,15 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
       if (!bytes) return null;
       const hash = sourceHashForInfo(info);
       if (regionReadInflight.get(clean) === load && bytes.length >= REGION_LOCATION_BYTES) {
-        rememberLru(
-          regionHeaderCache,
-          clean,
-          {
-            validator: v,
-            hash,
-            header: bytes.subarray(0, REGION_LOCATION_BYTES).slice(),
-          },
-          MAX_REGION_HEADER_CACHE,
-        );
+        regionHeaderCache.set(clean, {
+          validator: v,
+          hash,
+          header: bytes.subarray(0, REGION_LOCATION_BYTES).slice(),
+        });
       }
       const value = { validator: v, hash, bytes };
-      return regionReadInflight.get(clean) === load ? rememberRegionCache(clean, value) : value;
+      if (regionReadInflight.get(clean) === load) regionCache.set(clean, value);
+      return value;
     })();
     regionReadInflight.set(clean, load);
     try {
@@ -380,11 +325,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
       return { validator: v, hash: fullHit.hash, header: fullHit.bytes.subarray(0, REGION_LOCATION_BYTES) };
     }
     const hit = regionHeaderCache.get(clean);
-    if (hit?.validator === v) {
-      regionHeaderCache.delete(clean);
-      regionHeaderCache.set(clean, hit);
-      return hit;
-    }
+    if (hit?.validator === v) return hit;
     const pending = regionHeaderInflight.get(clean);
     if (pending) return pending;
     let load!: Promise<RegionHeaderCacheEntry | null>;
@@ -392,9 +333,8 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
       const header = await worldStorage.readRange(clean, 0, REGION_LOCATION_BYTES);
       if (!header || header.length < REGION_LOCATION_BYTES) return null;
       const value: RegionHeaderCacheEntry = { validator: v, hash: sourceHashForInfo(info), header };
-      return regionHeaderInflight.get(clean) === load
-        ? rememberLru(regionHeaderCache, clean, value, MAX_REGION_HEADER_CACHE)
-        : value;
+      if (regionHeaderInflight.get(clean) === load) regionHeaderCache.set(clean, value);
+      return value;
     })();
     regionHeaderInflight.set(clean, load);
     try {
@@ -679,6 +619,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     const generation = storageCacheGeneration;
     const metas = await getChunkMetadataBatch(world, dim, chunks);
     const out = new Array<ChunkReadResult | null>(metas.length).fill(null);
+    const cachedResults = new Uint8Array(metas.length);
     const byRegion = new Map<string, { meta: ChunkMetadata; index: number }[]>();
 
     await mapWithConcurrency(metas, MAX_PARALLEL_STORAGE_READS, async (meta, index) => {
@@ -687,8 +628,8 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
       const cacheKey = chunkCacheKey(world, dim, meta.cx, meta.cz);
       const hit = chunkNbtCache.get(cacheKey);
       if (hit?.sourcePath === meta.sourcePath && hit.fileHash === meta.fileHash && hit.entityHash === meta.entityHash) {
-        touchLru(chunkNbtCache, cacheKey, hit);
         out[index] = { ...meta, data: hit.data, entities: hit.entities, nbtHash: hit.nbtHash } as ChunkReadResult;
+        cachedResults[index] = 1;
         return;
       }
 
@@ -719,7 +660,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     const byEntityRegion = new Map<string, { meta: ChunkMetadata; index: number }[]>();
     for (let index = 0; index < metas.length; index++) {
       const meta = metas[index];
-      if (!out[index]?.data || !meta?.entitySourcePath) continue;
+      if (cachedResults[index] || !out[index]?.data || !meta?.entitySourcePath) continue;
       const group = byEntityRegion.get(meta.entitySourcePath) ?? [];
       group.push({ meta, index });
       byEntityRegion.set(meta.entitySourcePath, group);
@@ -737,10 +678,12 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     });
 
     // Cache only after both terrain and optional entity NBT have been merged.
-    for (const result of out) {
+    for (let index = 0; index < out.length; index++) {
       if (generation !== storageCacheGeneration) break;
+      if (cachedResults[index]) continue;
+      const result = out[index];
       if (!result?.data || !result.sourcePath || !result.fileHash) continue;
-      rememberChunkNbtCache(chunkCacheKey(world, dim, result.cx, result.cz), {
+      chunkNbtCache.set(chunkCacheKey(world, dim, result.cx, result.cz), {
         sourcePath: result.sourcePath,
         fileHash: result.fileHash,
         data: result.data,
@@ -784,7 +727,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     invalidatePath(filePath);
     const info = await worldStorage.stat(filePath);
     const fileHash = info ? sourceHashForInfo(info) : sha256(data);
-    rememberChunkNbtCache(chunkCacheKey(world, dim, x, z), {
+    chunkNbtCache.set(chunkCacheKey(world, dim, x, z), {
       sourcePath: filePath,
       fileHash,
       data,
@@ -804,6 +747,7 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     const deleted = await worldStorage.deletePrefix(world);
     clearChunkCacheFor(world);
     clearWorldDirectoryCaches(world);
+    clearWorldObjectCaches(world);
     invalidateTopMapManifest(world);
     invalidateWorldList();
     return { deleted };
@@ -914,7 +858,22 @@ export function createWorldStore(worldStorage: ObjectStorage, topMap: TopMapServ
     const remoteExtra = remote.map((f) => f.path).filter((p) => !wanted.has(p));
     return { upload, same, remoteExtra };
   }
+
+  /** Resident cache ownership, excluding active requests and buffers held by
+   * callers. Byte limits account for terrain and entity NBT together. */
+  function cacheStats() {
+    return {
+      regions: regionCache.size,
+      regionBytes: regionCache.weight,
+      regionHeaders: regionHeaderCache.size,
+      chunks: chunkNbtCache.size,
+      chunkBytes: chunkNbtCache.weight,
+      fileHashes: fileHashCache.size,
+      directories: regionDirCache.size + entityDirCache.size,
+    };
+  }
   return {
+    cacheStats,
     assertWorldName,
     invalidateStoredFile,
     ensureLevelDat,

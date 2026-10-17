@@ -131,3 +131,44 @@ test('a world can discover its first region in a modern dimension directory', as
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test('warm chunk reads reuse entity NBT and deleting a world releases its cached regions', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-world-cache-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const { loadServerConfig } = await import('../src/configuration.js');
+  const { LocalStorage } = await import('@violet-map/storage/local');
+  const { createWorldStore } = await import('../src/worldStore.js');
+  const { createTopMapService } = await import('../src/topMap.js');
+  const config = loadServerConfig({ env: { WORLDS_DIR: root }, cwd: root });
+  const storage = new LocalStorage(root);
+  const store = createWorldStore(storage, createTopMapService(storage, config), config);
+  const region = (payload: Uint8Array) => {
+    const bytes = new Uint8Array(3 * 4096);
+    const view = new DataView(bytes.buffer);
+    view.setUint32(0, (2 << 8) | 1);
+    view.setUint32(8192, payload.length + 1);
+    bytes[8196] = 3;
+    bytes.set(payload, 8197);
+    return bytes;
+  };
+  await storage.write('one/region/r.0.0.mca', region(new Uint8Array([10, 0, 0, 0])));
+  await storage.write('one/entities/r.0.0.mca', region(new Uint8Array([10, 0, 0, 1])));
+  await storage.write('two/region/r.0.0.mca', region(new Uint8Array([10, 0, 0, 0])));
+  const first = await store.getChunkNbtWithMeta('one', 'minecraft:overworld', 0, 0);
+  const second = await store.getChunkNbtWithMeta('one', 'minecraft:overworld', 0, 0);
+  assert.ok(first?.entities);
+  assert.deepEqual(first.entities, new Uint8Array([10, 0, 0, 1]));
+  assert.equal(second?.data, first.data);
+  assert.equal(second?.entities, first.entities, 'a cache hit must not decompress entity regions again');
+  assert.equal(second?.nbtHash, first.nbtHash);
+  const other = await store.getChunkNbtWithMeta('two', 'minecraft:overworld', 0, 0);
+  assert.ok(other, 'second world chunk must be readable');
+  assert.equal(other.entities, undefined, 'terrain regions must never be treated as entity sidecars');
+  assert.equal(store.cacheStats().regions, 3);
+  assert.equal(store.cacheStats().chunkBytes, 12);
+  await store.deleteWorld('one');
+  assert.equal(store.cacheStats().regions, 1, 'only the surviving world retains region bytes');
+  assert.equal(store.cacheStats().regionHeaders, 1);
+  assert.equal(store.cacheStats().chunks, 1);
+  assert.equal(store.cacheStats().chunkBytes, 4);
+});

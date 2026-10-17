@@ -16,6 +16,7 @@ import { normalizeId } from '@violet-map/core/domain';
 import { PNG } from 'pngjs';
 import { mapWithConcurrency } from '@violet-map/core/async';
 import { WorkLimiter } from '@violet-map/core/async';
+import { LruCache } from '@violet-map/core/cache';
 export function createAssetService(config: ServerConfig) {
   type JsonEntry = { rel: string; file: string };
 
@@ -82,18 +83,20 @@ export function createAssetService(config: ServerConfig) {
   let bundlePromise: Promise<AssetBundle> | null = null;
   let bundlePayloadCache: { bundle: AssetBundle; body: string; etag: string } | null = null;
   let bundleGeneration = 0;
-  const atlasCache = new Map<string, { png: Uint8Array; manifest: TextureAtlasManifest }>();
+  const atlasCache = new LruCache<string, { png: Uint8Array; manifest: TextureAtlasManifest }>({ maxEntries: 8 });
   const atlasInflight = new Map<string, Promise<{ key: string; manifest: TextureAtlasManifest; png: Uint8Array }>>();
-  const texturePathCache = new Map<string, string | null>();
-  const textureCache = new Map<string, { bytes: Uint8Array; etag: string }>();
+  const texturePathCache = new LruCache<string, string | null>({ maxEntries: 16384 });
+  const textureCache = new LruCache<string, { bytes: Uint8Array; etag: string }>({
+    maxEntries: 4096,
+    maxWeight: config.cache.textureBytes,
+    weightOf: (entry) => entry.bytes.byteLength,
+  });
   const textureInflight = new Map<string, Promise<{ bytes: Uint8Array; etag: string } | null>>();
   const MAX_ATLAS_TEXTURES = 2048;
-  const MAX_ATLAS_CACHE_ENTRIES = 8;
   const MAX_TEXTURE_CACHE_BYTES = config.cache.textureBytes;
   const MAX_CONCURRENT_ATLAS_BUILDS = config.limits.atlasBuilds;
   const MAX_QUEUED_ATLAS_BUILDS = config.limits.atlasQueue;
   const BUNDLED_RENDERER_ASSETS = path.join(path.dirname(fileURLToPath(import.meta.url)), '../data-defaults/assets');
-  let textureCacheBytes = 0;
   let textureGeneration = 0;
   const atlasBuildLimiter = new WorkLimiter(
     MAX_CONCURRENT_ATLAS_BUILDS,
@@ -204,7 +207,6 @@ export function createAssetService(config: ServerConfig) {
     texturePathCache.clear();
     textureCache.clear();
     textureInflight.clear();
-    textureCacheBytes = 0;
   }
 
   const TEXTURE_ID_RE = /^[a-z0-9_.-]+:[a-z0-9_./-]+$/;
@@ -230,29 +232,11 @@ export function createAssetService(config: ServerConfig) {
     return null;
   }
 
-  function rememberTexture(id: string, value: { bytes: Uint8Array; etag: string }): void {
-    const previous = textureCache.get(id);
-    if (previous) textureCacheBytes -= previous.bytes.byteLength;
-    textureCache.delete(id);
-    textureCache.set(id, value);
-    textureCacheBytes += value.bytes.byteLength;
-    while (textureCacheBytes > MAX_TEXTURE_CACHE_BYTES && textureCache.size > 1) {
-      const oldest = textureCache.entries().next().value as [string, { bytes: Uint8Array; etag: string }] | undefined;
-      if (!oldest) break;
-      textureCache.delete(oldest[0]);
-      textureCacheBytes -= oldest[1].bytes.byteLength;
-    }
-  }
-
   /** Read a texture once per reload window; callers get an LRU-cached immutable byte buffer. */
   async function readTextureFile(id: string): Promise<{ bytes: Uint8Array; etag: string } | null> {
     const nid = normalizeId(id);
     const cached = textureCache.get(nid);
-    if (cached) {
-      textureCache.delete(nid);
-      textureCache.set(nid, cached);
-      return cached;
-    }
+    if (cached) return cached;
     const pending = textureInflight.get(nid);
     if (pending) return pending;
     const generation = textureGeneration;
@@ -263,7 +247,7 @@ export function createAssetService(config: ServerConfig) {
         const bytes = new Uint8Array(await fs.readFile(file));
         const value = { bytes, etag: `"${createHash('sha1').update(bytes).digest('hex')}"` };
         if (generation === textureGeneration && bytes.byteLength <= MAX_TEXTURE_CACHE_BYTES)
-          rememberTexture(nid, value);
+          textureCache.set(nid, value);
         return value;
       } catch (error) {
         if (!isMissingPath(error)) throw error;
@@ -501,12 +485,6 @@ export function createAssetService(config: ServerConfig) {
     return { size: width, placements: packed.placements };
   }
 
-  function rememberAtlas(key: string, value: { png: Uint8Array; manifest: TextureAtlasManifest }): void {
-    atlasCache.delete(key);
-    atlasCache.set(key, value);
-    while (atlasCache.size > MAX_ATLAS_CACHE_ENTRIES) atlasCache.delete(atlasCache.keys().next().value!);
-  }
-
   async function buildTextureAtlasInner(
     normalized: string[],
   ): Promise<{ key: string; manifest: TextureAtlasManifest; png: Uint8Array }> {
@@ -531,11 +509,7 @@ export function createAssetService(config: ServerConfig) {
     }
     const key = hash.digest('hex').slice(0, 20);
     const hit = atlasCache.get(key);
-    if (hit) {
-      atlasCache.delete(key);
-      atlasCache.set(key, hit);
-      return { key, ...hit };
-    }
+    if (hit) return { key, ...hit };
 
     const pad = 8;
     const allTiles = sprites.flatMap((sprite) => sprite.tiles);
@@ -584,7 +558,7 @@ export function createAssetService(config: ServerConfig) {
       avgColors,
       hasAlpha,
     };
-    rememberAtlas(key, { png: bytes, manifest });
+    atlasCache.set(key, { png: bytes, manifest });
     return { key, png: bytes, manifest };
   }
 
@@ -610,8 +584,6 @@ export function createAssetService(config: ServerConfig) {
   function getTextureAtlasPng(key: string): Uint8Array | null {
     const hit = atlasCache.get(key);
     if (!hit) return null;
-    atlasCache.delete(key);
-    atlasCache.set(key, hit);
     return hit.png;
   }
   return {
