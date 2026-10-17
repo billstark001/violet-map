@@ -93,7 +93,7 @@ export class OverlayResourcePool<T extends DisposableOverlayResource> {
             throw new DOMException('overlay resource released', 'AbortError');
           }
           if (
-            !Number.isSafeInteger(resource.bytes) ||
+            !Number.isFinite(resource.bytes) ||
             resource.bytes < 0 ||
             this.residentBytes + resource.bytes > this.maxBytes
           ) {

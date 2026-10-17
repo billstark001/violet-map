@@ -108,8 +108,8 @@ test('invalid pool limits fail immediately instead of disabling budgets or stall
   assert.throws(() => disabled.acquire('a', async () => ({ bytes: 0, dispose() {} })), /version budget/);
   const pool = new OverlayResourcePool(0, 1, 1);
   let disposed = 0;
-  const invalid = pool.acquire('fractional', async () => ({
-    bytes: 0.5,
+  const invalid = pool.acquire('nonfinite', async () => ({
+    bytes: NaN,
     dispose() {
       disposed++;
     },
