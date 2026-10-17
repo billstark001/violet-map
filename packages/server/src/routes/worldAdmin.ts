@@ -1,3 +1,4 @@
+import { nonSharedByteView } from '@violet-map/core/http';
 import type { RouteContext } from './context.js';
 import { readRequestJson } from '../httpBody.js';
 import { isWorldDiffInput, validateWorldName } from '../worldValidation.js';
@@ -45,7 +46,7 @@ export function mountWorldAdmin(context: RouteContext) {
         'accept-ranges': 'bytes',
       });
     }
-    const responseBytes = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    const responseBytes = nonSharedByteView(bytes);
     return c.body(
       responseBytes,
       range ? 206 : 200,

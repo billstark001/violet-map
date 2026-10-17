@@ -1,3 +1,4 @@
+import { nonSharedByteView } from '@violet-map/core/http';
 import type { RouteContext } from './context.js';
 
 export function mountAssets(context: RouteContext) {
@@ -46,7 +47,7 @@ export function mountAssets(context: RouteContext) {
     if (!key) return c.text('atlas not found', 404);
     const png = getTextureAtlasPng(key);
     if (!png) return c.text('atlas not found', 404);
-    return c.body(png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength) as ArrayBuffer, 200, {
+    return c.body(nonSharedByteView(png), 200, {
       'content-type': 'image/png',
       'cache-control': 'public, max-age=300, must-revalidate',
     });
@@ -66,15 +67,8 @@ export function mountAssets(context: RouteContext) {
       'cache-control': 'public, max-age=3600, must-revalidate',
     };
     if (c.req.header('if-none-match') === texture.etag) return c.body(null, 304, headers);
-    return c.body(
-      texture.bytes.buffer.slice(
-        texture.bytes.byteOffset,
-        texture.bytes.byteOffset + texture.bytes.byteLength,
-      ) as ArrayBuffer,
-      200,
-      {
-        ...headers,
-      },
-    );
+    return c.body(nonSharedByteView(texture.bytes), 200, {
+      ...headers,
+    });
   });
 }

@@ -1,3 +1,10 @@
+/** Borrow an ArrayBuffer-backed view; shared backing must be copied for Web APIs. */
+export function nonSharedByteView(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  return bytes.buffer instanceof ArrayBuffer
+    ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    : new Uint8Array(bytes);
+}
+
 /** Read a request or response within a byte budget, cancelling on overflow.
  * Returns owned bytes, or null when the declared/actual body exceeds the budget.
  * Stream failures reject; the reader lock is always released. */

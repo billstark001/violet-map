@@ -1,6 +1,23 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readLimitedBody } from '../src/http.js';
+import { nonSharedByteView, readLimitedBody } from '../src/http.js';
+
+test('nonshared byte views preserve offsets and isolate shared backing for Web APIs', () => {
+  for (const backing of [new ArrayBuffer(5), new SharedArrayBuffer(5)]) {
+    const bytes = new Uint8Array(backing);
+    bytes.set([99, 1, 2, 3, 88]);
+    const input = bytes.subarray(1, 4);
+    const view = nonSharedByteView(input);
+    assert.ok(view.buffer instanceof ArrayBuffer);
+    assert.deepEqual([...view], [1, 2, 3]);
+    assert.equal(view.buffer === backing, backing instanceof ArrayBuffer);
+    if (backing instanceof SharedArrayBuffer) {
+      assert.equal(view.buffer.byteLength, 3);
+      input.fill(9);
+      assert.deepEqual([...view], [1, 2, 3]);
+    }
+  }
+});
 
 test('body reader accepts the exact limit and rejects overflow without buffering the rest', async () => {
   const exact = new Request('http://localhost/', { method: 'POST', body: new Uint8Array([1, 2, 3]) });

@@ -3,7 +3,7 @@ import { ContentValidationError, revisionTag } from '@violet-map/core/overlays';
 import { ContentError, type PublishedMedia } from '../content.js';
 import type { ServerConfig } from '../configuration.js';
 import type { AppServices } from '../serviceTypes.js';
-import { readLimitedBody } from '@violet-map/core/http';
+import { nonSharedByteView, readLimitedBody } from '@violet-map/core/http';
 import { parseByteRange } from '../httpRange.js';
 import { createHash } from 'node:crypto';
 import fresh from 'fresh';
@@ -57,15 +57,11 @@ async function bytesResponse(c: Context, { version, read }: PublishedMedia) {
     return c.body(null, 416, { ...headers, 'content-range': `bytes */${version.bytes}` });
   if (c.req.method === 'HEAD') return c.body(null, 200, { ...headers, 'content-length': String(version.bytes) });
   const body = await read(range ?? undefined);
-  return c.body(
-    body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer,
-    range ? 206 : 200,
-    {
-      ...headers,
-      'content-length': String(body.byteLength),
-      ...(range ? { 'content-range': `bytes ${range.start}-${range.end}/${version.bytes}` } : {}),
-    },
-  );
+  return c.body(nonSharedByteView(body), range ? 206 : 200, {
+    ...headers,
+    'content-length': String(body.byteLength),
+    ...(range ? { 'content-range': `bytes ${range.start}-${range.end}/${version.bytes}` } : {}),
+  });
 }
 
 export function mountContent(app: Hono, config: ServerConfig, services: AppServices): void {

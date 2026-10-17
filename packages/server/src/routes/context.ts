@@ -7,7 +7,7 @@ import { decode, encode } from '@msgpack/msgpack';
 import { parseByteRange } from '../httpRange.js';
 import { ChunkReadLimiter, ChunkServiceBusyError } from '../chunkReadLimiter.js';
 import { parseChunkCoordinates } from '../chunkCoordinates.js';
-import { readLimitedBody } from '@violet-map/core/http';
+import { nonSharedByteView, readLimitedBody } from '@violet-map/core/http';
 import { isDimensionId, isChunkCoordinate } from '@violet-map/core/domain';
 import { REQUIRED_ROLE } from '../auth.js';
 import { cleanStoragePath } from '@violet-map/storage';
@@ -55,9 +55,9 @@ export function createRouteContext(app: Hono, config: ServerConfig, services: Ap
   const MAX_QUEUED_CHUNK_READS = config.limits.chunkQueue;
   const objectPayloadCache = new WeakMap<object, { body: string; etag: string }>();
   const chunkReadLimiter = new ChunkReadLimiter(MAX_CONCURRENT_CHUNK_READS, MAX_QUEUED_CHUNK_READS);
-  function msgpackBody(value: unknown): ArrayBuffer {
+  function msgpackBody(value: unknown): Uint8Array<ArrayBuffer> {
     const bytes = encode(value);
-    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    return nonSharedByteView(bytes);
   }
   function publicChunkMeta<T extends { sourcePath?: string; entitySourcePath?: string }>(
     value: T,

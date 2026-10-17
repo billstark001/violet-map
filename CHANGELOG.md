@@ -103,6 +103,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Changed
 
+- Binary HTTP responses reuse exact ordinary byte views across media, textures, top-map, storage and MessagePack routes, avoiding redundant whole-payload copies and using Hono Node's typed-array response path. Shared backing is copied before delivery.
+
 - Content mutations reuse repeated layer/media reference reads within that mutation, while checking each instance's placement and rechecking publication state on the next operation.
 
 - Server imports and viewer decoding share one static GLB support-policy parser; deep metadata traversal no longer depends on recursive JavaScript calls. Full glTF validation remains a server publication check.

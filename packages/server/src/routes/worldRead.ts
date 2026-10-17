@@ -1,3 +1,4 @@
+import { nonSharedByteView } from '@violet-map/core/http';
 import type { RouteContext } from './context.js';
 import { validateWorldName } from '../worldValidation.js';
 
@@ -66,7 +67,7 @@ export function mountWorldRead(context: RouteContext) {
     if (!Number.isInteger(rx) || !Number.isInteger(rz)) return c.text('bad region coords', 400);
     const bytes = await readTopMapTile(c.req.param('world'), decodeURIComponent(c.req.param('dim')), rx, rz);
     if (!bytes) return c.text('top-map tile not found', 404);
-    return c.body(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, 200, {
+    return c.body(nonSharedByteView(bytes), 200, {
       'cache-control': 'public, max-age=60, must-revalidate',
       'content-type': 'application/msgpack',
     });
