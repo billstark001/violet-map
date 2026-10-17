@@ -3,6 +3,14 @@ import { BlockStateRef, normalizeId } from '@violet-map/core/domain';
 
 const HEIGHTMAP_VALUES = 16 * 16;
 const MAX_HEIGHTMAP_BITS = 16;
+const LOW_WORD = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1 ? 0 : 1;
+const HIGH_WORD = LOW_WORD ^ 1;
+
+function valueFromWords(low: number, high: number, shift: number, bits: number, mask: number): number {
+  const value =
+    shift >= 32 ? high >>> (shift - 32) : shift + bits <= 32 ? low >>> shift : (low >>> shift) | (high << (32 - shift));
+  return (value & mask) >>> 0;
+}
 
 export const AIR: BlockStateRef = Object.freeze({ name: 'minecraft:air', properties: {} });
 export const AIR_NAMES = new Set(['minecraft:air', 'minecraft:cave_air', 'minecraft:void_air']);
@@ -18,10 +26,13 @@ export interface WorldEntityRecord {
   yaw?: number;
 }
 
-/** 1.16+ 紧凑位数组（值不跨 long）。 */
+/** 1.16+ packed integers that do not span longs. The input view is borrowed;
+ * values wider than 53 bits follow JavaScript Number rounding. */
 export class BitArray {
   private readonly valuesPerLong: number;
   private readonly mask: bigint;
+  private readonly words: Uint32Array | null;
+  private readonly numberMask: number;
   constructor(
     readonly bits: number,
     readonly data: BigUint64Array,
@@ -30,15 +41,37 @@ export class BitArray {
       throw new RangeError(`bits must be an integer from 1 to 64, got ${bits}`);
     this.valuesPerLong = Math.floor(64 / bits);
     this.mask = (1n << BigInt(bits)) - 1n;
+    this.words = bits <= 32 ? new Uint32Array(data.buffer, data.byteOffset, data.length * 2) : null;
+    this.numberMask = bits <= 32 ? 2 ** bits - 1 : 0;
   }
+  /** Read an integer index; missing backing longs yield zero. */
   get(index: number): number {
+    if (!Number.isSafeInteger(index)) throw new RangeError('packed array index must be an integer');
     const l = Math.floor(index / this.valuesPerLong);
+    if (this.words)
+      return valueFromWords(
+        this.words[l * 2 + LOW_WORD],
+        this.words[l * 2 + HIGH_WORD],
+        (index - l * this.valuesPerLong) * this.bits,
+        this.bits,
+        this.numberMask,
+      );
     const shift = BigInt((index - l * this.valuesPerLong) * this.bits);
     return Number(((this.data[l] ?? 0n) >> shift) & this.mask);
   }
 
   /** Decode non-spanning packed values into an existing zero-initialized array. */
   copyTo(out: Uint8Array | Uint16Array): void {
+    if (this.words) {
+      let index = 0;
+      for (let word = 0; word < this.words.length && index < out.length; word += 2) {
+        const low = this.words[word + LOW_WORD],
+          high = this.words[word + HIGH_WORD];
+        for (let n = 0; n < this.valuesPerLong && index < out.length; n++)
+          out[index++] = valueFromWords(low, high, n * this.bits, this.bits, this.numberMask);
+      }
+      return;
+    }
     const shift = BigInt(this.bits);
     let index = 0;
     for (const packed of this.data) {

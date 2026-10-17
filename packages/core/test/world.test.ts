@@ -13,6 +13,37 @@ test('packed values decode correctly across long boundaries', () => {
   assert.equal(values.get(12), 7);
 });
 
+test('packed access and bulk decode match bigint extraction for every bit width and offset buffers', () => {
+  let state = 0x12345678;
+  const next = () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state;
+  };
+  for (let bits = 1; bits <= 64; bits++) {
+    const backing = new BigUint64Array(6);
+    for (let i = 1; i < 5; i++) backing[i] = (BigInt(next()) << 32n) | BigInt(next());
+    const data = backing.subarray(1, 5);
+    const values = new BitArray(bits, data);
+    const perLong = Math.floor(64 / bits),
+      mask = (1n << BigInt(bits)) - 1n;
+    const output = new Uint16Array(perLong * data.length + 3);
+    const expected = new Uint16Array(output.length);
+    for (let index = 0; index < output.length; index++) {
+      const long = data[Math.floor(index / perLong)] ?? 0n;
+      const value = Number((long >> BigInt((index % perLong) * bits)) & mask);
+      assert.equal(values.get(index), value, `bits=${bits}, index=${index}`);
+      expected[index] = value;
+    }
+    values.copyTo(output);
+    assert.deepEqual(output, expected, `bulk bits=${bits}`);
+    const bytes = new Uint8Array(output.length);
+    values.copyTo(bytes);
+    assert.deepEqual(bytes, Uint8Array.from(expected), `byte truncation bits=${bits}`);
+    assert.throws(() => values.get(0.5), RangeError);
+    assert.equal(values.get(-1), 0);
+  }
+});
+
 test('truncated packed arrays leave missing values at zero', () => {
   const values = new BitArray(4, new BigUint64Array([1n]));
   const section = new ChunkSection(

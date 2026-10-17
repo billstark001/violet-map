@@ -53,6 +53,7 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 - Admin is split into a small application shell, independent panels and shared async/session controls. Account menus show verified identity/role, check sessions and revoke user credentials on logout; destructive actions use retryable confirmation dialogs.
 - S3 prefix deletion uses up to four concurrent SDK `DeleteObjects` batches of at most 1000 keys, rather than one request per object. Per-object errors in HTTP-success responses reject the operation explicitly.
 - Region-only chunk batches avoid one missing override-object stat/HEAD per coordinate. A shared directory probe discovers whether overrides exist, and normal writes invalidate that probe immediately.
+- Packed block/biome/height indices up to 32 bits decode through endian-aware zero-copy word views, avoiding BigInt operations per value. Wider public bit widths retain their Number semantics; all 64 widths are checked against BigInt extraction.
 
 ### Added
 
