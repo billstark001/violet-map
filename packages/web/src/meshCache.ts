@@ -67,7 +67,15 @@ const memory = new LruCache<string, MeshCacheRecord>({
 
 function database() {
   if (!dbPromise) {
-    const pending = openDB<MeshCacheDb>(DB_NAME, DB_VERSION, {
+    let rejectBlocked!: (error: Error) => void;
+    let ready: Promise<IDBPDatabase<MeshCacheDb>> | undefined;
+    const blocked = new Promise<IDBPDatabase<MeshCacheDb>>((_resolve, reject) => {
+      rejectBlocked = reject;
+    });
+    const invalidate = () => {
+      if (dbPromise === pending || dbPromise === ready) dbPromise = undefined;
+    };
+    const opening = openDB<MeshCacheDb>(DB_NAME, DB_VERSION, {
       upgrade(db, oldVersion, _newVersion, tx) {
         const store = db.objectStoreNames.contains(STORE)
           ? tx.objectStore(STORE)
@@ -80,11 +88,23 @@ function database() {
         if (!store.indexNames.contains('accessedAtBytes'))
           store.createIndex('accessedAtBytes', ['accessedAt', 'bytes']);
       },
+      blocked() {
+        // Keep one opening request, but let terrain rebuild while an old tab
+        // holds the previous schema. New cache calls fail promptly as well.
+        rejectBlocked(new Error('mesh cache upgrade is blocked by another page'));
+      },
+      blocking(_current, _next, event) {
+        (event.target as IDBDatabase).close();
+        invalidate();
+      },
+      terminated: invalidate,
     });
+    const pending = Promise.race([opening, blocked]);
     dbPromise = pending;
-    void pending.catch(() => {
-      if (dbPromise === pending) dbPromise = undefined;
-    });
+    void opening.then((db) => {
+      ready = Promise.resolve(db);
+      if (dbPromise === pending) dbPromise = ready;
+    }, invalidate);
   }
   return dbPromise!;
 }

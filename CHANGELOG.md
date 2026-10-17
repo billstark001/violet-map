@@ -28,6 +28,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 - Mesh cache and pending-clone budgets count complete retained buffers instead of only attribute views, deduplicating shared attribute backing. The derived IndexedDB cache rebuilds once to remove obsolete byte accounting.
 
+- Another page blocking an IndexedDB upgrade no longer stalls terrain work: cache operations fail promptly and recover when the old connection closes. New cache connections yield to later schema upgrades.
+
 - Overlay manifest requests time out after 30 seconds, allowing retries after stalled connections while retaining the last valid same-context content.
 
 - Remote uploads accept shared-backed byte arrays and preserve subarray boundaries without an extra full-file JavaScript copy for ordinary buffers.

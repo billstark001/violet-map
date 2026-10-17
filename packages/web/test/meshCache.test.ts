@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { openDB } from 'idb';
+import { setImmediate } from 'node:timers/promises';
 import { getCachedFull, getMeshCacheStats } from '../src/meshCache.js';
 
 test('a failed IndexedDB open does not leave a permanent rejected database promise', async () => {
@@ -17,19 +18,30 @@ test('a failed IndexedDB open does not leave a permanent rejected database promi
   }
 });
 
-test('upgrading the derived mesh cache discards records with obsolete byte accounting', async () => {
+test('a blocked upgrade fails promptly and recovers after the old page closes', { timeout: 2000 }, async (t) => {
   await import('fake-indexeddb/auto');
   const old = await openDB('violet-map-mesh-cache', 6, {
     upgrade(db) {
       db.createObjectStore('meshes', { keyPath: 'key' });
     },
   });
+  t.after(() => old.close());
   await old.put('meshes', { key: 'obsolete', bytes: 1 });
+  const parts = { world: 'upgrade', dimension: 'overworld', renderKey: 'r', cx: 0, cz: 0, contentKey: 'c' };
+  await assert.rejects(getCachedFull(parts), /blocked by another page/);
+  await assert.rejects(getCachedFull(parts), /blocked by another page/);
   old.close();
-  assert.equal(
-    await getCachedFull({ world: 'upgrade', dimension: 'overworld', renderKey: 'r', cx: 0, cz: 0, contentKey: 'c' }),
-    null,
-  );
+  let recovered = false;
+  for (let attempt = 0; attempt < 20 && !recovered; attempt++) {
+    await setImmediate();
+    try {
+      assert.equal(await getCachedFull(parts), null);
+      recovered = true;
+    } catch (error) {
+      assert.match(String(error), /blocked by another page/);
+    }
+  }
+  assert.equal(recovered, true);
   assert.deepEqual(await getMeshCacheStats(), { entries: 0, bytes: 0 });
 });
 
