@@ -805,8 +805,24 @@ function faceBounds(q: BakedQuad, dir: Direction): [number, number, number, numb
 }
 
 function faceCovers(candidate: BakedQuad, source: BakedQuad, sourceDirection: Direction): boolean {
+  // A projected bounding box alone is insufficient: an inset pane or a
+  // rotated diamond does not cover the whole rectangle on the shared border.
+  if (exteriorFace(candidate) !== OPPOSITE_DIRECTION[sourceDirection]) return false;
   const [sMin1, sMax1, sMin2, sMax2] = faceBounds(source, sourceDirection);
   const [nMin1, nMax1, nMin2, nMax2] = faceBounds(candidate, sourceDirection);
+  const [a1, a2] = TANGENTS[sourceDirection];
+  let corners = 0;
+  for (let i = 0; i < 4; i++) {
+    const v1 = candidate.positions[i * 3 + a1];
+    const v2 = candidate.positions[i * 3 + a2];
+    const low1 = Math.abs(v1 - nMin1) <= GEOMETRY_EPS;
+    const high1 = Math.abs(v1 - nMax1) <= GEOMETRY_EPS;
+    const low2 = Math.abs(v2 - nMin2) <= GEOMETRY_EPS;
+    const high2 = Math.abs(v2 - nMax2) <= GEOMETRY_EPS;
+    if ((!low1 && !high1) || (!low2 && !high2)) return false;
+    corners |= 1 << ((high1 ? 1 : 0) | (high2 ? 2 : 0));
+  }
+  if (corners !== 0b1111) return false;
   return (
     nMin1 <= sMin1 + GEOMETRY_EPS &&
     nMax1 >= sMax1 - GEOMETRY_EPS &&
@@ -1387,15 +1403,16 @@ export function meshSection(
     const neighbor = cachedView.blockLocal(nx, ny, nz);
     if (AIR_NAMES.has(neighbor.name)) return false;
     const nInfo = cachedInfo(neighbor.name);
-    const sameTranslucent = cachedInfo(state.name).layer === 'translucent' && neighbor.name === state.name;
-    if (nInfo.layer === 'translucent' && !sameTranslucent) return false;
+    const sameMaterial = !!cachedInfo(state.name).cullSameBlock && neighbor.name === state.name;
+    if (nInfo.layer === 'translucent' && !sameMaterial) return false;
+    if (sameMaterial && exteriorFace(q) !== q.cullFace) return false;
     const opposite = OPPOSITE_DIRECTION[q.cullFace];
     const neighborQuads = localRes.baker.getQuads(neighbor, hash3(nx + ox, ny + oy, nz + oz));
     return neighborQuads.some(
       (candidate) =>
         candidate.face === opposite &&
         candidate.cullFace === opposite &&
-        (sameTranslucent || !localRes.textureHasAlpha?.[candidate.texture]) &&
+        (sameMaterial || !localRes.textureHasAlpha?.[candidate.texture]) &&
         faceCovers(candidate, q, q.cullFace!),
     );
   };

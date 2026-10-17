@@ -21,7 +21,12 @@ export interface FluidDef {
 }
 
 export interface BlockInfo {
+  /** Whether a geometrically solid, opaque model can block light and visibility. */
   occludes: boolean;
+  /** Remove touching faces against the same block id even when its texture has
+   * alpha (glass and ice). Omit for porous blocks such as leaves. Model face
+   * coverage is still required; this does not make the block an occluder. */
+  cullSameBlock?: boolean;
   emit: number;
   filter: number;
   layer: RenderLayer;

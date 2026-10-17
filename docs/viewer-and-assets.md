@@ -23,6 +23,8 @@ The server default expects worlds under `data/worlds/<world-name>/`. Set `WORLDS
 
 Additional packs are supplied with `ASSETS_DIRS=base,override`; later paths take precedence.
 
+Block metadata in `block-overrides.json` distinguishes `occludes` (a solid model can block light and section visibility) from `cullSameBlock` (touching faces of the same block id may be removed despite texture alpha). Glass, connected glass panes and ice enable the latter; leaves keep their internal faces. Different stained-glass colors retain their shared border. Partial models must cover the actual shared boundary before they can remove another face. Replacing textures alone does not turn a porous block into a solid occluder.
+
 ## Viewer and asset tooling
 
 The viewer persists its selected world, camera, scheduler, diagnostics, and settings in local storage. The **Settings** tab includes **Enable IndexedDB cache**. Disabling it bypasses all mesh-cache reads and writes without deleting existing cache data; clear it explicitly if desired. Viewer initialization errors appear in the center of the screen so the tabs never obscure them.

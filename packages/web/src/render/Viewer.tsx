@@ -31,7 +31,7 @@ const VIEW_STORAGE_KEY = 'violet-map:view';
 // Fluid UVs, exterior AO for partial models, and special-model transforms all
 // changed mesh bytes. Keep stale IndexedDB entries from reviving the old
 // water/stair artifacts after an upgrade.
-const MESH_CACHE_SCHEMA = 'mesh-v13-fluid-height-flow-decoupled';
+const MESH_CACHE_SCHEMA = 'mesh-v14-material-face-culling';
 const SKY_PLANE_FORWARD = new THREE.Vector3(0, 0, 1);
 const TOP_CAMERA_HEIGHT = 1024;
 const TOP_ORTHO_HEIGHT = 512;
