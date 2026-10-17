@@ -17,6 +17,13 @@ import {
   type OverlayManifest,
 } from '@violet-map/core/overlays';
 import { inspectMedia } from './mediaInspection.js';
+import type { ByteRange } from './httpRange.js';
+
+/** Published metadata with deferred blob access; ranges are inclusive and must be in bounds. */
+export interface PublishedMedia {
+  version: MediaVersion;
+  read(range?: ByteRange): Promise<Uint8Array>;
+}
 
 export class ContentError extends Error {
   constructor(
@@ -441,25 +448,49 @@ export class ContentService {
     }));
     return result;
   }
-  async publicMedia(
-    mapId: string,
-    dimension: string,
-    assetId: string,
-    versionId: string,
-  ): Promise<{ version: MediaVersion; bytes: Uint8Array }> {
+  /** Resolve public binding and source identity before permitting any blob access. */
+  async openPublicMedia(mapId: string, dimension: string, assetId: string, versionId: string): Promise<PublishedMedia> {
     const manifest = await this.manifest(mapId, dimension);
     if (manifest.sourceStatus === 'mismatch')
       throw new ContentError('SOURCE_MISMATCH', 409, 'world archive identity does not match');
     const item = manifest.media.find((m) => m.version.assetId === assetId && m.version.versionId === versionId);
     if (!item) throw new ContentError('CONTENT_NOT_FOUND', 404, 'resource is not bound for public display');
-    const bytes = await this.blobs.read(item.version.blob);
-    if (!bytes) throw new ContentError('CONTENT_BACKEND_UNAVAILABLE', 503, 'published blob is missing');
-    return { version: item.version, bytes };
+    return this.mediaObject(item.version);
   }
+  /** Resolve a retained media version without reading its blob. */
+  async openMedia(id: string, versionId: string): Promise<PublishedMedia> {
+    return this.mediaObject(await this.getMediaVersion(id, versionId));
+  }
+  private mediaObject(version: MediaVersion): PublishedMedia {
+    return {
+      version,
+      read: async (range) => {
+        if (
+          range &&
+          (!Number.isSafeInteger(range.start) ||
+            !Number.isSafeInteger(range.end) ||
+            range.start < 0 ||
+            range.end < range.start ||
+            range.end >= version.bytes)
+        )
+          throw new RangeError('media range is out of bounds');
+        const bytes = range
+          ? await this.blobs.readRange(version.blob, range.start, range.end - range.start + 1)
+          : await this.blobs.read(version.blob);
+        if (!bytes || bytes.length !== (range ? range.end - range.start + 1 : version.bytes))
+          throw new ContentError('CONTENT_BACKEND_UNAVAILABLE', 503, 'published blob is missing or incomplete');
+        return bytes;
+      },
+    };
+  }
+  /** Read an entire publicly bound media version, validating its source identity first. */
+  async publicMedia(mapId: string, dimension: string, assetId: string, versionId: string) {
+    const media = await this.openPublicMedia(mapId, dimension, assetId, versionId);
+    return { version: media.version, bytes: await media.read() };
+  }
+  /** Read an entire retained media version for authenticated management. */
   async readMedia(id: string, versionId: string) {
-    const version = await this.getMediaVersion(id, versionId);
-    const bytes = await this.blobs.read(version.blob);
-    if (!bytes) throw new ContentError('CONTENT_BACKEND_UNAVAILABLE', 503, 'published blob is missing');
-    return { version, bytes };
+    const media = await this.openMedia(id, versionId);
+    return { version: media.version, bytes: await media.read() };
   }
 }

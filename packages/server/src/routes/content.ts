@@ -1,11 +1,12 @@
 import { Hono, type Context } from 'hono';
 import { ContentValidationError, revisionTag } from '@violet-map/core/overlays';
-import { ContentError } from '../content.js';
+import { ContentError, type PublishedMedia } from '../content.js';
 import type { ServerConfig } from '../configuration.js';
 import type { AppServices } from '../serviceTypes.js';
 import { readLimitedBody } from '@violet-map/core/http';
 import { parseByteRange } from '../httpRange.js';
 import { createHash } from 'node:crypto';
+import fresh from 'fresh';
 
 function condition(c: Context): number | undefined {
   const value = c.req.header('if-match');
@@ -33,10 +34,7 @@ function documentResponse(c: Context, document: { revision: number }, created = 
   return c.json(document, created ? 201 : 200);
 }
 
-function bytesResponse(
-  c: Context,
-  { version, bytes }: Awaited<ReturnType<NonNullable<AppServices['content']>['readMedia']>>,
-) {
+async function bytesResponse(c: Context, { version, read }: PublishedMedia) {
   const etag = `"${version.digest}"`;
   c.header('etag', etag);
   c.header('accept-ranges', 'bytes');
@@ -44,15 +42,22 @@ function bytesResponse(
   c.header('content-type', version.mediaType);
   c.header('x-content-type-options', 'nosniff');
   c.header('content-security-policy', "default-src 'none'; style-src 'none'; sandbox");
-  if (c.req.header('if-none-match') === etag) return c.body(null, 304);
-  const header = c.req.header('range');
-  const range = header === undefined ? undefined : parseByteRange(header, bytes.length);
-  if (header !== undefined && !range) return c.body(null, 416, { 'content-range': `bytes */${bytes.length}` });
-  const body = range ? bytes.slice(range.start, range.end + 1) : bytes;
+  if (
+    fresh({ 'if-none-match': c.req.header('if-none-match'), 'cache-control': c.req.header('cache-control') }, { etag })
+  )
+    return c.body(null, 304);
+  const ifRange = c.req.header('if-range');
+  const header =
+    c.req.method === 'GET' && (ifRange === undefined || ifRange === etag) ? c.req.header('range') : undefined;
+  const range = header === undefined ? undefined : parseByteRange(header, version.bytes);
+  if (header !== undefined && !range) return c.body(null, 416, { 'content-range': `bytes */${version.bytes}` });
+  c.header('content-length', String(range ? range.end - range.start + 1 : version.bytes));
+  if (c.req.method === 'HEAD') return c.body(null, 200);
+  const body = await read(range ?? undefined);
   return c.body(
     body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer,
     range ? 206 : 200,
-    range ? { 'content-range': `bytes ${range.start}-${range.end}/${bytes.length}` } : undefined,
+    range ? { 'content-range': `bytes ${range.start}-${range.end}/${version.bytes}` } : undefined,
   );
 }
 
@@ -86,7 +91,7 @@ export function mountContent(app: Hono, config: ServerConfig, services: AppServi
     if (!dimension) throw new ContentValidationError('dimension is required');
     return bytesResponse(
       c,
-      await content.publicMedia(c.req.param('id'), dimension, c.req.param('assetId'), c.req.param('versionId')),
+      await content.openPublicMedia(c.req.param('id'), dimension, c.req.param('assetId'), c.req.param('versionId')),
     );
   });
   if (config.features.adminApi) {
@@ -129,7 +134,7 @@ export function mountContent(app: Hono, config: ServerConfig, services: AppServi
       c.json(await content.getMediaVersion(c.req.param('id'), c.req.param('versionId'))),
     );
     routes.get('/api/admin/media/:id/versions/:versionId/file', async (c) =>
-      bytesResponse(c, await content.readMedia(c.req.param('id'), c.req.param('versionId'))),
+      bytesResponse(c, await content.openMedia(c.req.param('id'), c.req.param('versionId'))),
     );
     if (config.features.contentWrites) {
       routes.post('/api/admin/maps', async (c) =>

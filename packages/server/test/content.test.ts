@@ -123,13 +123,48 @@ test('HTTP content lifecycle uses conditional revisions, public scope, restart a
     ).status,
     404,
   );
+  const fullReads = t.mock.method(services.mounts.blobs, 'read');
+  const rangeReads = t.mock.method(services.mounts.blobs, 'readRange');
   const range = await app.request(loaded.media[0].url, { headers: { range: 'bytes=0-3' } });
   assert.equal(range.status, 206);
   assert.equal(await range.text(), '<svg');
+  assert.equal(fullReads.mock.callCount(), 0);
+  assert.equal(rangeReads.mock.callCount(), 1);
+  assert.deepEqual(rangeReads.mock.calls[0].arguments, [asset.version.blob, 0, 4]);
   assert.equal(
     (await app.request(loaded.media[0].url, { headers: { 'if-none-match': file.headers.get('etag')! } })).status,
     304,
   );
+  const etag = file.headers.get('etag')!;
+  for (const value of [`W/${etag}`, `"different", W/${etag}`, '*']) {
+    const cached = await app.request(loaded.media[0].url, { headers: { 'if-none-match': value } });
+    assert.equal(cached.status, 304);
+    assert.equal((await cached.arrayBuffer()).byteLength, 0);
+  }
+  const head = await app.request(loaded.media[0].url, { method: 'HEAD', headers: { range: 'bytes=0-3' } });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get('content-length'), String(svg.length));
+  assert.equal((await head.arrayBuffer()).byteLength, 0);
+  assert.equal((await app.request(loaded.media[0].url, { headers: { range: 'bytes=999999-' } })).status, 416);
+  assert.equal(fullReads.mock.callCount(), 0);
+  assert.equal(rangeReads.mock.callCount(), 1);
+  const revalidated = await app.request(loaded.media[0].url, {
+    headers: { 'if-none-match': etag, 'cache-control': 'no-cache' },
+  });
+  assert.equal(revalidated.status, 200);
+  assert.deepEqual(Buffer.from(await revalidated.arrayBuffer()), svg);
+  assert.equal(fullReads.mock.callCount(), 1);
+  for (const ifRange of ['"different"', `W/${etag}`, 'Wed, 21 Oct 2015 07:28:00 GMT']) {
+    const complete = await app.request(loaded.media[0].url, { headers: { range: 'bytes=0-3', 'if-range': ifRange } });
+    assert.equal(complete.status, 200);
+    assert.deepEqual(Buffer.from(await complete.arrayBuffer()), svg);
+  }
+  const partial = await app.request(loaded.media[0].url, { headers: { range: 'bytes=-4', 'if-range': etag } });
+  assert.equal(partial.status, 206);
+  assert.deepEqual(Buffer.from(await partial.arrayBuffer()), svg.subarray(-4));
+  assert.equal(rangeReads.mock.callCount(), 2);
+  // Management's full-byte API remains useful to non-HTTP consumers.
+  assert.deepEqual(Buffer.from((await content.readMedia(asset.document.assetId, asset.version.versionId)).bytes), svg);
   const restored = await createServices(config);
   t.after(() => restored.close());
   assert.equal((await restored.content!.manifest(map.mapId, 'overworld')).layers[0].document.revision, 3);

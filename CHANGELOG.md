@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Media proxy responses evaluate conditional requests, HEAD, and unsatisfiable ranges before blob I/O; satisfiable ranges read only the requested bytes. Weak/list ETags and strong If-Range validators are handled correctly.
+
 - Database maintenance and direct admin imports retain their small runtime dependency set when media URL configuration is enabled; relocated maintenance artifacts no longer require storage or AWS packages.
 
 - Camera movement consumes browser selection/scroll shortcuts outside editable controls, including Ctrl+A on Windows; right Control and Shift now match their left-hand counterparts.
