@@ -1,4 +1,5 @@
 import { loadCapability } from '../capabilities.js';
+import { isWorldName } from '@violet-map/core/domain';
 
 import type { StorageOptions, S3StorageOptions } from '@violet-map/storage/types';
 
@@ -23,6 +24,7 @@ export interface WorldSyncOptions {
   delete?: boolean;
   force?: boolean;
 }
+
 export async function targetStorage(options: WorldSyncOptions, context: CliContext): Promise<StorageOptions> {
   if (options.target === 'local') {
     if (!options.targetDir) throw new Error('Local target requires --target-dir');
@@ -110,17 +112,24 @@ export async function targetStorage(options: WorldSyncOptions, context: CliConte
     credentials,
   };
 }
+
 export async function runWorldSync(options: WorldSyncOptions, context: CliContext): Promise<void> {
   if (!options.from) throw new Error('--from must not be empty');
-  if (!/^[A-Za-z0-9_.-]+$/.test(options.world))
-    throw new Error('--world may only contain letters, numbers, dot, dash, and underscore');
+  if (!isWorldName(options.world))
+    throw new Error(
+      '--world must be a directory name containing letters, numbers, dot, dash, or underscore (not . or ..)',
+    );
   const storageOptions = await targetStorage(options, context);
-  const { checkWorldIdentity, ensureWorldIdentity, PrefixedWorldStorage, syncWorld } =
+  const { checkWorldIdentity, ensureWorldIdentity, ScopedStorage, syncWorld } =
     await loadCapability('@violet-map/storage');
-  const { createWorldStorage } = await loadCapability('@violet-map/storage/factory');
-  const { LocalWorldStorage } = await loadCapability('@violet-map/storage/local');
-  const source = new LocalWorldStorage(path.resolve(options.from));
-  const target = new PrefixedWorldStorage(await createWorldStorage(storageOptions), options.world);
+  const { LocalStorage } = await loadCapability('@violet-map/storage/local');
+  const source = new LocalStorage(path.resolve(options.from));
+  const target = new ScopedStorage(
+    storageOptions.kind === 'server'
+      ? new (await loadCapability('@violet-map/storage/server')).ServerWorldStorage(storageOptions)
+      : await (await loadCapability('@violet-map/storage/factory')).createObjectStorage(storageOptions),
+    options.world,
+  );
   const sourceIdentity = await ensureWorldIdentity(source, !!options.dryRun);
   const check = await checkWorldIdentity(source, target);
   console.log(`World identity: ${check.status} (${check.message})`);

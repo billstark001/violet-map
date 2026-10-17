@@ -15,6 +15,7 @@ export interface GlobalOptions extends LocationOptions {
   serverUrl?: string;
   serverTokenRef?: string;
 }
+
 export interface CliContext {
   options: GlobalOptions;
   paths: CliPaths;
@@ -24,6 +25,7 @@ export interface CliContext {
   secrets: SecretStore;
   env: NodeJS.ProcessEnv;
 }
+
 export async function loadContext(
   options: GlobalOptions,
   env = process.env,

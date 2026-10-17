@@ -1,12 +1,13 @@
-import type { WorldStorage } from '@violet-map/core/storage';
 import type { StorageOptions } from '@violet-map/storage/types';
-export async function createWorldStorage(options: StorageOptions): Promise<WorldStorage> {
+
+/** Physical object backend factory. Remote world protocol is intentionally excluded. */
+export async function createObjectStorage(
+  options: Exclude<StorageOptions, { kind: 'server' }>,
+): Promise<import('@violet-map/core/storage').AtomicObjectStorage> {
   switch (options.kind) {
     case 'local':
-      return new (await import('./local.js')).LocalWorldStorage(options.root);
+      return new (await import('./local.js')).LocalStorage(options.root);
     case 's3':
-      return new (await import('./s3.js')).S3WorldStorage(options);
-    case 'server':
-      return new (await import('./server.js')).ServerWorldStorage(options);
+      return new (await import('./s3.js')).S3Storage(options);
   }
 }

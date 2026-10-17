@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isChunkCoordinate, parseChunkCoordinates } from '../src/chunkCoordinates.js';
+import { isChunkCoordinate } from '@violet-map/core/domain';
+import { parseChunkCoordinates } from '../src/chunkCoordinates.js';
 
 test('chunk coordinates retain signed 32-bit bounds', () => {
   assert.equal(isChunkCoordinate(-0x80000000), true);

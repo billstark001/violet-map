@@ -3,7 +3,7 @@ import { bearer, createAuthorization, REQUIRED_ROLE } from '../auth.js';
 import type { UserService } from '../users.js';
 
 import { AdminError } from '../errors.js';
-import { readLimitedBody } from '../limitedBody.js';
+import { readLimitedBody } from '@violet-map/core/http';
 
 const adminErrorStatusMap = {
   USER_NOT_FOUND: 404,

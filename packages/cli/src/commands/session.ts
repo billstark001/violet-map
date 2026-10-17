@@ -72,9 +72,11 @@ export async function login(
     ),
   );
 }
+
 export async function whoami(context: CliContext) {
   console.log(JSON.stringify(await apiRequest(await resolveServerConnection(context), 'api/auth/me'), null, 2));
 }
+
 export async function logout(context: CliContext, local = false) {
   const url = remoteOrigin(context);
   const key = sessionKey(context.profileName ?? '', url);

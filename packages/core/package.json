@@ -1,6 +1,6 @@
 {
   "name": "@violet-map/core",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "files": [
     "dist",
     "data-defaults"
@@ -52,10 +52,35 @@
       "types": "./dist/defaults.d.ts",
       "default": "./dist/defaults.js"
     },
+    "./cache": {
+      "development": "./src/cache.ts",
+      "types": "./dist/cache.d.ts",
+      "default": "./dist/cache.js"
+    },
     "./async": {
       "development": "./src/async.ts",
       "types": "./dist/async.d.ts",
       "default": "./dist/async.js"
+    },
+    "./overlays": {
+      "development": "./src/overlays.ts",
+      "types": "./dist/overlays.d.ts",
+      "default": "./dist/overlays.js"
+    },
+    "./http": {
+      "development": "./src/http.ts",
+      "types": "./dist/http.d.ts",
+      "default": "./dist/http.js"
+    },
+    "./overlays/types": {
+      "development": "./src/overlayTypes.ts",
+      "types": "./dist/overlayTypes.d.ts",
+      "default": "./dist/overlayTypes.js"
+    },
+    "./hash": {
+      "development": "./src/hash.ts",
+      "types": "./dist/hash.d.ts",
+      "default": "./dist/hash.js"
     }
   },
   "scripts": {

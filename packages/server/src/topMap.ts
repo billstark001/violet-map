@@ -1,11 +1,13 @@
 import { parseTopMapManifest } from '@violet-map/core/formats/top-map';
 import type { ServerConfig } from './configuration.js';
-import type { WorldReader } from '@violet-map/core/storage';
+import type { ObjectReader } from '@violet-map/core/storage';
 import type { WorldCapabilities } from '@violet-map/core/contracts';
 import { cleanStoragePath } from '@violet-map/storage';
+import { LruCache } from '@violet-map/core/cache';
+import { assertWorldName, isWorldName } from '@violet-map/core/domain';
 import { type TopMapManifest } from '@violet-map/core/formats/top-map';
-export function createTopMapService(worldStorage: WorldReader, config: ServerConfig) {
-  const WORLD_RE = /^[A-Za-z0-9_.-]+$/;
+
+export function createTopMapService(worldStorage: ObjectReader, config: ServerConfig) {
   const TOP_MAP_ROOT = '.violet-map/top-map';
 
   interface ManifestCacheEntry {
@@ -14,7 +16,7 @@ export function createTopMapService(worldStorage: WorldReader, config: ServerCon
     checkedAt: number;
   }
 
-  const manifestCache = new Map<string, ManifestCacheEntry>();
+  const manifestCache = new LruCache<string, ManifestCacheEntry>({ maxEntries: 128 });
   const MANIFEST_REVALIDATE_MS = config.cache.manifestMs;
   let manifestGeneration = 0;
 
@@ -22,10 +24,6 @@ export function createTopMapService(worldStorage: WorldReader, config: ServerCon
   function invalidateTopMapManifest(world: string): void {
     manifestGeneration++;
     manifestCache.delete(world);
-  }
-
-  function assertWorldName(world: string) {
-    if (!WORLD_RE.test(world)) throw new Error('invalid world name');
   }
 
   function manifestPath(world: string): string {
@@ -108,10 +106,11 @@ export function createTopMapService(worldStorage: WorldReader, config: ServerCon
 
   async function warmTopMapManifests(): Promise<void> {
     for (const world of await worldStorage.listDirectories()) {
-      if (!WORLD_RE.test(world)) continue;
+      if (!isWorldName(world)) continue;
       await getTopMapManifest(world);
     }
   }
   return { invalidateTopMapManifest, getTopMapManifest, getWorldCapabilities, readTopMapTile, warmTopMapManifests };
 }
+
 export type TopMapService = ReturnType<typeof createTopMapService>;

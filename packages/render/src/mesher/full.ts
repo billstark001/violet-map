@@ -1,17 +1,18 @@
-import { ModelBaker, BakedQuad, MISSING_TEXTURE } from '../model.js';
-import { AIR, AIR_NAMES, ChunkColumn } from '@violet-map/core/domain';
+import { packNormalizedUint8, packIndices, packNormalizedUint16 } from '../meshPacking.js';
+import { type ModelBaker, type BakedQuad, MISSING_TEXTURE } from '../model.js';
+import { AIR, AIR_NAMES, type ChunkColumn } from '@violet-map/core/domain';
 import {
-  AtlasIndex,
-  AtlasRect,
-  BlockInfo,
-  Direction,
+  type AtlasIndex,
+  type AtlasRect,
+  type BlockInfo,
+  type Direction,
   DIR_VEC,
-  RenderLayer,
-  TextureAlphaMap,
-  TintType,
+  type RenderLayer,
+  type TextureAlphaMap,
+  type TintType,
 } from '@violet-map/core/assets';
-import { BlockStateRef } from '@violet-map/core/domain';
-import { MeshBuffers, SectionMeshes } from '@violet-map/render';
+import { type BlockStateRef } from '@violet-map/core/domain';
+import { type MeshBuffers, type SectionMeshes } from '@violet-map/render';
 import type { Rgb } from '../colors.js';
 import { Float32Writer, Uint16Writer, Uint32Writer } from '../utils.js';
 
@@ -22,7 +23,8 @@ export interface WorldView {
   getBlockLight(x: number, y: number, z: number): number;
 }
 
-/** 3x3 邻域，供跨区块面剔除 / AO / 平滑光照。 */
+/** A 3×3 chunk neighborhood anchored at its minimum chunk X/Z. Integer world
+ * block coordinates select columns for culling/AO/light; missing columns are air. */
 export class ChunkNeighborhood implements WorldView {
   private grid: (ChunkColumn | null)[] = new Array(9).fill(null);
   constructor(
@@ -35,8 +37,8 @@ export class ChunkNeighborhood implements WorldView {
     if (gx >= 0 && gx < 3 && gz >= 0 && gz < 3) this.grid[gx + gz * 3] = col;
   }
   private colAt(x: number, z: number): ChunkColumn | null {
-    const gx = (x >> 4) - this.baseX,
-      gz = (z >> 4) - this.baseZ;
+    const gx = Math.floor(x / 16) - this.baseX,
+      gz = Math.floor(z / 16) - this.baseZ;
     if (gx < 0 || gx > 2 || gz < 0 || gz > 2) return null;
     return this.grid[gx + gz * 3];
   }
@@ -89,7 +91,7 @@ const OCCLUSION_DIRECTIONS: Direction[] = ['down', 'up', 'north', 'south', 'west
 export const SECTION_VISIBILITY_DIRECTIONS: Direction[] = ['down', 'up', 'north', 'south', 'west', 'east'];
 const DIRECTION_INDEX: Record<Direction, number> = { down: 0, up: 1, north: 2, south: 3, west: 4, east: 5 };
 const ALL_DIRECTIONS_OCCLUDED = (1 << SECTION_VISIBILITY_DIRECTIONS.length) - 1;
-const SECTION_VISIBILITY_ALL = (() => {
+export const SECTION_VISIBILITY_ALL = (() => {
   let mask = 0;
   for (let from = 0; from < 6; from++) {
     for (let to = 0; to < 6; to++) {
@@ -361,14 +363,14 @@ class SectionViewCache implements WorldView {
 
   visibilityMask(): number {
     const total = 16 * 16 * 16;
-    const visited = new Uint8Array(total);
-    const queue = new Int32Array(total);
-    const idxOf = (x: number, y: number, z: number) => (y << 8) | (z << 4) | x;
     const passableCount = this.passableCount;
     if (passableCount === 0) return 0;
     if (passableCount === total) return SECTION_VISIBILITY_ALL;
 
-    let mask = 0;
+    const visited = new Uint8Array(total);
+    const queue = new Int32Array(total);
+    const idxOf = (x: number, y: number, z: number) => (y << 8) | (z << 4) | x;
+    const connections = new Uint8Array(SECTION_VISIBILITY_DIRECTIONS.length);
     for (let start = 0; start < total; start++) {
       const sy = start >> 8;
       const sz = (start >> 4) & 15;
@@ -409,11 +411,14 @@ class SectionViewCache implements WorldView {
 
       for (let from = 0; from < 6; from++) {
         if (!(faces & (1 << from))) continue;
-        for (let to = 0; to < 6; to++) {
-          if (from !== to && faces & (1 << to)) mask += visibilityBit(from, to);
-        }
+        connections[from] |= faces & ~(1 << from);
       }
     }
+    // Multiple disconnected cavities can connect the same pair of borders.
+    // Union their bits before encoding the 36-bit number; adding each cavity's
+    // mask would carry into unrelated bits and hide visible sections.
+    let mask = 0;
+    for (let from = 0; from < connections.length; from++) mask += connections[from] * 2 ** (from * connections.length);
     return mask;
   }
 }
@@ -423,18 +428,6 @@ export function hash3(x: number, y: number, z: number): number {
   let h = (Math.imul(x, 3129871) ^ Math.imul(z, 116129781) ^ y) | 0;
   h = (Math.imul(h, Math.imul(h, 42317861)) + Math.imul(h, 11)) | 0;
   return h >>> 16;
-}
-
-function packNormalizedUint8(values: Float32Array): Uint8Array {
-  const out = new Uint8Array(values.length);
-  for (let i = 0; i < values.length; i++) out[i] = Math.round(Math.min(1, Math.max(0, values[i])) * 255);
-  return out;
-}
-
-function packNormalizedUint16(values: Float32Array): Uint16Array {
-  const out = new Uint16Array(values.length);
-  for (let i = 0; i < values.length; i++) out[i] = Math.round(Math.min(1, Math.max(0, values[i])) * 65535);
-  return out;
 }
 
 function packUint16(values: Float32Array): Uint16Array {
@@ -450,13 +443,6 @@ function packSectionPositions(values: Float32Array): Uint16Array {
       Math.min(1, Math.max(0, (values[i] - SECTION_POSITION_OFFSET) / SECTION_POSITION_SCALE)) * 65535,
     );
   }
-  return out;
-}
-
-function packIndices(values: Uint32Array, vertexCount: number): Uint16Array | Uint32Array {
-  if (vertexCount > 65535) return values;
-  const out = new Uint16Array(values.length);
-  for (let i = 0; i < values.length; i++) out[i] = values[i];
   return out;
 }
 
@@ -805,8 +791,24 @@ function faceBounds(q: BakedQuad, dir: Direction): [number, number, number, numb
 }
 
 function faceCovers(candidate: BakedQuad, source: BakedQuad, sourceDirection: Direction): boolean {
+  // A projected bounding box alone is insufficient: an inset pane or a
+  // rotated diamond does not cover the whole rectangle on the shared border.
+  if (exteriorFace(candidate) !== OPPOSITE_DIRECTION[sourceDirection]) return false;
   const [sMin1, sMax1, sMin2, sMax2] = faceBounds(source, sourceDirection);
   const [nMin1, nMax1, nMin2, nMax2] = faceBounds(candidate, sourceDirection);
+  const [a1, a2] = TANGENTS[sourceDirection];
+  let corners = 0;
+  for (let i = 0; i < 4; i++) {
+    const v1 = candidate.positions[i * 3 + a1];
+    const v2 = candidate.positions[i * 3 + a2];
+    const low1 = Math.abs(v1 - nMin1) <= GEOMETRY_EPS;
+    const high1 = Math.abs(v1 - nMax1) <= GEOMETRY_EPS;
+    const low2 = Math.abs(v2 - nMin2) <= GEOMETRY_EPS;
+    const high2 = Math.abs(v2 - nMax2) <= GEOMETRY_EPS;
+    if ((!low1 && !high1) || (!low2 && !high2)) return false;
+    corners |= 1 << ((high1 ? 1 : 0) | (high2 ? 2 : 0));
+  }
+  if (corners !== 0b1111) return false;
   return (
     nMin1 <= sMin1 + GEOMETRY_EPS &&
     nMax1 >= sMax1 - GEOMETRY_EPS &&
@@ -1387,15 +1389,16 @@ export function meshSection(
     const neighbor = cachedView.blockLocal(nx, ny, nz);
     if (AIR_NAMES.has(neighbor.name)) return false;
     const nInfo = cachedInfo(neighbor.name);
-    const sameTranslucent = cachedInfo(state.name).layer === 'translucent' && neighbor.name === state.name;
-    if (nInfo.layer === 'translucent' && !sameTranslucent) return false;
+    const sameMaterial = !!cachedInfo(state.name).cullSameBlock && neighbor.name === state.name;
+    if (nInfo.layer === 'translucent' && !sameMaterial) return false;
+    if (sameMaterial && exteriorFace(q) !== q.cullFace) return false;
     const opposite = OPPOSITE_DIRECTION[q.cullFace];
     const neighborQuads = localRes.baker.getQuads(neighbor, hash3(nx + ox, ny + oy, nz + oz));
     return neighborQuads.some(
       (candidate) =>
         candidate.face === opposite &&
         candidate.cullFace === opposite &&
-        (sameTranslucent || !localRes.textureHasAlpha?.[candidate.texture]) &&
+        (sameMaterial || !localRes.textureHasAlpha?.[candidate.texture]) &&
         faceCovers(candidate, q, q.cullFace!),
     );
   };
@@ -1555,8 +1558,4 @@ export function meshSection(
     if (builder && !builder.empty) layers[layer] = builder.build();
   }
   return { layers, visibility: cachedView.visibilityMask() };
-}
-
-function visibilityBit(from: number, to: number): number {
-  return 2 ** (from * SECTION_VISIBILITY_DIRECTIONS.length + to);
 }

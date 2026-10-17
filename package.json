@@ -1,6 +1,6 @@
 {
   "name": "@violet-map/workspace",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -13,7 +13,7 @@
     "boundary:check": "node scripts/check-boundaries.mjs",
     "test:production": "node --test scripts/acceptance/production.test.mjs",
     "test:containers": "docker compose -p violet-acceptance -f compose.production.yaml build && node --test scripts/acceptance/containers.test.mjs",
-    "test:frontend": "tsx --conditions=development --test scripts/acceptance/frontend.test.ts",
+    "test:frontend": "tsx --conditions=development --test scripts/acceptance/frontend.test.ts scripts/acceptance/media-delivery.test.ts scripts/acceptance/admin.test.ts",
     "dev": "pnpm run dev:light",
     "dev:light": "pnpm --filter=@violet-map/server --filter=@violet-map/web --parallel -r run dev",
     "dev:full": "pnpm --filter=@violet-map/server --filter=@violet-map/web --filter=@violet-map/admin --parallel -r run dev",
@@ -21,16 +21,20 @@
     "start": "pnpm run start:light",
     "start:light": "pnpm --filter=@violet-map/server --filter=@violet-map/web --parallel -r run start",
     "start:full": "pnpm --filter=@violet-map/server --filter=@violet-map/web --filter=@violet-map/admin --parallel -r run start",
-    "typecheck": "pnpm -r run typecheck && tsc -p scripts/acceptance/tsconfig.json",
-    "test": "tsx --conditions=development --test --test-concurrency=4 scripts/test/*.test.mjs packages/cli/test/*.test.ts packages/core/test/*.test.ts packages/render/test/*.test.ts packages/storage/test/*.test.ts packages/server/test/*.test.ts packages/web/test/*.test.ts",
-    "lint": "oxlint --deny-warnings packages",
+    "typecheck": "pnpm -r run typecheck && tsc -p scripts/acceptance/tsconfig.json && tsc -p scripts/bench/tsconfig.json",
+    "test": "tsx --conditions=development --test --test-concurrency=4 scripts/test/*.test.mjs packages/cli/test/*.test.ts packages/core/test/*.test.ts packages/render/test/*.test.ts packages/storage/test/*.test.ts packages/server/test/*.test.ts packages/web/test/*.test.ts packages/admin/test/*.test.ts",
+    "lint": "oxlint --deny-warnings packages scripts/bench",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
-    "violet-map": "tsx --conditions=development packages/cli/src/cli.ts"
+    "violet-map": "tsx --conditions=development packages/cli/src/cli.ts",
+    "test:overlays": "tsx --conditions=development --test scripts/acceptance/overlays.test.ts",
+    "test:release": "node --test scripts/acceptance/release.test.mjs"
   },
   "devDependencies": {
     "@hono/node-server": "^2.1.5",
+    "@stylistic/eslint-plugin": "^5.10.0",
     "@types/node": "^26.1.0",
+    "fake-indexeddb": "^6.2.6",
     "oxfmt": "^0.71.0",
     "oxlint": "^1.86.0",
     "playwright": "^1.64.0",

@@ -1,9 +1,10 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { MeshBuffers } from '@violet-map/render';
+import { LruCache } from '@violet-map/core/cache';
+import { meshByteLength, type MeshBuffers } from '@violet-map/render';
 import type { SectionMeshMsg } from './worker/protocol';
 
 const DB_NAME = 'violet-map-mesh-cache';
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 const STORE = 'meshes';
 const MAX_ENTRIES = 1000;
 const MAX_BYTES = 192 * 1024 * 1024;
@@ -11,6 +12,8 @@ const MAX_PENDING_WRITE_BYTES = 32 * 1024 * 1024;
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PRUNE_INTERVAL_MS = 10 * 1000;
 const TOUCH_INTERVAL_MS = 5 * 60 * 1000;
+const MAX_MEMORY_BYTES = 32 * 1024 * 1024;
+const MAX_MEMORY_ENTRIES = 64;
 
 type CacheMode = 'full' | 'lod';
 
@@ -53,37 +56,72 @@ export interface MeshCacheKeyParts {
 let dbPromise: Promise<IDBPDatabase<MeshCacheDb>> | undefined;
 let cacheEnabled = true;
 let cacheGeneration = 0;
+// Mesh arrays are immutable after worker transfer. GPU geometry can share them
+// with this small CPU cache; switching full/LOD or revisiting a chunk need not
+// clone the same buffers out of IndexedDB on every request.
+const memory = new LruCache<string, MeshCacheRecord>({
+  maxEntries: MAX_MEMORY_ENTRIES,
+  maxWeight: MAX_MEMORY_BYTES,
+  weightOf: (record) => record.bytes,
+});
 
 function database() {
   if (!dbPromise) {
-    const pending = openDB<MeshCacheDb>(DB_NAME, DB_VERSION, {
-      upgrade(db, _oldVersion, _newVersion, tx) {
+    let rejectBlocked!: (error: Error) => void;
+    let ready: Promise<IDBPDatabase<MeshCacheDb>> | undefined;
+    const blocked = new Promise<IDBPDatabase<MeshCacheDb>>((_resolve, reject) => {
+      rejectBlocked = reject;
+    });
+    const invalidate = () => {
+      if (dbPromise === pending || dbPromise === ready) dbPromise = undefined;
+    };
+    const opening = openDB<MeshCacheDb>(DB_NAME, DB_VERSION, {
+      upgrade(db, oldVersion, _newVersion, tx) {
         const store = db.objectStoreNames.contains(STORE)
           ? tx.objectStore(STORE)
           : db.createObjectStore(STORE, { keyPath: 'key' });
+        // Old records counted view lengths and could hide large retained buffers.
+        if (oldVersion > 0) store.clear();
         if (!store.indexNames.contains('accessedAt')) store.createIndex('accessedAt', 'accessedAt');
         if (!store.indexNames.contains('createdAt')) store.createIndex('createdAt', 'createdAt');
         if (!store.indexNames.contains('bytes')) store.createIndex('bytes', 'bytes');
         if (!store.indexNames.contains('accessedAtBytes'))
           store.createIndex('accessedAtBytes', ['accessedAt', 'bytes']);
       },
+      blocked() {
+        // Keep one opening request, but let terrain rebuild while an old tab
+        // holds the previous schema. New cache calls fail promptly as well.
+        rejectBlocked(new Error('mesh cache upgrade is blocked by another page'));
+      },
+      blocking(_current, _next, event) {
+        (event.target as IDBDatabase).close();
+        invalidate();
+      },
+      terminated: invalidate,
     });
+    const pending = Promise.race([opening, blocked]);
     dbPromise = pending;
-    void pending.catch(() => {
-      if (dbPromise === pending) dbPromise = undefined;
-    });
+    void opening.then((db) => {
+      ready = Promise.resolve(db);
+      if (dbPromise === pending) dbPromise = ready;
+    }, invalidate);
   }
   return dbPromise!;
 }
 
 /** Disabling this bypasses all mesh reads and writes without deleting existing cache data. */
 export function setMeshCacheEnabled(enabled: boolean): void {
-  if (!enabled && cacheEnabled) cacheGeneration++;
+  if (!enabled && cacheEnabled) {
+    cacheGeneration++;
+    memory.clear();
+  }
   cacheEnabled = enabled;
 }
+
 export function isMeshCacheEnabled(): boolean {
   return cacheEnabled;
 }
+
 let lastPrune = 0;
 let pendingWriteBytes = 0;
 
@@ -102,23 +140,11 @@ function cacheKey(parts: MeshCacheKeyParts): string {
     .join('|');
 }
 
-function bufferBytes(b: MeshBuffers): number {
-  return (
-    b.positions.byteLength +
-    (b.uvs?.byteLength ?? 0) +
-    (b.atlasRects?.byteLength ?? 0) +
-    b.colors.byteLength +
-    b.lights.byteLength +
-    (b.animations?.byteLength ?? 0) +
-    b.indices.byteLength
-  );
-}
-
 function sectionBytes(sections: SectionMeshMsg[]): number {
   let total = 0;
   for (const section of sections) {
     for (const buffers of Object.values(section.layers)) {
-      if (buffers) total += bufferBytes(buffers);
+      if (buffers) total += meshByteLength(buffers, 'retained');
     }
   }
   return total;
@@ -165,6 +191,7 @@ async function touch<T extends MeshCacheRecord>(record: T): Promise<T> {
 
 async function putRecord(record: MeshCacheRecord): Promise<void> {
   if (!cacheEnabled) return;
+  memory.set(record.key, record);
   const generation = cacheGeneration;
   const bytes = Math.max(0, record.bytes);
   if (bytes > MAX_PENDING_WRITE_BYTES) return;
@@ -182,12 +209,21 @@ async function putRecord(record: MeshCacheRecord): Promise<void> {
 
 export async function getCachedFull(parts: Omit<MeshCacheKeyParts, 'mode' | 'step'>): Promise<SectionMeshMsg[] | null> {
   if (!cacheEnabled) return null;
+  const key = cacheKey({ ...parts, mode: 'full', step: 0 });
+  const warm = memory.get(key);
+  if (warm?.full && Date.now() - warm.accessedAt <= TTL_MS) {
+    void touch(warm).catch(() => {});
+    return warm.full;
+  }
+  memory.delete(key);
   const generation = cacheGeneration;
-  const record = await (await database()).get(STORE, cacheKey({ ...parts, mode: 'full', step: 0 }));
+  const record = await (await database()).get(STORE, key);
   if (!cacheEnabled || generation !== cacheGeneration || !record?.full || Date.now() - record.accessedAt > TTL_MS)
     return null;
   const touched = await touch(record);
-  return cacheEnabled && generation === cacheGeneration ? (touched.full ?? null) : null;
+  if (!cacheEnabled || generation !== cacheGeneration) return null;
+  memory.set(key, touched);
+  return touched.full ?? null;
 }
 
 export async function putCachedFull(
@@ -211,12 +247,21 @@ export async function getCachedLod(
   parts: Omit<MeshCacheKeyParts, 'mode'> & { step: number },
 ): Promise<MeshBuffers | null | undefined> {
   if (!cacheEnabled) return undefined;
+  const key = cacheKey({ ...parts, mode: 'lod' });
+  const warm = memory.get(key);
+  if (warm && Date.now() - warm.accessedAt <= TTL_MS) {
+    void touch(warm).catch(() => {});
+    return warm.lod;
+  }
+  memory.delete(key);
   const generation = cacheGeneration;
-  const record = await (await database()).get(STORE, cacheKey({ ...parts, mode: 'lod' }));
+  const record = await (await database()).get(STORE, key);
   if (!cacheEnabled || generation !== cacheGeneration || !record || Date.now() - record.accessedAt > TTL_MS)
     return undefined;
   const touched = await touch(record);
-  return cacheEnabled && generation === cacheGeneration ? touched.lod : undefined;
+  if (!cacheEnabled || generation !== cacheGeneration) return undefined;
+  memory.set(key, touched);
+  return touched.lod;
 }
 
 export async function putCachedLod(
@@ -230,7 +275,7 @@ export async function putCachedLod(
     mode: 'lod',
     createdAt: now,
     accessedAt: now,
-    bytes: lod ? bufferBytes(lod) : 0,
+    bytes: lod ? meshByteLength(lod, 'retained') : 0,
     lod,
   });
 }
@@ -257,6 +302,7 @@ export async function getMeshCacheStats(): Promise<MeshCacheStats> {
 
 export async function clearMeshCache(): Promise<void> {
   cacheGeneration++;
+  memory.clear();
   await (await database()).clear(STORE);
   lastPrune = 0;
 }

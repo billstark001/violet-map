@@ -1,5 +1,6 @@
 import type { DatabaseOptions, DatabaseContext } from './connection.js';
 import { openApplicationDatabase } from './application.js';
+
 export function createDatabaseService(options: DatabaseOptions) {
   let pending: Promise<DatabaseContext> | undefined;
   let closed = false;

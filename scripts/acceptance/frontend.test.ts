@@ -4,41 +4,12 @@ import { test } from 'node:test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
 import { serve } from '@hono/node-server';
 import { chromium } from 'playwright';
 import { createApp } from '../../packages/server/src/app.js';
 import { createServices } from '../../packages/server/src/services.js';
 import { loadServerConfig } from '../../packages/server/src/configuration.js';
-
-const project = fileURLToPath(new URL('../../', import.meta.url));
-const close = (server: ReturnType<typeof serve>) =>
-  new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-    if ('closeAllConnections' in server) server.closeAllConnections();
-  });
-async function origin(server: ReturnType<typeof serve>) {
-  if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));
-  return `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-}
-async function staticSite(root: string, name: 'web' | 'admin', base: string, api: string) {
-  const dist = path.join(root, name);
-  await fs.cp(path.join(project, 'packages', name, 'dist'), dist, { recursive: true });
-  const child = spawn(process.execPath, [path.join(dist, 'serve.mjs'), '0', api], {
-    env: { ...process.env, PORT: '0', STATIC_BASE_PATH: base, API_BASE_URL: undefined },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  const port = await new Promise<number>((resolve, reject) => {
-    child.stdout.on('data', (bytes) => {
-      const match = String(bytes).match(/:(\d+)/);
-      if (match) resolve(Number(match[1]));
-    });
-    child.once('error', reject);
-    child.once('exit', (code) => reject(new Error(`static site exited ${code}`)));
-  });
-  return { url: `http://127.0.0.1:${port}${base}`, dist, child };
-}
+import { project, closeServer, serverOrigin, startStaticSite } from './helpers/frontend.js';
 
 test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities and token isolation', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-frontend-'));
@@ -79,8 +50,8 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
     hostname: '127.0.0.1',
     port: 0,
   });
-  t.after(() => close(api));
-  const apiBase = `${await origin(api)}/violet/`;
+  t.after(() => closeServer(api));
+  const apiBase = `${await serverOrigin(api)}/violet/`;
   const webBase = (await fs.readFile(path.join(project, 'packages/web/dist/index.html'), 'utf8')).includes(
     '/map/assets/',
   )
@@ -91,8 +62,8 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
   )
     ? '/console/'
     : '/';
-  const web = await staticSite(root, 'web', webBase, apiBase),
-    admin = await staticSite(root, 'admin', adminBase, apiBase);
+  const web = await startStaticSite(root, 'web', webBase, apiBase),
+    admin = await startStaticSite(root, 'admin', adminBase, apiBase);
   t.after(async () => {
     for (const site of [web, admin]) {
       site.child.kill('SIGTERM');
@@ -158,6 +129,34 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
   assert.ok(pixels.exposedEtag);
   assert.ok(pixels.sizes.every((alpha) => alpha > 0));
   assert.deepEqual(errors, []);
+  // Native Preact controls retain keyboard, input and camera behavior without
+  // replacing the independently owned canvas during UI changes.
+  const originalCanvas = await viewer.locator('canvas').first().elementHandle();
+  assert.equal(
+    await originalCanvas!.evaluate((canvas) => document.getElementById('root')!.contains(canvas)),
+    false,
+    'canvas must be outside the UI tree',
+  );
+  await viewer.getByRole('tab', { name: 'View', exact: true }).focus();
+  await viewer.keyboard.press('ArrowRight');
+  await viewer.getByRole('tab', { name: 'Settings', exact: true }).waitFor();
+  assert.equal(await viewer.getByRole('tab', { name: 'Settings', exact: true }).getAttribute('aria-selected'), 'true');
+  await viewer.getByRole('combobox', { name: 'Language', exact: true }).selectOption('zh-CN');
+  await viewer.getByRole('tab', { name: '视图', exact: true }).click();
+  await viewer.evaluate(() => {
+    history.replaceState = () => {
+      throw new DOMException('history is restricted', 'SecurityError');
+    };
+  });
+  await viewer.locator('#coord-x').fill('123');
+  await viewer.locator('#coord-x').press('Control+a');
+  assert.equal(await viewer.locator('#coord-x').evaluate((node: HTMLInputElement) => node.value), '123');
+  await viewer.getByRole('button', { name: '前往', exact: true }).click();
+  await viewer.waitForFunction(() => JSON.parse(localStorage.getItem('violet-map:view') ?? '{}').x === 123);
+  assert.equal(await originalCanvas!.evaluate((canvas) => canvas.isConnected), true);
+  await viewer.getByRole('tab', { name: '设置', exact: true }).click();
+  await viewer.getByRole('combobox', { name: '语言', exact: true }).selectOption('en');
+  await viewer.getByRole('tab', { name: 'View', exact: true }).click();
   const consolePage = await context.newPage();
   await consolePage.goto(admin.url);
   await consolePage.locator('#admin-token').fill('browser-service-token');
@@ -204,11 +203,11 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
     hostname: '127.0.0.1',
     port: 0,
   });
-  t.after(() => close(secondApi));
+  t.after(() => closeServer(secondApi));
   const before = (await fs.readdir(path.join(admin.dist, 'assets'))).sort();
   await fs.writeFile(
     path.join(admin.dist, 'runtime-config.json'),
-    JSON.stringify({ apiBaseUrl: await origin(secondApi) }),
+    JSON.stringify({ apiBaseUrl: await serverOrigin(secondApi) }),
   );
   await consolePage.reload();
   await consolePage.getByText('This server has not enabled management features.').waitFor();
@@ -218,4 +217,5 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
   assert.equal(keys.length, 1);
   assert.ok(keys[0].includes(apiBase));
   await viewer.screenshot({ path: path.join(root, 'viewer.png') });
+  assert.deepEqual(errors, [], 'camera persistence must tolerate restricted history without interrupting the viewer');
 });

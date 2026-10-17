@@ -1,0 +1,5 @@
+# Pair with the pre-overlay binary; point worldsDir at the existing worlds mount.
+deployment: { profile: sync }
+auth: { mode: static, staticRole: admin }
+worldsDir: ../LOCAL_storage/worlds
+storage: { driver: local }

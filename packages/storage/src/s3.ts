@@ -1,16 +1,21 @@
 import {
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
+  type GetObjectCommandOutput,
 } from '@aws-sdk/client-s3';
 import { cleanStoragePath } from './paths.js';
 import { validateReadRange } from './range.js';
 import { forEachConcurrent } from '@violet-map/core/async';
 import type { S3StorageOptions } from '@violet-map/storage/types';
-import type { StoredFileInfo, WorldStorage } from '@violet-map/core/storage';
+import type { StoredFileInfo, ObjectStorage } from '@violet-map/core/storage';
+
+const DELETE_BATCH_SIZE = 1000;
+const DELETE_BATCH_CONCURRENCY = 4;
 
 function isMissingObject(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
@@ -19,26 +24,12 @@ function isMissingObject(error: unknown): boolean {
   return failure.name === 'NoSuchKey' || failure.name === 'NotFound' || failure.$metadata?.httpStatusCode === 404;
 }
 
-async function bodyToBytes(body: unknown): Promise<Uint8Array> {
-  if (!body) return new Uint8Array();
-  if (body instanceof Uint8Array) return body;
-  if (typeof (body as { transformToByteArray?: unknown }).transformToByteArray === 'function') {
-    return (body as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray();
-  }
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of body as AsyncIterable<Uint8Array | string>)
-    chunks.push(typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk);
-  const out = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
+async function bodyToBytes(body: GetObjectCommandOutput['Body']): Promise<Uint8Array> {
+  return body ? body.transformToByteArray() : new Uint8Array();
 }
 
 /** S3 and S3-compatible implementation. */
-export class S3WorldStorage implements WorldStorage {
+export class S3Storage implements ObjectStorage {
   readonly kind = 's3' as const;
   private readonly client: S3Client;
   private readonly bucket: string;
@@ -64,6 +55,12 @@ export class S3WorldStorage implements WorldStorage {
     return !this.prefix ? key : key.startsWith(`${this.prefix}/`) ? key.slice(this.prefix.length + 1) : key;
   }
 
+  private listingPrefix(prefix: string): { relative: string; absolute: string } {
+    const clean = cleanStoragePath(prefix);
+    const relative = clean ? `${clean}/` : '';
+    return { relative, absolute: this.prefix ? `${this.prefix}/${relative}` : relative };
+  }
+
   async read(filePath: string): Promise<Uint8Array | null> {
     try {
       return bodyToBytes(
@@ -79,17 +76,16 @@ export class S3WorldStorage implements WorldStorage {
     validateReadRange(start, length);
     if (length === 0) return (await this.stat(filePath)) ? new Uint8Array() : null;
     try {
-      return bodyToBytes(
-        (
-          await this.client.send(
-            new GetObjectCommand({
-              Bucket: this.bucket,
-              Key: this.key(filePath),
-              Range: `bytes=${start}-${start + length - 1}`,
-            }),
-          )
-        ).Body,
+      const result = await this.client.send(
+        new GetObjectCommand({
+          Bucket: this.bucket,
+          Key: this.key(filePath),
+          Range: `bytes=${start}-${start + length - 1}`,
+        }),
       );
+      const bytes = await bodyToBytes(result.Body);
+      if (result.$metadata.httpStatusCode === 200) return bytes.slice(start, start + length);
+      return bytes.length > length ? bytes.slice(0, length) : bytes;
     } catch (error) {
       const failure = error as { name?: string; $metadata?: { httpStatusCode?: number } };
       if (failure.name === 'InvalidRange' || failure.$metadata?.httpStatusCode === 416)
@@ -104,12 +100,30 @@ export class S3WorldStorage implements WorldStorage {
       new PutObjectCommand({ Bucket: this.bucket, Key: this.key(filePath), Body: bytes, ContentType: contentType }),
     );
   }
+  replace(filePath: string, bytes: Uint8Array, contentType?: string): Promise<void> {
+    return this.write(filePath, bytes, contentType);
+  }
   async delete(filePath: string): Promise<void> {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: this.key(filePath) }));
   }
   async deletePrefix(prefix: string): Promise<number> {
     const files = await this.list(prefix);
-    await forEachConcurrent(files, 16, (file) => this.delete(file.path));
+    const batches = Array.from({ length: Math.ceil(files.length / DELETE_BATCH_SIZE) }, (_, index) =>
+      files.slice(index * DELETE_BATCH_SIZE, (index + 1) * DELETE_BATCH_SIZE),
+    );
+    await forEachConcurrent(batches, DELETE_BATCH_CONCURRENCY, async (batch) => {
+      const result = await this.client.send(
+        new DeleteObjectsCommand({
+          Bucket: this.bucket,
+          Delete: { Quiet: true, Objects: batch.map((file) => ({ Key: this.key(file.path) })) },
+        }),
+      );
+      if (result.Errors?.length)
+        throw new AggregateError(
+          result.Errors.map((error) => new Error(`S3 object deletion failed: ${error.Code ?? 'UnknownError'}`)),
+          `S3 batch deletion failed for ${result.Errors.length} objects`,
+        );
+    });
     return files.length;
   }
 
@@ -130,8 +144,7 @@ export class S3WorldStorage implements WorldStorage {
 
   async list(prefix = ''): Promise<StoredFileInfo[]> {
     const files: StoredFileInfo[] = [];
-    const cleanPrefix = prefix ? `${cleanStoragePath(prefix).replace(/\/?$/, '')}/` : '';
-    const Prefix = this.prefix ? `${this.prefix}/${cleanPrefix}` : cleanPrefix;
+    const { absolute: Prefix } = this.listingPrefix(prefix);
     let ContinuationToken: string | undefined;
     do {
       const result = await this.client.send(
@@ -151,8 +164,7 @@ export class S3WorldStorage implements WorldStorage {
   }
 
   async listDirectories(prefix = ''): Promise<string[]> {
-    const cleanPrefix = prefix ? `${cleanStoragePath(prefix).replace(/\/?$/, '')}/` : '';
-    const Prefix = this.prefix ? `${this.prefix}/${cleanPrefix}` : cleanPrefix;
+    const { relative: cleanPrefix, absolute: Prefix } = this.listingPrefix(prefix);
     const dirs = new Set<string>();
     let ContinuationToken: string | undefined;
     do {

@@ -86,6 +86,8 @@ for (const [owner, dependencies] of Object.entries(allowed)) {
           fail(`server implementation ${name}`);
         if (owner === 'admin' && target === 'core' && !['@violet-map/core/contracts'].includes(name))
           fail(`heavy admin entry ${name}`);
+        if (owner === 'web' && /^(?:react(?:-dom|-i18next)?(?:\/|$)|@radix-ui\/|preact\/compat(?:\/|$))/.test(name))
+          fail(`React compatibility/runtime dependency in native Preact viewer: ${name}`);
       }
       if (
         owner === 'render' &&
@@ -106,7 +108,7 @@ for (const [owner, dependencies] of Object.entries(allowed)) {
     inspect(source);
     if (
       owner === 'server' &&
-      !['configuration.ts', 'configYaml.ts', 'index.ts', 'db/maintenance.ts'].some(
+      !['configuration.ts', 'adminConfiguration.ts', 'configYaml.ts', 'index.ts', 'db/maintenance.ts'].some(
         (name) => file === `packages/server/src/${name}`,
       ) &&
       /process\.env/.test(source.text)
@@ -128,6 +130,8 @@ for (const [owner, dependencies] of Object.entries(allowed)) {
   for (const name of Object.keys(metadata.dependencies ?? {})) {
     const target = name.match(/^@violet-map\/([^/]+)/)?.[1];
     if (target && !dependencies.includes(target)) violations.push(`${owner}: forbidden manifest dependency ${name}`);
+    if (owner === 'web' && /^(?:react(?:-dom|-i18next)?$|@radix-ui\/)/.test(name))
+      violations.push(`web: React runtime manifest dependency ${name}`);
   }
 }
 if (violations.length) {

@@ -17,10 +17,33 @@ export interface TopView {
 
 export type TopDownCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 
-function isEditableTarget(target: EventTarget | null): boolean {
+const HORIZONTAL_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD'];
+const FAST_KEYS = ['ControlLeft', 'ControlRight'];
+const FLY_KEYS = new Set([...HORIZONTAL_KEYS, ...FAST_KEYS, 'Space', 'ShiftLeft', 'ShiftRight']);
+const TOP_KEYS = new Set([...HORIZONTAL_KEYS, ...FAST_KEYS, 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+
+function isInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName.toLowerCase();
-  return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
+  for (let element: HTMLElement | null = target; element; element = element.parentElement) {
+    if (
+      ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A', 'SUMMARY'].includes(element.tagName) ||
+      element.isContentEditable
+    )
+      return true;
+  }
+  return false;
+}
+
+/** Consume only camera keys, preserving editing shortcuts and clearing releases
+ * even when focus moved into an input while the key was held. */
+function handleMovementKey(e: KeyboardEvent, keys: Set<string>, supported: ReadonlySet<string>): void {
+  if (e.type === 'keyup') {
+    keys.delete(e.code);
+    return;
+  }
+  if (e.defaultPrevented || !supported.has(e.code) || isInteractiveTarget(e.target)) return;
+  e.preventDefault();
+  keys.add(e.code);
 }
 
 export function normalizeFlyYaw(yaw: number): number {
@@ -33,7 +56,8 @@ export function clampFlyPitch(pitch: number): number {
   return Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, Number.isFinite(pitch) ? pitch : 0));
 }
 
-/** 指针锁定 + WASD/空格/Shift 的飞行控制。 */
+/** Pointer-lock flight with WASD, Space/Shift and Control acceleration. Call
+ * update with elapsed seconds; dispose disables movement and releases the lock. */
 export class FlyControls {
   private keys = new Set<string>();
   private enabled = true;
@@ -56,11 +80,15 @@ export class FlyControls {
   };
   private onKey = (e: KeyboardEvent) => {
     if (!this.enabled) return;
-    if (e.type === 'keyup') this.keys.delete(e.code);
-    else if (!isEditableTarget(e.target)) this.keys.add(e.code);
+    handleMovementKey(e, this.keys, FLY_KEYS);
   };
   private onClick = () => {
-    if (this.enabled) this.dom.requestPointerLock();
+    if (!this.enabled) return;
+    try {
+      void this.dom.requestPointerLock?.()?.catch(() => {});
+    } catch {
+      // Sandboxed or unsupported browsers can deny pointer lock synchronously.
+    }
   };
   private onBlur = () => {
     this.keys.clear();
@@ -85,7 +113,7 @@ export class FlyControls {
   update(dt: number) {
     if (!this.enabled) return;
     this.camera.rotation.set(this.pitch, this.yaw, 0);
-    const multiplier = this.keys.has('ControlLeft') ? this.fastMultiplier : 1;
+    const multiplier = this.keys.has('ControlLeft') || this.keys.has('ControlRight') ? this.fastMultiplier : 1;
     const speed = this.baseSpeed * multiplier;
     this.forward.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     this.right.set(-this.forward.z, 0, this.forward.x);
@@ -95,7 +123,7 @@ export class FlyControls {
     if (this.keys.has('KeyD')) this.move.add(this.right);
     if (this.keys.has('KeyA')) this.move.sub(this.right);
     if (this.keys.has('Space')) this.move.y += 1;
-    if (this.keys.has('ShiftLeft')) this.move.y -= 1;
+    if (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) this.move.y -= 1;
 
     if (!this.inertiaEnabled) {
       this.velocity.set(0, 0, 0);
@@ -157,6 +185,7 @@ export class FlyControls {
   }
 
   dispose() {
+    this.setEnabled(false);
     this.dom.removeEventListener('click', this.onClick);
     document.removeEventListener('mousemove', this.onMouseMove);
     document.removeEventListener('keydown', this.onKey);
@@ -165,7 +194,8 @@ export class FlyControls {
   }
 }
 
-/** 正交顶视图控制：锁定垂直俯视，只允许平移和缩放。 */
+/** Top-down pan/zoom for orthographic and perspective cameras. Drag ownership
+ * ends on pointer loss, blur, disable or dispose; update receives seconds. */
 export class TopDownControls {
   private keys = new Set<string>();
   private enabled = true;
@@ -176,8 +206,7 @@ export class TopDownControls {
   private readonly move = new THREE.Vector3();
   private readonly onKey = (e: KeyboardEvent) => {
     if (!this.enabled) return;
-    if (e.type === 'keyup') this.keys.delete(e.code);
-    else if (!isEditableTarget(e.target)) this.keys.add(e.code);
+    handleMovementKey(e, this.keys, TOP_KEYS);
   };
   private readonly onWheel = (e: WheelEvent) => {
     if (!this.enabled) return;
@@ -192,7 +221,7 @@ export class TopDownControls {
   };
   private readonly onPointerDown = (e: PointerEvent) => {
     if (!this.enabled) return;
-    if (isEditableTarget(e.target) || e.button !== 0) return;
+    if (isInteractiveTarget(e.target) || e.button !== 0) return;
     this.dragging = true;
     this.dom.setPointerCapture(e.pointerId);
     this.capturedPointerId = e.pointerId;
@@ -206,6 +235,7 @@ export class TopDownControls {
   private readonly onPointerUp = (e: PointerEvent) => {
     if (e.pointerId === this.capturedPointerId) this.releasePointer();
   };
+  private readonly onLostPointer = () => this.releasePointer();
   private readonly onBlur = () => {
     this.keys.clear();
     this.releasePointer();
@@ -239,13 +269,14 @@ export class TopDownControls {
     dom.addEventListener('pointermove', this.onPointerMove);
     dom.addEventListener('pointerup', this.onPointerUp);
     dom.addEventListener('pointercancel', this.onPointerUp);
+    dom.addEventListener('lostpointercapture', this.onLostPointer);
     window.addEventListener('blur', this.onBlur);
   }
 
   update(dt: number) {
     if (!this.enabled) return;
     this.lockTopDown();
-    const multiplier = this.keys.has('ControlLeft') ? this.fastMultiplier : 1;
+    const multiplier = this.keys.has('ControlLeft') || this.keys.has('ControlRight') ? this.fastMultiplier : 1;
     this.move.set(0, 0, 0);
     if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) this.move.z -= 1;
     if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) this.move.z += 1;
@@ -302,7 +333,7 @@ export class TopDownControls {
   }
 
   dispose() {
-    this.releasePointer();
+    this.setEnabled(false);
     document.removeEventListener('keydown', this.onKey);
     document.removeEventListener('keyup', this.onKey);
     this.dom.removeEventListener('wheel', this.onWheel);
@@ -310,6 +341,7 @@ export class TopDownControls {
     this.dom.removeEventListener('pointermove', this.onPointerMove);
     this.dom.removeEventListener('pointerup', this.onPointerUp);
     this.dom.removeEventListener('pointercancel', this.onPointerUp);
+    this.dom.removeEventListener('lostpointercapture', this.onLostPointer);
     window.removeEventListener('blur', this.onBlur);
   }
 

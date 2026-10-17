@@ -1,3 +1,5 @@
+import { LocalStorage } from '@violet-map/storage/local';
+import type { AtomicObjectStorage } from '@violet-map/core/storage';
 import type { ServerConfig } from './configuration.js';
 import type { AssetService } from './assets.js';
 import { defaultDataUrl } from '@violet-map/core/defaults';
@@ -5,10 +7,17 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import minecraftData from 'minecraft-data';
-import { BiomeMap, DimensionMap } from '@violet-map/core/domain';
-import { BlockInfo, BlockInfoMap } from '@violet-map/core/assets';
-export function createGameDataService(config: ServerConfig, assets: AssetService) {
+import { type BiomeMap, type DimensionMap } from '@violet-map/core/domain';
+import {
+  applyBlockInfoOverrides,
+  createBlockInfoMap,
+  type BlockInfo,
+  type BlockInfoMap,
+} from '@violet-map/core/assets';
+
+export function createGameDataService(config: ServerConfig, assets: AssetService, overrides?: AtomicObjectStorage) {
   const { buildAssetBundle } = assets;
+  const writableData: AtomicObjectStorage = overrides ?? new LocalStorage(config.data.dir);
 
   const defaultsDir = path.dirname(fileURLToPath(defaultDataUrl('biomes.json')));
   const dataFileCache = new Map<string, unknown>();
@@ -25,6 +34,16 @@ export function createGameDataService(config: ServerConfig, assets: AssetService
     if (pending) return pending as Promise<T>;
     const generation = dataGeneration;
     const load = (async () => {
+      if (overrides) {
+        for (const key of [`versions/${config.minecraft.version}/${name}`, name]) {
+          const bytes = await overrides.read(key);
+          if (bytes) {
+            const value = JSON.parse(new TextDecoder().decode(bytes)) as T;
+            if (generation === dataGeneration) dataFileCache.set(name, value);
+            return value;
+          }
+        }
+      }
       const candidates = [
         path.join(config.data.dir, 'versions', config.minecraft.version, name),
         path.join(config.data.dir, name),
@@ -57,10 +76,13 @@ export function createGameDataService(config: ServerConfig, assets: AssetService
       if (dataFileInflight.get(name) === load) dataFileInflight.delete(name);
     }
   }
-  /** Write a root data file and invalidate readers that started before the write. */
+  /** Atomically publish a root data file, then invalidate earlier readers.
+   * Undefined/non-JSON values fail before storage changes; local files keep their
+   * readable indentation and mounted object overrides retain compact encoding. */
   async function writeDataFile(name: string, value: unknown): Promise<void> {
-    await fs.mkdir(config.data.dir, { recursive: true });
-    await fs.writeFile(path.join(config.data.dir, name), JSON.stringify(value, null, 2));
+    const json = JSON.stringify(value, null, overrides ? undefined : 2);
+    if (json === undefined) throw new TypeError('data file must contain a JSON value');
+    await writableData.replace(name, new TextEncoder().encode(json), 'application/json');
     dataGeneration++;
     dataFileCache.delete(name);
     dataFileInflight.delete(name);
@@ -123,29 +145,9 @@ export function createGameDataService(config: ServerConfig, assets: AssetService
       } catch {
         // Asset bundle is only used to pick a closer minecraft-data version.
       }
-      const map: BlockInfoMap = {};
-      for (const b of d.blocksArray) {
-        const transparent = b.transparent === true;
-        map[`minecraft:${b.name}`] = {
-          occludes: !transparent && b.boundingBox === 'block',
-          emit: b.emitLight ?? 0,
-          filter: b.filterLight ?? (transparent ? 0 : 15),
-          layer: transparent ? 'cutout' : 'opaque',
-          tint: 'none',
-        };
-      }
+      const map = createBlockInfoMap(d.blocksArray);
       const overrides = await readDataFile<Record<string, Partial<BlockInfo>>>('block-overrides.json');
-      for (const [pattern, patch] of Object.entries(overrides)) {
-        if (pattern.includes('*')) {
-          const re = new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
-          for (const key of Object.keys(map)) if (re.test(key)) Object.assign(map[key], patch);
-        } else {
-          map[pattern] = {
-            ...(map[pattern] ?? { occludes: false, emit: 0, filter: 0, layer: 'cutout', tint: 'none' }),
-            ...patch,
-          };
-        }
-      }
+      applyBlockInfoOverrides(map, overrides);
       if (generation === dataGeneration) blockInfoCache = map;
       return map;
     })();
@@ -158,4 +160,5 @@ export function createGameDataService(config: ServerConfig, assets: AssetService
   }
   return { writeDataFile, readBiomes, readDimensions, clearGameDataCaches, buildBlockInfo };
 }
+
 export type GameDataService = ReturnType<typeof createGameDataService>;

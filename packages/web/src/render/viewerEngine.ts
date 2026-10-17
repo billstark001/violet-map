@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { loadBrowserImage } from '../browserImage';
+import { buildRenderKey } from './resourceKey';
 import * as THREE from 'three';
-import { useTranslation } from 'react-i18next';
 import type { BiomeMap, DimensionMap } from '@violet-map/core/domain';
 import { hexToRgb } from '@violet-map/render';
 import { fetchBiomes, fetchBlockInfo, fetchBundle, fetchDimensions, fetchWorldCapabilities, textureUrl } from '../api';
@@ -23,13 +23,21 @@ import {
   type TextureAnimationUniforms,
 } from './materials';
 import { TopMapManager, type TopMapDiagnosticSnapshot } from './topMapManager';
+import { OverlayManager, type OverlayDiagnosticSnapshot } from './overlayManager';
+import { serviceCapabilities } from '../runtime';
 import type { WorkerInit } from '../worker/protocol';
+import { browserStorage, readStored } from '../browserStorage';
+import {
+  VIEW_STORAGE_KEY,
+  readInitialView,
+  buildViewUrl,
+  lookAtTargetFromParams,
+  type InitialView,
+} from './cameraState';
 
-const VIEW_STORAGE_KEY = 'violet-map:view';
 // Fluid UVs, exterior AO for partial models, and special-model transforms all
 // changed mesh bytes. Keep stale IndexedDB entries from reviving the old
 // water/stair artifacts after an upgrade.
-const MESH_CACHE_SCHEMA = 'mesh-v13-fluid-height-flow-decoupled';
 const SKY_PLANE_FORWARD = new THREE.Vector3(0, 0, 1);
 const TOP_CAMERA_HEIGHT = 1024;
 const TOP_ORTHO_HEIGHT = 512;
@@ -37,7 +45,6 @@ const TOP_PERSPECTIVE_FOV = 50;
 const TOP_MAP_FREE_VIEW_MAX_DISTANCE_CHUNKS = 1024;
 const TOP_MAP_FREE_VIEW_MAX_DISTANCE_BLOCKS = TOP_MAP_FREE_VIEW_MAX_DISTANCE_CHUNKS * 16;
 const LONG_RANGE_CAMERA_FAR = TOP_MAP_FREE_VIEW_MAX_DISTANCE_BLOCKS + 2 * 512;
-const DEFAULT_VIEW: FlyView = { x: 8, y: 120, z: 8, yaw: 0, pitch: 0 };
 const DEFAULT_DIMENSION_DEF = {
   hasSkyLight: true,
   ambientLight: 0.18,
@@ -60,8 +67,11 @@ export interface CameraPositionRequest {
   seq: number;
 }
 
-export interface ViewerProps {
+export interface ViewerOptions {
   world: string;
+  overlayMapId?: string;
+  overlaysEnabled?: boolean;
+  onOverlayStatus?: (status: OverlayDiagnosticSnapshot) => void;
   dimension: string;
   viewDistance: number;
   lodDistance: number;
@@ -95,12 +105,15 @@ export interface ViewerDiagnosticSnapshot {
   schedulerPreset: SchedulerPreset;
   chunkManager: ChunkManagerDiagnosticSnapshot | null;
   topMap: TopMapDiagnosticSnapshot;
+  overlays: OverlayDiagnosticSnapshot;
 }
 
 type ActiveCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
-type InitialView = FlyView & { hasAngles: boolean };
+
 type ViewerBundle = Awaited<ReturnType<typeof fetchBundle>>;
+
 type ViewerBlockInfo = Awaited<ReturnType<typeof fetchBlockInfo>>;
+
 type ViewerAtlas = Awaited<ReturnType<typeof buildAtlas>>;
 
 type ViewerDimensionDef = DimensionMap[string] | typeof DEFAULT_DIMENSION_DEF;
@@ -127,6 +140,7 @@ interface Engine {
   topPerspectiveControls: TopDownControls;
   topOrthographicControls: TopDownControls;
   topMap: TopMapManager;
+  overlays: OverlayManager;
   materials: TerrainMaterials;
   terrainTexture: THREE.Texture;
   textureAnimations: TextureAnimationUniforms;
@@ -174,7 +188,7 @@ interface FrameContext {
   engine: Engine;
   manager: ChunkManager | null;
   latestStats: ChunkSchedulerStats;
-  props: ViewerProps;
+  props: ViewerOptions;
   capabilities: WorldCapabilities | null;
   state: FrameState;
 }
@@ -183,90 +197,19 @@ function clamp01(value: number): number {
   return Math.min(Math.max(value, 0), 1);
 }
 
-function finiteNumber(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
-}
-
-function finiteParam(params: URLSearchParams, key: string, fallback: number): number {
-  const value = Number(params.get(key));
-  return Number.isFinite(value) ? value : fallback;
-}
-
-function fixed(value: number, digits: number): string {
-  return Number.isFinite(value) ? value.toFixed(digits) : '0';
-}
-
-function viewFromParams(params: URLSearchParams, defaults: FlyView = DEFAULT_VIEW): InitialView | null {
-  const hasPosition = params.has('x') || params.has('y') || params.has('z');
-  const hasAngles = params.has('yaw') || params.has('pitch');
-  if (!hasPosition && !hasAngles) return null;
-  return {
-    x: finiteParam(params, 'x', defaults.x),
-    y: finiteParam(params, 'y', defaults.y),
-    z: finiteParam(params, 'z', defaults.z),
-    yaw: normalizeFlyYaw(finiteParam(params, 'yaw', defaults.yaw)),
-    pitch: clampFlyPitch(finiteParam(params, 'pitch', defaults.pitch)),
-    hasAngles,
-  };
-}
-
-function parseSavedView(raw: string | null): Partial<FlyView> | null {
-  try {
-    return JSON.parse(raw ?? 'null') as Partial<FlyView> | null;
-  } catch {
-    return null;
-  }
-}
-
-function viewFromSaved(saved: Partial<FlyView> | null, defaults: FlyView = DEFAULT_VIEW): InitialView | null {
-  if (!saved) return null;
-  return {
-    x: finiteNumber(saved.x, defaults.x),
-    y: finiteNumber(saved.y, defaults.y),
-    z: finiteNumber(saved.z, defaults.z),
-    yaw: normalizeFlyYaw(finiteNumber(saved.yaw, defaults.yaw)),
-    pitch: clampFlyPitch(finiteNumber(saved.pitch, defaults.pitch)),
-    hasAngles: Number.isFinite(saved.yaw) || Number.isFinite(saved.pitch),
-  };
-}
-
-function readInitialView(): InitialView {
-  return (
-    viewFromParams(new URLSearchParams(location.search)) ??
-    viewFromSaved(parseSavedView(localStorage.getItem(VIEW_STORAGE_KEY))) ?? { ...DEFAULT_VIEW, hasAngles: false }
-  );
-}
-
-function buildViewUrl(pathname: string, search: string, hash: string, view: FlyView): string {
-  const params = new URLSearchParams(search);
-  params.set('x', fixed(view.x, 2));
-  params.set('y', fixed(view.y, 2));
-  params.set('z', fixed(view.z, 2));
-  params.set('yaw', fixed(normalizeFlyYaw(view.yaw), 4));
-  params.set('pitch', fixed(clampFlyPitch(view.pitch), 4));
-  params.delete('lookAtX');
-  params.delete('lookAtY');
-  params.delete('lookAtZ');
-  return `${pathname}?${params.toString()}${hash}`;
-}
-
 function persistView(view: FlyView, updateUrl: boolean) {
   try {
-    localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify(view));
+    browserStorage('localStorage')?.setItem(VIEW_STORAGE_KEY, JSON.stringify(view));
   } catch {
     // Storage can be unavailable in private or restricted contexts.
   }
-  if (!updateUrl) return;
-  history.replaceState(null, '', buildViewUrl(location.pathname, location.search, location.hash, view));
-}
-
-function lookAtTargetFromParams(params: URLSearchParams, fallback: THREE.Vector3): [number, number, number] | null {
-  if (!params.has('lookAtX') && !params.has('lookAtY') && !params.has('lookAtZ')) return null;
-  return [
-    finiteParam(params, 'lookAtX', fallback.x),
-    finiteParam(params, 'lookAtY', fallback.y),
-    finiteParam(params, 'lookAtZ', fallback.z - 1),
-  ];
+  if (updateUrl) {
+    try {
+      history.replaceState(null, '', buildViewUrl(location.pathname, location.search, location.hash, view));
+    } catch {
+      // Sandboxed frames and browser history rate limits must not interrupt a frame.
+    }
+  }
 }
 
 function cameraView(camera: THREE.Camera, yaw: number, pitch: number): FlyView {
@@ -347,6 +290,7 @@ function diagnosticSnapshotForViewer(
     schedulerPreset,
     chunkManager: manager?.diagnosticSnapshot() ?? null,
     topMap: engine.topMap.diagnosticSnapshot(),
+    overlays: engine.overlays.diagnosticSnapshot(),
   };
 }
 
@@ -358,59 +302,19 @@ function dimensionDefinition(dimensions: DimensionMap, dimension: string): Viewe
   return dimensions[dimension] ?? DEFAULT_DIMENSION_DEF;
 }
 
-function hashString(input: string, seed = 2166136261): number {
-  let h = seed;
-  for (let i = 0; i < input.length; i++) {
-    h ^= input.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-
-function hashBytes(bytes: Uint8Array | null, seed = 2166136261): number {
-  let h = seed;
-  if (!bytes) return h >>> 0;
-  for (const byte of bytes) {
-    h ^= byte;
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-
-function stableStringify(value: unknown): string {
-  if (!value || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
-  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(',')}}`;
-}
-
-function buildRenderKey(
-  atlasKey: string,
-  bundle: unknown,
-  blockInfo: unknown,
-  grassMap: Uint8Array | null,
-  foliageMap: Uint8Array | null,
-): string {
-  let h = hashString(`${MESH_CACHE_SCHEMA}:${atlasKey}`);
-  h = hashString(stableStringify(bundle), h);
-  h = hashString(stableStringify(blockInfo), h);
-  h = hashBytes(grassMap, h);
-  h = hashBytes(foliageMap, h);
-  return `${MESH_CACHE_SCHEMA}:${atlasKey}:${h.toString(36)}`;
-}
-
-async function loadViewerResources(): Promise<ViewerResources> {
+async function loadViewerResources(signal: AbortSignal): Promise<ViewerResources> {
   const [bundle, blockInfo, biomes, dimensions, grassMap, foliageMap] = await Promise.all([
-    fetchBundle(),
-    fetchBlockInfo(),
-    fetchBiomes(),
-    fetchDimensions(),
-    loadColormap('minecraft:colormap/grass'),
-    loadColormap('minecraft:colormap/foliage'),
+    fetchBundle(signal),
+    fetchBlockInfo(signal),
+    fetchBiomes(signal),
+    fetchDimensions(signal),
+    loadColormap('minecraft:colormap/grass', signal),
+    loadColormap('minecraft:colormap/foliage', signal),
   ]);
   const atlas = await buildAtlas(
     collectTextureIds(bundle, blockInfo),
     new Set(Object.keys(bundle.textureAnimations ?? {})),
+    signal,
   );
   return {
     bundle,
@@ -420,7 +324,15 @@ async function loadViewerResources(): Promise<ViewerResources> {
     grassMap,
     foliageMap,
     atlas,
-    renderKey: buildRenderKey(atlas.cacheKey, bundle, blockInfo, grassMap, foliageMap),
+    renderKey: buildRenderKey({
+      atlasKey: atlas.cacheKey,
+      bundle,
+      blockInfo,
+      biomes,
+      dimensions,
+      grassMap,
+      foliageMap,
+    }),
   };
 }
 
@@ -472,31 +384,33 @@ function makeCelestialFallback(kind: 'sun' | 'moon'): HTMLCanvasElement {
 function loadCanvasBackedTexture(
   fallback: HTMLCanvasElement,
   candidates: { id: string; cropMoonSheet?: boolean }[],
+  signal: AbortSignal,
 ): THREE.Texture {
   const texture = configurePixelTexture(new THREE.CanvasTexture(fallback));
   const tryLoad = (index: number) => {
     const candidate = candidates[index];
-    if (!candidate) return;
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      if (candidate.cropMoonSheet && img.width > img.height) {
-        const frameW = Math.floor(img.width / 4);
-        const frameH = Math.floor(img.height / 2);
-        const canvas = document.createElement('canvas');
-        canvas.width = frameW;
-        canvas.height = frameH;
-        const ctx = canvas.getContext('2d')!;
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(img, 0, 0, frameW, frameH, 0, 0, frameW, frameH);
-        texture.image = canvas;
-      } else {
-        texture.image = img;
-      }
-      texture.needsUpdate = true;
-    };
-    img.onerror = () => tryLoad(index + 1);
-    img.src = textureUrl(candidate.id);
+    if (!candidate || signal.aborted) return;
+    void loadBrowserImage(textureUrl(candidate.id), signal)
+      .then((img) => {
+        if (signal.aborted) return;
+        if (candidate.cropMoonSheet && img.width > img.height) {
+          const frameW = Math.floor(img.width / 4);
+          const frameH = Math.floor(img.height / 2);
+          const canvas = document.createElement('canvas');
+          canvas.width = frameW;
+          canvas.height = frameH;
+          const ctx = canvas.getContext('2d')!;
+          ctx.imageSmoothingEnabled = false;
+          ctx.drawImage(img, 0, 0, frameW, frameH, 0, 0, frameW, frameH);
+          texture.image = canvas;
+        } else {
+          texture.image = img;
+        }
+        texture.needsUpdate = true;
+      })
+      .catch(() => {
+        if (!signal.aborted) tryLoad(index + 1);
+      });
   };
   tryLoad(0);
   return texture;
@@ -560,6 +474,7 @@ function createSkyDomeMaterial(): THREE.ShaderMaterial {
 }
 
 function createSkyObjects(scene: THREE.Scene): SkyObjects {
+  const textures = new AbortController();
   const group = new THREE.Group();
   const domeMaterial = createSkyDomeMaterial();
   const domeGeometry = new THREE.SphereGeometry(1200, 32, 16);
@@ -568,14 +483,19 @@ function createSkyObjects(scene: THREE.Scene): SkyObjects {
   dome.renderOrder = -1000;
   group.add(dome);
 
-  const sunTexture = loadCanvasBackedTexture(makeCelestialFallback('sun'), [
-    { id: 'minecraft:environment/celestial/sun' },
-    { id: 'minecraft:environment/sun' },
-  ]);
-  const moonTexture = loadCanvasBackedTexture(makeCelestialFallback('moon'), [
-    { id: 'minecraft:environment/celestial/moon/full_moon' },
-    { id: 'minecraft:environment/moon_phases', cropMoonSheet: true },
-  ]);
+  const sunTexture = loadCanvasBackedTexture(
+    makeCelestialFallback('sun'),
+    [{ id: 'minecraft:environment/celestial/sun' }, { id: 'minecraft:environment/sun' }],
+    textures.signal,
+  );
+  const moonTexture = loadCanvasBackedTexture(
+    makeCelestialFallback('moon'),
+    [
+      { id: 'minecraft:environment/celestial/moon/full_moon' },
+      { id: 'minecraft:environment/moon_phases', cropMoonSheet: true },
+    ],
+    textures.signal,
+  );
   const celestialGeometry = new THREE.PlaneGeometry(1, 1);
   const sun = new THREE.Mesh(celestialGeometry, createCelestialMaterial(sunTexture));
   const moon = new THREE.Mesh(celestialGeometry, createCelestialMaterial(moonTexture));
@@ -624,6 +544,7 @@ function createSkyObjects(scene: THREE.Scene): SkyObjects {
     moon,
     stars,
     dispose() {
+      textures.abort();
       scene.remove(group);
       domeGeometry.dispose();
       domeMaterial.dispose();
@@ -813,6 +734,7 @@ function createEngine(
     topPerspectiveControls: controls.topPerspectiveControls,
     topOrthographicControls: controls.topOrthographicControls,
     topMap,
+    overlays: new OverlayManager(scene, shared),
     materials,
     terrainTexture,
     textureAnimations,
@@ -847,6 +769,7 @@ function disposeEngine(engine: Engine) {
   engine.topPerspectiveControls.dispose();
   engine.topOrthographicControls.dispose();
   engine.topMap.dispose();
+  engine.overlays.dispose();
   engine.sky.dispose();
   for (const material of engine.materials.all) material.dispose();
   engine.textureAnimations.info.dispose();
@@ -895,7 +818,7 @@ function updateActiveControls(engine: Engine, viewMode: ViewMode, dt: number) {
 function updateChunksAndTopMap(
   engine: Engine,
   manager: ChunkManager | null,
-  props: ViewerProps,
+  props: ViewerOptions,
   capabilities: WorldCapabilities | null,
   now: number,
 ): ViewerDimensionDef {
@@ -968,7 +891,7 @@ function applyFogRange(engine: Engine, topView: boolean, dense: boolean, viewDis
 function applyLightingAndFog(
   engine: Engine,
   manager: ChunkManager | null,
-  props: ViewerProps,
+  props: ViewerOptions,
   dimDef: ViewerDimensionDef,
   topView: boolean,
   skyColor: THREE.Color,
@@ -1033,7 +956,7 @@ function maybeReportStats(
   latestStats: ChunkSchedulerStats,
   camera: THREE.Camera,
   viewMode: ViewMode,
-  onStats?: ViewerProps['onStats'],
+  onStats?: ViewerOptions['onStats'],
 ) {
   if (now - state.lastStatsReport <= 250) return;
   onStats?.(statsForCamera(latestStats, camera, viewMode));
@@ -1067,12 +990,29 @@ function renderFrame({ engine, manager, latestStats, props, capabilities, state 
   applyLightingAndFog(engine, manager, props, dimDef, topView, state.skyColor, state.horizonColor);
 
   const camera = engine.activeCamera;
+  engine.overlays.configure(
+    props.overlayMapId ?? null,
+    props.dimension,
+    !!props.overlaysEnabled && !!serviceCapabilities().contentReads,
+  );
+  engine.overlays.update(engine.renderer, {
+    camera,
+    topView,
+    width: engine.renderer.domElement.clientWidth,
+    height: engine.renderer.domElement.clientHeight,
+    now,
+    dayFactor: dayFactorForDimension(dimDef, props.timeOfDay),
+    sky: dimensionSkyMode(dimDef),
+    ambient: dimDef.ambientLight,
+    surfaceMaxY: props.topClipRange.maxY,
+  });
+  if (now - state.lastStatsReport > 250) props.onOverlayStatus?.(engine.overlays.diagnosticSnapshot());
   maybeReportStats(state, now, latestStats, camera, props.viewMode, props.onStats);
   maybePersistActiveView(state, now, engine, camera, props.viewMode);
   engine.renderer.render(engine.scene, camera);
 }
 
-function createWorldManager(engine: Engine, props: ViewerProps): ChunkManager {
+function createWorldManager(engine: Engine, props: ViewerOptions): ChunkManager {
   const dimDef = dimensionDefinition(engine.dimensions, props.dimension);
   return new ChunkManager(engine.scene, engine.materials, engine.initPayload, {
     world: props.world,
@@ -1112,177 +1052,182 @@ function moveCameraToTarget(engine: Engine, target: CameraPositionRequest, viewM
   setControlsEnabled(engine, viewMode);
 }
 
-function updateManagerAfterCameraTarget(engine: Engine, manager: ChunkManager | null, props: ViewerProps) {
+function updateManagerAfterCameraTarget(engine: Engine, manager: ChunkManager | null, props: ViewerOptions) {
   const topView = isTopViewMode(props.viewMode);
   manager?.update(engine.activeCamera, performance.now(), true, topView, props.topClipRange);
 }
 
-export function Viewer(props: ViewerProps) {
-  const { t } = useTranslation();
-  const containerRef = useRef<HTMLDivElement>(null);
-  const engineRef = useRef<Engine | null>(null);
-  const managerRef = useRef<ChunkManager | null>(null);
-  const latestStatsRef = useRef<ChunkSchedulerStats>({ ...EMPTY_CHUNK_SCHEDULER_STATS });
-  const propsRef = useRef(props);
-  propsRef.current = props;
-  const capabilitiesRef = useRef<WorldCapabilities | null>(null);
-  const [ready, setReady] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+/**
+ * Owns the canvas, WebGL resources and world lifecycle independently of UI
+ * rendering. Call update with current options and dispose when the host is
+ * removed. Updates during resource loading apply to the eventual engine;
+ * disposed controllers ignore all late resources and capability responses.
+ */
+export class ViewerController {
+  private engine: Engine | null = null;
+  private manager: ChunkManager | null = null;
+  private latestStats: ChunkSchedulerStats = { ...EMPTY_CHUNK_SCHEDULER_STATS };
+  private capabilities: WorldCapabilities | null = null;
+  private capabilityGeneration = 0;
+  private capabilityRequest: AbortController | null = null;
+  private disposed = false;
+  private readonly resourceRequest = new AbortController();
+  private onResize: (() => void) | null = null;
+  private frameState: FrameState | null = null;
 
-  useEffect(() => {
-    let cancelled = false;
-    capabilitiesRef.current = null;
-    if (!props.world) return;
-    fetchWorldCapabilities(props.world)
-      .then((next) => {
-        if (!cancelled) capabilitiesRef.current = next;
-      })
-      .catch(() => {
-        if (!cancelled) capabilitiesRef.current = null;
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [props.world]);
+  constructor(
+    private readonly container: HTMLElement,
+    private props: ViewerOptions,
+    private readonly onError: (message: string) => void,
+    private readonly onReady?: () => void,
+  ) {
+    this.loadCapabilities(props.world);
+    this.registerDiagnostics(props.onDiagnosticSnapshotProvider);
+    void this.initialize();
+  }
 
-  // 一次性初始化：GL、资源、图集、动画循环
-  useEffect(() => {
-    let disposed = false;
-    let onResize: (() => void) | null = null;
-    const container = containerRef.current;
-    if (!container) return;
-
-    (async () => {
-      try {
-        THREE.ColorManagement.enabled = false;
-        const resources = await loadViewerResources();
-        if (disposed) return;
-
-        const engine = createEngine(
-          container,
-          resources,
-          readInitialView(),
-          propsRef.current.viewMode,
-          propsRef.current.fastMoveMultiplier,
-          propsRef.current.inertiaEnabled,
-        );
-        engineRef.current = engine;
-
-        onResize = createResizeHandler(engine, container);
-        window.addEventListener('resize', onResize);
-
-        const frameState = createFrameState(propsRef.current.viewMode);
-        engine.renderer.setAnimationLoop(() => {
-          renderFrame({
-            engine,
-            manager: managerRef.current,
-            latestStats: latestStatsRef.current,
-            props: propsRef.current,
-            capabilities: capabilitiesRef.current,
-            state: frameState,
-          });
-        });
-        setReady(true);
-      } catch (e) {
-        if (!disposed) setError((e as Error).message);
-      }
-    })();
-
-    return () => {
-      disposed = true;
-      if (onResize) window.removeEventListener('resize', onResize);
-      if (engineRef.current) {
-        disposeEngine(engineRef.current);
-        engineRef.current = null;
-      }
-    };
-  }, []);
-
-  // 世界/维度切换：仅重建 ChunkManager
-  useEffect(() => {
-    const engine = engineRef.current;
-    if (!ready || !engine || !props.world) return;
-
-    const manager = createWorldManager(engine, props);
-    manager.onStats = (s) => {
-      latestStatsRef.current = s;
-      propsRef.current.onStats?.(statsForCamera(s, engine.activeCamera, propsRef.current.viewMode));
-    };
-    managerRef.current = manager;
-
-    return () => {
-      managerRef.current = null;
-      manager.dispose();
-    };
-  }, [ready, props.world, props.dimension]);
-
-  useEffect(() => {
-    updateFastMoveMultiplier(engineRef.current, props.fastMoveMultiplier);
-  }, [props.fastMoveMultiplier]);
-
-  useEffect(() => {
-    engineRef.current?.flyControls.setInertiaEnabled(props.inertiaEnabled);
-  }, [props.inertiaEnabled]);
-
-  useEffect(() => {
-    const engine = engineRef.current;
-    const manager = managerRef.current;
-    if (!ready || !engine || !manager) return;
-    manager.setScheduling(schedulerTuningForPreset(props.schedulerPreset, props.viewDistance, props.lodDistance));
-    manager.update(engine.activeCamera, performance.now(), true, isTopViewMode(props.viewMode), props.topClipRange);
-  }, [ready, props.schedulerPreset, props.viewDistance, props.lodDistance]);
-
-  useEffect(() => {
-    const register = props.onDiagnosticSnapshotProvider;
-    if (!register) return;
-    register(() => {
-      const engine = engineRef.current;
-      if (!engine) return null;
-      return diagnosticSnapshotForViewer(
-        engine,
-        managerRef.current,
-        latestStatsRef.current,
-        propsRef.current.viewMode,
-        propsRef.current.schedulerPreset,
+  private async initialize(): Promise<void> {
+    try {
+      THREE.ColorManagement.enabled = false;
+      const resources = await loadViewerResources(this.resourceRequest.signal);
+      if (this.disposed) return;
+      const props = this.props;
+      const engine = createEngine(
+        this.container,
+        resources,
+        readInitialView(location.search, readStored(browserStorage('localStorage'), VIEW_STORAGE_KEY)),
+        props.viewMode,
+        props.fastMoveMultiplier,
+        props.inertiaEnabled,
       );
-    });
-    return () => register(null);
-  }, [props.onDiagnosticSnapshotProvider]);
+      this.engine = engine;
+      this.onResize = createResizeHandler(engine, this.container);
+      window.addEventListener('resize', this.onResize);
+      const state = createFrameState(props.viewMode);
+      state.timer.connect(document);
+      this.frameState = state;
+      this.syncEngine(null);
+      engine.renderer.setAnimationLoop(() =>
+        renderFrame({
+          engine,
+          manager: this.manager,
+          latestStats: this.latestStats,
+          props: this.props,
+          capabilities: this.capabilities,
+          state,
+        }),
+      );
+      this.onReady?.();
+    } catch (error) {
+      this.resourceRequest.abort();
+      if (!this.disposed) this.onError(error instanceof Error ? error.message : String(error));
+    }
+  }
 
-  // 外部手动设置坐标
-  useEffect(() => {
-    const engine = engineRef.current;
+  private loadCapabilities(world: string): void {
+    this.capabilityRequest?.abort();
+    this.capabilityRequest = null;
+    const generation = ++this.capabilityGeneration;
+    this.capabilities = null;
+    if (!world) return;
+    const controller = new AbortController();
+    this.capabilityRequest = controller;
+    void fetchWorldCapabilities(world, controller.signal)
+      .then((value) => {
+        if (!this.disposed && generation === this.capabilityGeneration) this.capabilities = value;
+      })
+      .catch(() => {});
+  }
+
+  private registerDiagnostics(register: ViewerOptions['onDiagnosticSnapshotProvider']): void {
+    register?.(() =>
+      this.engine
+        ? diagnosticSnapshotForViewer(
+            this.engine,
+            this.manager,
+            this.latestStats,
+            this.props.viewMode,
+            this.props.schedulerPreset,
+          )
+        : null,
+    );
+  }
+
+  /** Update live options without recreating the renderer or animation loop. */
+  update(props: ViewerOptions): void {
+    if (this.disposed) return;
+    const previous = this.props;
+    this.props = props;
+    if (previous.world !== props.world) this.loadCapabilities(props.world);
+    if (previous.onDiagnosticSnapshotProvider !== props.onDiagnosticSnapshotProvider) {
+      previous.onDiagnosticSnapshotProvider?.(null);
+      this.registerDiagnostics(props.onDiagnosticSnapshotProvider);
+    }
+    this.syncEngine(previous);
+  }
+
+  private syncEngine(previous: ViewerOptions | null): void {
+    const engine = this.engine;
+    if (!engine) return;
+    const props = this.props;
+    const contextChanged = !previous || previous.world !== props.world || previous.dimension !== props.dimension;
+    if (contextChanged) {
+      this.manager?.dispose();
+      this.manager = null;
+      this.latestStats = { ...EMPTY_CHUNK_SCHEDULER_STATS };
+      if (props.world) {
+        const manager = createWorldManager(engine, props);
+        manager.onStats = (stats) => {
+          this.latestStats = stats;
+          this.props.onStats?.(statsForCamera(stats, engine.activeCamera, this.props.viewMode));
+        };
+        this.manager = manager;
+      }
+    }
+    if (!previous || previous.fastMoveMultiplier !== props.fastMoveMultiplier)
+      updateFastMoveMultiplier(engine, props.fastMoveMultiplier);
+    if (!previous || previous.inertiaEnabled !== props.inertiaEnabled)
+      engine.flyControls.setInertiaEnabled(props.inertiaEnabled);
+    if (
+      contextChanged ||
+      previous?.schedulerPreset !== props.schedulerPreset ||
+      previous?.viewDistance !== props.viewDistance ||
+      previous?.lodDistance !== props.lodDistance
+    ) {
+      this.manager?.setScheduling(
+        schedulerTuningForPreset(props.schedulerPreset, props.viewDistance, props.lodDistance),
+      );
+      this.manager?.update(
+        engine.activeCamera,
+        performance.now(),
+        true,
+        isTopViewMode(props.viewMode),
+        props.topClipRange,
+      );
+    }
     const target = props.cameraTarget;
-    if (!ready || !engine || !target) return;
+    if (target && (!previous || target.seq !== previous.cameraTarget?.seq)) {
+      moveCameraToTarget(engine, target, props.viewMode);
+      persistView(getPersistableView(engine, engine.activeCamera, props.viewMode), true);
+      props.onStats?.(statsForCamera(this.latestStats, engine.activeCamera, props.viewMode));
+      updateManagerAfterCameraTarget(engine, this.manager, props);
+    }
+  }
 
-    moveCameraToTarget(engine, target, props.viewMode);
-    persistView(getPersistableView(engine, engine.activeCamera, props.viewMode), true);
-    propsRef.current.onStats?.(statsForCamera(latestStatsRef.current, engine.activeCamera, props.viewMode));
-    updateManagerAfterCameraTarget(engine, managerRef.current, props);
-  }, [ready, props.cameraTarget?.seq]);
-
-  return (
-    <div ref={containerRef} style={{ position: 'absolute', inset: 0 }}>
-      {error && (
-        <div
-          style={{
-            position: 'fixed',
-            left: '50%',
-            top: '50%',
-            transform: 'translate(-50%, -50%)',
-            zIndex: 100,
-            maxWidth: 'min(560px, calc(100vw - 32px))',
-            padding: '14px 18px',
-            borderRadius: 8,
-            color: '#fecaca',
-            background: 'rgba(69, 10, 10, .96)',
-            border: '1px solid #ef4444',
-            textAlign: 'center',
-          }}
-        >
-          {t('initFailed', { message: error })}
-        </div>
-      )}
-    </div>
-  );
+  /** Idempotently stop work and release CPU/GPU ownership before removing the host. */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.resourceRequest.abort();
+    this.capabilityGeneration++;
+    this.capabilityRequest?.abort();
+    this.capabilityRequest = null;
+    this.props.onDiagnosticSnapshotProvider?.(null);
+    if (this.onResize) window.removeEventListener('resize', this.onResize);
+    this.frameState?.timer.dispose();
+    this.manager?.dispose();
+    this.manager = null;
+    if (this.engine) disposeEngine(this.engine);
+    this.engine = null;
+  }
 }

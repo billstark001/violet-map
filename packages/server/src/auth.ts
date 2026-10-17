@@ -1,6 +1,7 @@
 import type { Principal } from './principal.js';
 import type { Context, MiddlewareHandler } from 'hono';
 import type { Role } from '@violet-map/core/contracts';
+
 export interface Authentication {
   authenticateCredential(token: string): Promise<Principal | undefined>;
 }

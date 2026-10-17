@@ -23,6 +23,7 @@ export interface ProfileOptions {
   s3CredentialsRef?: string;
   s3VirtualHosted?: boolean;
 }
+
 export async function setProfile(context: CliContext, name: string, options: ProfileOptions) {
   validName(name);
   await editConfig(context.paths, (config) => {
@@ -49,6 +50,7 @@ export async function setProfile(context: CliContext, name: string, options: Pro
   });
   console.log(`Saved profile ${name}.`);
 }
+
 export async function useProfile(context: CliContext, name: string) {
   await editConfig(context.paths, (config) => {
     if (!Object.hasOwn(config.profiles, name)) throw new Error(`Unknown profile: ${name}`);
@@ -56,6 +58,7 @@ export async function useProfile(context: CliContext, name: string) {
   });
   console.log(`Default profile: ${name}`);
 }
+
 export async function deleteProfile(context: CliContext, name: string) {
   if (!Object.hasOwn(context.config.profiles, name)) throw new Error(`Unknown profile: ${name}`);
   for (const [key, session] of Object.entries((await loadState(context.paths)).sessions)) {
@@ -71,6 +74,7 @@ export async function deleteProfile(context: CliContext, name: string) {
   });
   console.log(`Deleted profile ${name}; remote credentials expire or can be revoked separately.`);
 }
+
 export function showConfig(context: CliContext, sources: boolean) {
   const server = context.options.serverUrl ?? context.env.VIOLET_SERVER_URL ?? context.profile.server?.url;
   const databaseDir = context.env.DATABASE_DIR
@@ -123,6 +127,7 @@ export function showConfig(context: CliContext, sources: boolean) {
   // Never dereference credentials while inspecting configuration.
   console.log(JSON.stringify(value, null, 2));
 }
+
 export async function setCredential(context: CliContext, name: string, options: { stdin?: boolean; file?: string }) {
   validName(name);
   if (!options.stdin && !options.file) throw new Error('Use --stdin or --file to provide a credential');

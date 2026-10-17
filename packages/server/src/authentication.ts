@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { Authentication } from './auth.js';
 import type { ServerConfig } from './configuration.js';
+
 export function createAuthentication(auth: ServerConfig['auth']): Authentication {
   const expected = auth.staticToken ? createHash('sha256').update(auth.staticToken).digest() : undefined;
   return {

@@ -8,6 +8,7 @@ import type { Rgb } from '@violet-map/render';
 const { computeColumnLight } = await loadCapability('@violet-map/render');
 
 const { sampleTopMapSurface } = await loadCapability('@violet-map/render/top-map/sample');
+
 import {
   TOP_MAP_MISSING_HEIGHT,
   TOP_MAP_SCHEMA,
@@ -25,6 +26,7 @@ import { findRegionFiles, loadRegionColumns, type ColumnEntry, type RegionFile }
 import { ensureDir, sha1Bytes } from './paths.js';
 import { infoGetter, loadBiomeColors, makeColorOf, makeTextureColorOf, stateColor } from './colorInput.js';
 import { loadBlockInfo } from './assetInput.js';
+
 const TOPMAP_COLOR_VERSION = 3;
 const TOPMAP_LIGHT_VERSION = 1;
 

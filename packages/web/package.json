@@ -1,6 +1,6 @@
 {
   "name": "@violet-map/web",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,21 +10,17 @@
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.1.3",
-    "@radix-ui/themes": "^3.3.0",
+    "@preact/signals": "^2.11.3",
     "@violet-map/core": "workspace:*",
     "@violet-map/render": "workspace:*",
     "i18next": "^26.3.4",
     "idb": "^8.0.3",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "react-i18next": "^17.0.8",
+    "preact": "^11.0.1",
     "three": "^0.185.1"
   },
   "devDependencies": {
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
+    "@preact/preset-vite": "^2.10.6",
     "@types/three": "^0.185.0",
-    "@vitejs/plugin-react": "^6.0.3",
     "typescript": "^6.0.3",
     "vite": "^8.1.3"
   }

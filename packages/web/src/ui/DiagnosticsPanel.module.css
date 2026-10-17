@@ -1,0 +1,18 @@
+.badges {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.events {
+  width: 100%;
+  max-height: 168px;
+  overflow-y: auto;
+  border-top: 1px solid rgba(148, 163, 184, 0.22);
+  padding-top: 8px;
+}
+.event {
+  margin-top: 6px;
+}
+.event p {
+  margin: 0;
+}

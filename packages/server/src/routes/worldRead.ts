@@ -1,5 +1,9 @@
+import { nonSharedByteView } from '@violet-map/core/http';
 import type { RouteContext } from './context.js';
+import { validateWorldName } from '../worldValidation.js';
+
 export function mountWorldRead(context: RouteContext) {
+  context.app.use('/api/worlds/:world/*', validateWorldName);
   const {
     app,
     getTopMapManifest,
@@ -26,7 +30,21 @@ export function mountWorldRead(context: RouteContext) {
     if (!isDimensionId(c.req.param('dim'))) return c.json({ error: 'invalid dimension id' }, 400);
     await next();
   });
-  app.get('/api/worlds', async (c) => c.json(await listWorlds()));
+  app.get('/api/worlds', async (c) => {
+    const worlds = await listWorlds();
+    if (!context.content) return c.json(worlds);
+    try {
+      const maps = await context.content.listMaps();
+      return c.json(
+        worlds.map((world) => ({
+          ...world,
+          mapIds: maps.filter((map) => map.worldKey === world.id).map((map) => map.mapId),
+        })),
+      );
+    } catch {
+      return c.json(worlds);
+    }
+  });
   app.get('/api/worlds/:world/capabilities', async (c) => c.json(await getWorldCapabilities(c.req.param('world'))));
   app.get('/api/worlds/:world/:dim/regions', async (c) =>
     c.json(await listRegions(c.req.param('world'), decodeURIComponent(c.req.param('dim')))),
@@ -49,7 +67,7 @@ export function mountWorldRead(context: RouteContext) {
     if (!Number.isInteger(rx) || !Number.isInteger(rz)) return c.text('bad region coords', 400);
     const bytes = await readTopMapTile(c.req.param('world'), decodeURIComponent(c.req.param('dim')), rx, rz);
     if (!bytes) return c.text('top-map tile not found', 404);
-    return c.body(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, 200, {
+    return c.body(nonSharedByteView(bytes), 200, {
       'cache-control': 'public, max-age=60, must-revalidate',
       'content-type': 'application/msgpack',
     });

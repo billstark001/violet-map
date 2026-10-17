@@ -1,4 +1,7 @@
+import { loadBrowserImage } from './browserImage';
+import { hashString32 } from '@violet-map/core/hash';
 import { resolveApiResourceUrl } from './runtime';
+import { normalizeId } from '@violet-map/core/domain';
 import { mapWithConcurrency } from '@violet-map/core/async';
 import {
   type AssetBundle,
@@ -93,15 +96,14 @@ export function collectTextureIds(bundle: AssetBundle, blockInfo: BlockInfoMap):
   const ids = new Set<string>();
   const models = new Set<string>();
   const seenModels = new Set<string>();
-  const normalize = (id: string) => (id.includes(':') ? id : `minecraft:${id}`);
   const add = (v: unknown) => {
     if (v && typeof v === 'object') v = (v as { sprite?: unknown }).sprite;
     if (typeof v !== 'string') return;
-    if (!v.startsWith('#')) ids.add(normalize(v));
+    if (!v.startsWith('#')) ids.add(normalizeId(v));
   };
   const addModel = (v: unknown) => {
     if (v && typeof v === 'object') v = (v as { model?: unknown }).model;
-    if (typeof v === 'string') models.add(normalize(v));
+    if (typeof v === 'string') models.add(normalizeId(v));
   };
   const collectBlockstateModels = (bs: any) => {
     if (bs?.variants) {
@@ -143,7 +145,7 @@ export function collectTextureIds(bundle: AssetBundle, blockInfo: BlockInfoMap):
     const model = bundle.models[id] as BlockModelJson | undefined;
     if (!model) return;
     if (model.textures) for (const v of Object.values(model.textures)) add(v);
-    if (typeof model.parent === 'string') visitModel(normalize(model.parent));
+    if (typeof model.parent === 'string') visitModel(normalizeId(model.parent));
   };
   for (const id of models) {
     visitModel(id);
@@ -156,23 +158,16 @@ export function collectTextureIds(bundle: AssetBundle, blockInfo: BlockInfoMap):
   return [...ids];
 }
 
-function loadImage(url: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error(`failed: ${url}`));
-    img.src = url;
-  });
-}
-
-function simpleHash(input: string): string {
-  let h = 2166136261;
-  for (let i = 0; i < input.length; i++) {
-    h ^= input.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (h >>> 0).toString(36);
+/** Identify mesh-relevant fallback output, including UV placement, LOD colors
+ * and alpha classification. Texture names alone cannot identify changed packs. */
+export function fallbackAtlasKey(
+  index: AtlasIndex,
+  avgColors: BuiltAtlas['avgColors'],
+  hasAlpha: TextureAlphaMap,
+): string {
+  const entries = Object.entries(index).sort(([a], [b]) => a.localeCompare(b));
+  const metadata = entries.map(([id, rectangle]) => [id, rectangle, avgColors[id], hasAlpha[id]]);
+  return `client-native-v2:${hashString32(JSON.stringify(metadata)).toString(36)}`;
 }
 
 /** The fallback atlas freezes declared vertical sprite sheets at their first square frame. */
@@ -181,10 +176,15 @@ export function fallbackTextureSize(width: number, height: number, animated: boo
 }
 
 /** 构建纹理图集。动画贴图（竖长条）只取第一帧。 */
-export async function buildAtlas(ids: string[], animatedIds: ReadonlySet<string> = new Set()): Promise<BuiltAtlas> {
+export async function buildAtlas(
+  ids: string[],
+  animatedIds: ReadonlySet<string> = new Set(),
+  signal?: AbortSignal,
+): Promise<BuiltAtlas> {
+  signal?.throwIfAborted();
   try {
-    const manifest = await fetchTextureAtlas(ids);
-    const img = await loadImage(resolveApiResourceUrl(manifest.image));
+    const manifest = await fetchTextureAtlas(ids, signal);
+    const img = await loadBrowserImage(resolveApiResourceUrl(manifest.image), signal);
     const canvas = document.createElement('canvas');
     canvas.width = manifest.width;
     canvas.height = manifest.height;
@@ -200,14 +200,16 @@ export async function buildAtlas(ids: string[], animatedIds: ReadonlySet<string>
       animations: textureAnimationData(manifest.index),
     };
   } catch (e) {
+    signal?.throwIfAborted();
     console.warn('batched texture atlas failed; falling back to individual textures', e);
   }
 
   const PAD = 8;
   const results = await mapWithConcurrency(ids, MAX_PARALLEL_FALLBACK_TEXTURE_LOADS, async (id) => {
     try {
-      return await loadImage(textureUrl(id));
+      return await loadBrowserImage(textureUrl(id), signal);
     } catch {
+      signal?.throwIfAborted();
       return null;
     }
   });
@@ -316,7 +318,7 @@ export async function buildAtlas(ids: string[], animatedIds: ReadonlySet<string>
     hasAlpha[e.id] = alpha;
   });
   const ret: BuiltAtlas = {
-    cacheKey: `client-native-v1:${simpleHash(ids.slice().sort().join('\n'))}`,
+    cacheKey: fallbackAtlasKey(index, avgColors, hasAlpha),
     canvas,
     index,
     avgColors,
@@ -327,15 +329,16 @@ export async function buildAtlas(ids: string[], animatedIds: ReadonlySet<string>
 }
 
 /** 载入原版 colormap（256×256 RGBA）。 */
-export async function loadColormap(id: string): Promise<Uint8Array | null> {
+export async function loadColormap(id: string, signal?: AbortSignal): Promise<Uint8Array | null> {
   try {
-    const img = await loadImage(textureUrl(id));
+    const img = await loadBrowserImage(textureUrl(id), signal);
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 256;
     const ctx = canvas.getContext('2d')!;
     ctx.drawImage(img, 0, 0, 256, 256);
     return new Uint8Array(ctx.getImageData(0, 0, 256, 256).data.buffer);
   } catch {
+    signal?.throwIfAborted();
     return null;
   }
 }

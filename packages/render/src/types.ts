@@ -11,4 +11,5 @@ export interface MeshBuffers {
   indices: Uint16Array | Uint32Array;
   bounds?: { min: [number, number, number]; max: [number, number, number] };
 }
+
 export type SectionMeshes = Partial<Record<RenderLayer, MeshBuffers>>;

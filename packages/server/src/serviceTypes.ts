@@ -4,10 +4,11 @@ import type { GameDataService } from './gameData.js';
 import type { TopMapService } from './topMap.js';
 import type { WorldStore } from './worldStore.js';
 
-import type { WorldStorage } from '@violet-map/core/storage';
 import type { UserService } from './users.js';
+
 export interface AppServices {
-  storage: WorldStorage;
+  mounts: Awaited<ReturnType<typeof import('./storage.js').createStorageMounts>>;
+  content?: import('./content.js').ContentService;
   assets: AssetService;
   gameData: GameDataService;
   topMap: TopMapService;

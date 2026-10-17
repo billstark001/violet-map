@@ -3,6 +3,7 @@ export const TOP_MAP_TILE_BLOCKS = 512;
 export const TOP_MAP_MISSING_HEIGHT = -32768;
 
 export type TopMapApproach = 'top' | 'bottom';
+
 export type TopMapLightMode = 'stored-first' | 'rebake';
 
 export interface TopMapRegionManifestEntry {
@@ -71,6 +72,7 @@ export interface PreparedTopMapTile {
 }
 
 const PLATFORM_LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
+
 function decodeInt16Le(bytes: Uint8Array, count: number): Int16Array {
   if (bytes.byteLength !== count * 2) throw new Error(`bad top-map height payload size: ${bytes.byteLength}`);
   // Msgpack commonly hands us an aligned, standalone buffer. On all mainstream

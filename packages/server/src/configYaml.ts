@@ -3,6 +3,7 @@ import path from 'node:path';
 import { parse } from 'yaml';
 
 export type YamlValue = string | number | boolean | null | YamlValue[] | YamlObject;
+
 export interface YamlObject {
   [key: string]: YamlValue;
 }

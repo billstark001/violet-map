@@ -14,6 +14,7 @@ export interface WorkerInit {
   grassColormap: Uint8Array | null;
   foliageColormap: Uint8Array | null;
 }
+
 export type WorkerRequest =
   | WorkerInit
   | {

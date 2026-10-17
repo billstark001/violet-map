@@ -1,12 +1,12 @@
 import { cleanStoragePath, joinStoragePath } from './paths.js';
-import type { StoredFileInfo, WorldStorage } from '@violet-map/core/storage';
+import type { StoredFileInfo, ObjectStorage } from '@violet-map/core/storage';
 
 /** Presents a directory inside another storage as its own storage root. */
-export class PrefixedWorldStorage implements WorldStorage {
-  readonly kind: WorldStorage['kind'];
+export class ScopedStorage implements ObjectStorage {
+  readonly kind: ObjectStorage['kind'];
   private readonly prefix: string;
   constructor(
-    private readonly storage: WorldStorage,
+    private readonly storage: ObjectStorage,
     prefix = '',
   ) {
     this.kind = storage.kind;
@@ -26,6 +26,11 @@ export class PrefixedWorldStorage implements WorldStorage {
   }
   write(filePath: string, bytes: Uint8Array, contentType?: string) {
     return this.storage.write(this.path(filePath), bytes, contentType);
+  }
+  async replace(filePath: string, bytes: Uint8Array, contentType?: string): Promise<void> {
+    const backend = this.storage as Partial<import('@violet-map/core/storage').AtomicObjectStorage>;
+    if (!backend.replace) throw new Error('storage does not support atomic replacement');
+    await backend.replace(this.path(filePath), bytes, contentType);
   }
   delete(filePath: string) {
     return this.storage.delete(this.path(filePath));

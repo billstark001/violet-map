@@ -11,6 +11,10 @@ export interface SharedUniforms {
   fogNear: { value: number };
   fogFar: { value: number };
   animationTime: { value: number };
+  overlayMaskMap: { value: THREE.Texture | null };
+  overlayMaskEnabled: { value: number };
+  overlayMaskOrigin: { value: THREE.Vector2 };
+  overlayMaskSize: { value: THREE.Vector2 };
 }
 
 export interface TextureAnimationUniforms {
@@ -39,6 +43,7 @@ export function createTextureAnimationUniforms(data: TextureAnimationData): Text
 }
 
 const VERT = /* glsl */ `
+uniform vec2 overlayModelOffset;
 uniform vec3 positionScale;
 uniform vec3 positionOffset;
 attribute vec3 tintColor;
@@ -48,6 +53,7 @@ varying vec2 vUv;
 varying vec3 vColor;
 varying vec2 vLight;
 varying vec3 vWorldPos;
+varying vec2 vOverlayPosition;
 varying float vAnimationId;
 void main() {
   vUv = uv;
@@ -56,12 +62,14 @@ void main() {
   vec3 scaledPosition = position * positionScale + positionOffset;
   vec4 world = modelMatrix * vec4(scaledPosition, 1.0);
   vWorldPos = world.xyz;
+  vOverlayPosition = (mat3(modelMatrix) * scaledPosition).xz + overlayModelOffset;
   vAnimationId = animationId;
   vec4 mv = modelViewMatrix * vec4(scaledPosition, 1.0);
   gl_Position = projectionMatrix * mv;
 }`;
 
 const TILED_VERT = /* glsl */ `
+uniform vec2 overlayModelOffset;
 uniform vec3 positionScale;
 uniform vec3 positionOffset;
 attribute vec3 tintColor;
@@ -73,6 +81,7 @@ varying vec4 vAtlasRect;
 varying vec3 vColor;
 varying vec2 vLight;
 varying vec3 vWorldPos;
+varying vec2 vOverlayPosition;
 varying float vAnimationId;
 void main() {
   vUv = uv;
@@ -82,12 +91,14 @@ void main() {
   vec3 scaledPosition = position * positionScale + positionOffset;
   vec4 world = modelMatrix * vec4(scaledPosition, 1.0);
   vWorldPos = world.xyz;
+  vOverlayPosition = (mat3(modelMatrix) * scaledPosition).xz + overlayModelOffset;
   vAnimationId = animationId;
   vec4 mv = modelViewMatrix * vec4(scaledPosition, 1.0);
   gl_Position = projectionMatrix * mv;
 }`;
 
 const COLOR_VERT = /* glsl */ `
+uniform vec2 overlayModelOffset;
 uniform vec3 positionScale;
 uniform vec3 positionOffset;
 attribute vec3 tintColor;
@@ -95,12 +106,14 @@ attribute vec2 lightData;
 varying vec3 vColor;
 varying vec2 vLight;
 varying vec3 vWorldPos;
+varying vec2 vOverlayPosition;
 void main() {
   vColor = tintColor;
   vLight = lightData;
   vec3 scaledPosition = position * positionScale + positionOffset;
   vec4 world = modelMatrix * vec4(scaledPosition, 1.0);
   vWorldPos = world.xyz;
+  vOverlayPosition = (mat3(modelMatrix) * scaledPosition).xz + overlayModelOffset;
   vec4 mv = modelViewMatrix * vec4(scaledPosition, 1.0);
   gl_Position = projectionMatrix * mv;
 }`;
@@ -125,6 +138,7 @@ varying vec2 vUv;
 varying vec3 vColor;
 varying vec2 vLight;
 varying vec3 vWorldPos;
+varying vec2 vOverlayPosition;
 varying float vAnimationId;
 vec2 animationLookupUv(float index, vec2 size) {
   return (vec2(mod(index, size.x), floor(index / size.x)) + 0.5) / size;
@@ -152,12 +166,24 @@ vec4 animatedTexture(vec2 baseUv) {
   vec2 localUv = clamp((baseUv - baseMin) / max(baseMax - baseMin, vec2(0.00001)), 0.0, 1.0);
   return texture2D(map, mix(frameMin, frameMax, localUv));
 }
+
+uniform sampler2D overlayMaskMap;
+uniform float overlayMaskEnabled;
+uniform vec2 overlayMaskSize;
+vec3 applyOverlay(vec3 color){
+  if(overlayMaskEnabled<0.5)return color;
+  vec2 uv=vOverlayPosition/overlayMaskSize;
+  if(uv.x<0.0 || uv.x>1.0 || uv.y<0.0 || uv.y>1.0)return color;
+  vec4 mask=texture2D(overlayMaskMap,vec2(uv.x,1.0-uv.y));
+  return color*(1.0-mask.a)+mask.rgb;
+}
 void main() {
   vec4 tex = animatedTexture(vUv);
   if (tex.a <= alphaTest) discard;
   float l = max(vLight.y, vLight.x * skyDarken);
   float b = ambient + (1.0 - ambient) * l;
   vec3 c = tex.rgb * vColor * b;
+  c = applyOverlay(c);
   vec3 rel = vWorldPos - cameraPosition;
   float renderDistanceFog = smoothstep(fogNear, fogFar, length(rel.xz));
   float environmentalFog = 1.0 - exp(-max(envFogDensity, 0.0) * length(rel));
@@ -182,6 +208,18 @@ varying vec4 vAtlasRect;
 varying vec3 vColor;
 varying vec2 vLight;
 varying vec3 vWorldPos;
+varying vec2 vOverlayPosition;
+
+uniform sampler2D overlayMaskMap;
+uniform float overlayMaskEnabled;
+uniform vec2 overlayMaskSize;
+vec3 applyOverlay(vec3 color){
+  if(overlayMaskEnabled<0.5)return color;
+  vec2 uv=vOverlayPosition/overlayMaskSize;
+  if(uv.x<0.0 || uv.x>1.0 || uv.y<0.0 || uv.y>1.0)return color;
+  vec4 mask=texture2D(overlayMaskMap,vec2(uv.x,1.0-uv.y));
+  return color*(1.0-mask.a)+mask.rgb;
+}
 void main() {
   vec2 tileUv = clamp(fract(vUv), vec2(0.001), vec2(0.999));
   vec2 atlasUv = mix(vAtlasRect.xy, vAtlasRect.zw, tileUv);
@@ -190,6 +228,7 @@ void main() {
   float l = max(vLight.y, vLight.x * skyDarken);
   float b = ambient + (1.0 - ambient) * l;
   vec3 c = tex.rgb * vColor * b;
+  c = applyOverlay(c);
   vec3 rel = vWorldPos - cameraPosition;
   float renderDistanceFog = smoothstep(fogNear, fogFar, length(rel.xz));
   float environmentalFog = 1.0 - exp(-max(envFogDensity, 0.0) * length(rel));
@@ -209,10 +248,23 @@ uniform float fogFar;
 varying vec3 vColor;
 varying vec2 vLight;
 varying vec3 vWorldPos;
+varying vec2 vOverlayPosition;
+
+uniform sampler2D overlayMaskMap;
+uniform float overlayMaskEnabled;
+uniform vec2 overlayMaskSize;
+vec3 applyOverlay(vec3 color){
+  if(overlayMaskEnabled<0.5)return color;
+  vec2 uv=vOverlayPosition/overlayMaskSize;
+  if(uv.x<0.0 || uv.x>1.0 || uv.y<0.0 || uv.y>1.0)return color;
+  vec4 mask=texture2D(overlayMaskMap,vec2(uv.x,1.0-uv.y));
+  return color*(1.0-mask.a)+mask.rgb;
+}
 void main() {
   float l = max(vLight.y, vLight.x * skyDarken);
   float b = ambient + (1.0 - ambient) * l;
   vec3 c = vColor * b;
+  c = applyOverlay(c);
   vec3 rel = vWorldPos - cameraPosition;
   float renderDistanceFog = smoothstep(fogNear, fogFar, length(rel.xz));
   float environmentalFog = 1.0 - exp(-max(envFogDensity, 0.0) * length(rel));
@@ -231,6 +283,10 @@ export function createSharedUniforms(): SharedUniforms {
     fogNear: { value: 100 },
     fogFar: { value: 200 },
     animationTime: { value: 0 },
+    overlayMaskMap: { value: null },
+    overlayMaskEnabled: { value: 0 },
+    overlayMaskOrigin: { value: new THREE.Vector2() },
+    overlayMaskSize: { value: new THREE.Vector2(1, 1) },
   };
 }
 
@@ -285,6 +341,7 @@ function makeTerrainMaterial(
       animationInfoSize: { value: animation.infoSize },
       animationFrameSize: { value: animation.frameSize },
       ...shared,
+      overlayModelOffset: { value: new THREE.Vector2() },
     },
     transparent,
     depthWrite: !transparent,
@@ -293,6 +350,15 @@ function makeTerrainMaterial(
     polygonOffsetFactor: opts.polygonOffsetFactor ?? 0,
     polygonOffsetUnits: opts.polygonOffsetUnits ?? 0,
   });
+  material.onBeforeRender = (_renderer, _scene, _camera, _geometry, object) => {
+    if (shared.overlayMaskEnabled.value) {
+      material.uniforms.overlayModelOffset.value.set(
+        object.matrixWorld.elements[12] - shared.overlayMaskOrigin.value.x,
+        object.matrixWorld.elements[14] - shared.overlayMaskOrigin.value.y,
+      );
+      material.uniformsNeedUpdate = true;
+    }
+  };
   // Static meshes deliberately omit the attribute to keep their transfer size
   // small. Three supplies this generic attribute's disabled-array value.
   (material.defaultAttributeValues as unknown as Record<string, number[]>).animationId = [0];
@@ -322,6 +388,7 @@ export function createMaterials(
 }
 
 let emptyTextureAnimationUniforms: TextureAnimationUniforms | null = null;
+
 function emptyAnimations(): TextureAnimationUniforms {
   return (emptyTextureAnimationUniforms ??= createTextureAnimationUniforms({
     ids: {},

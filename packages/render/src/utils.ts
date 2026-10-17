@@ -1,6 +1,6 @@
 // #region TypedArrayWriter
 
-type TypedArray = Float32Array | Uint32Array | Uint16Array | Uint8Array;
+type TypedArray = Float32Array | Uint32Array | Uint16Array;
 
 class TypedArrayWriter<T extends TypedArray> {
   private data: T;
@@ -66,19 +66,16 @@ class TypedArrayWriter<T extends TypedArray> {
     this.length = i + 6;
   }
 
-  toArray(): T {
-    return this.data.slice(0, this.length) as T;
-  }
-
   view(): T {
     return this.data.subarray(0, this.length) as T;
   }
 }
 
 const float32Create = (capacity: number) => new Float32Array(capacity);
+
 const uint32Create = (capacity: number) => new Uint32Array(capacity);
+
 const uint16Create = (capacity: number) => new Uint16Array(capacity);
-const uint8Create = (capacity: number) => new Uint8Array(capacity);
 
 export class Float32Writer extends TypedArrayWriter<Float32Array> {
   constructor(capacity: number) {
@@ -95,12 +92,6 @@ export class Uint32Writer extends TypedArrayWriter<Uint32Array> {
 export class Uint16Writer extends TypedArrayWriter<Uint16Array> {
   constructor(capacity: number) {
     super(uint16Create, capacity);
-  }
-}
-
-export class Uint8Writer extends TypedArrayWriter<Uint8Array> {
-  constructor(capacity: number) {
-    super(uint8Create, capacity);
   }
 }
 

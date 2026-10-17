@@ -1,11 +1,19 @@
+import { meshByteLength } from '@violet-map/render';
 import * as THREE from 'three';
 import type { DimensionDef } from '@violet-map/core/domain';
 import type { MeshBuffers } from '@violet-map/render';
+import { SECTION_VISIBILITY_ALL } from '@violet-map/render';
 import type { RenderLayer } from '@violet-map/core/assets';
 import { fetchChunkHashes, fetchChunks, fetchChunkSourceCoverage } from '../api';
 import { type ChunkHashPayload, type ChunkPayload, type ChunkCoverage } from '@violet-map/core/contracts';
 import { debugLog, isDebugLoggingEnabled } from '../logger';
-import { chunkKey, type SectionMeshMsg, WorkerInit, WorkerRequest, WorkerResponse } from '../worker/protocol';
+import {
+  chunkKey,
+  type SectionMeshMsg,
+  type WorkerInit,
+  type WorkerRequest,
+  type WorkerResponse,
+} from '../worker/protocol';
 import { getCachedFull, getCachedLod, putCachedFull, putCachedLod, type MeshCacheKeyParts } from '../meshCache';
 import type { TerrainMaterials } from './materials';
 import {
@@ -65,15 +73,6 @@ const DIAGNOSTIC_MIN_DELAY_MS: Record<ChunkDiagnosticOp, number> = {
   lodMesh: 1800,
 };
 const SECTION_VISIBILITY_DIRS = ['down', 'up', 'north', 'south', 'west', 'east'] as const;
-const SECTION_VISIBILITY_ALL = (() => {
-  let mask = 0;
-  for (let from = 0; from < 6; from++) {
-    for (let to = 0; to < 6; to++) {
-      if (from !== to) mask += 2 ** (from * 6 + to);
-    }
-  }
-  return mask;
-})();
 const SECTION_NEIGHBOR: [number, number, number][] = [
   [0, -1, 0],
   [0, 1, 0],
@@ -83,6 +82,7 @@ const SECTION_NEIGHBOR: [number, number, number][] = [
   [1, 0, 0],
 ];
 const SECTION_OPPOSITE = [1, 0, 3, 2, 5, 4] as const;
+
 type MeshCacheBaseParts = Omit<MeshCacheKeyParts, 'mode' | 'step'>;
 
 interface CachePartsResult {
@@ -338,6 +338,7 @@ export class ChunkManager {
   private lastUpdate = 0;
   private lodReleaseStep: LodStep = DEFAULT_LOD_RELEASE_STEP;
   private disposed = false;
+  private readonly requests = new AbortController();
   private coverageSeq = 0;
   private chunkCoverage: ChunkSourceCoverage | null = null;
   private topDownView = false;
@@ -350,6 +351,7 @@ export class ChunkManager {
   private lastVisibilityStartKey = '';
   private lastVisibilityAboveSurface = false;
   private visibleSectionKeys = new Set<string>();
+  private visibilityEntryMasks = new Map<string, number>();
   private visibilityQueueSections: FullSectionRender[] = [];
   private visibilityQueueEntries: number[] = [];
   private sectionVisibilityRevision = 0;
@@ -455,7 +457,7 @@ export class ChunkManager {
     const seq = ++this.coverageSeq;
     this.chunkCoverage = null;
     try {
-      const payload = await fetchChunkSourceCoverage(this.opts.world, this.opts.dimension);
+      const payload = await fetchChunkSourceCoverage(this.opts.world, this.opts.dimension, this.requests.signal);
       if (this.disposed || seq !== this.coverageSeq) return;
       this.chunkCoverage = normalizeChunkSourceCoverage(payload);
       let markedAbsent = 0;
@@ -1099,6 +1101,10 @@ export class ChunkManager {
       return true;
     }
     void getCachedFull(cache.parts)
+      // Persistent storage is optional (private browsing, quota, blocked IDB).
+      // A read failure must take the normal worker path instead of retrying
+      // the same broken cache forever with no terrain on screen.
+      .catch(() => null)
       .then((hit) => {
         if (this.disposed) {
           this.finishActiveMesh();
@@ -1166,6 +1172,7 @@ export class ChunkManager {
       return true;
     }
     void getCachedLod({ ...cache.parts, step })
+      .catch(() => undefined)
       .then((hit) => {
         if (this.disposed) {
           this.finishActiveMesh();
@@ -1232,6 +1239,7 @@ export class ChunkManager {
   }
 
   private flushIoQueue(kind: IoQueueKind) {
+    if (this.disposed) return;
     while (true) {
       const keys = this.nextIoBatch(kind);
       if (!keys.length) break;
@@ -1274,7 +1282,7 @@ export class ChunkManager {
   }
 
   private scheduleIoFlush(kind: IoQueueKind, delayMs: number) {
-    if (this.ioTimer(kind)) return;
+    if (this.disposed || this.ioTimer(kind)) return;
     this.setIoTimer(
       kind,
       setTimeout(() => {
@@ -1540,6 +1548,7 @@ export class ChunkManager {
   }
 
   private async fetchHashBatch(keys: string[]) {
+    if (this.disposed) return;
     const entries = keys
       .map((key) => this.chunks.get(key))
       .filter((e): e is ChunkEntry => !!e && e.state === 'checking');
@@ -1553,7 +1562,9 @@ export class ChunkManager {
         this.opts.world,
         this.opts.dimension,
         entries.map((e) => ({ cx: e.cx, cz: e.cz })),
+        this.requests.signal,
       );
+      if (this.disposed) return;
       let missing = 0;
       for (const payload of payloads) {
         seen.add(this.key(payload.cx, payload.cz));
@@ -1565,6 +1576,7 @@ export class ChunkManager {
       }
       debugLog('chunk-manager', 'hash-batch', { requested: entries.length, returned: payloads.length, missing });
     } catch (error) {
+      if (this.disposed) return;
       debugLog('chunk-manager', 'hash-batch-error', {
         requested: entries.length,
         error: error instanceof Error ? error.message : String(error),
@@ -1615,6 +1627,7 @@ export class ChunkManager {
   }
 
   private async fetchBatch(keys: string[]) {
+    if (this.disposed) return;
     const entries = keys
       .map((key) => this.chunks.get(key))
       .filter((e): e is ChunkEntry => !!e && (e.state === 'hashed' || e.state === 'fetching'));
@@ -1629,7 +1642,9 @@ export class ChunkManager {
         this.opts.world,
         this.opts.dimension,
         entries.map((e) => ({ cx: e.cx, cz: e.cz })),
+        this.requests.signal,
       );
+      if (this.disposed) return;
       let missing = 0;
       let bytes = 0;
       for (const payload of payloads) {
@@ -1648,6 +1663,7 @@ export class ChunkManager {
         bytes,
       });
     } catch (error) {
+      if (this.disposed) return;
       debugLog('chunk-manager', 'chunk-batch-error', {
         requested: entries.length,
         error: error instanceof Error ? error.message : String(error),
@@ -1861,7 +1877,10 @@ export class ChunkManager {
     const visible = this.visibleSectionKeys;
     const queueSections = this.visibilityQueueSections;
     const queueEntries = this.visibilityQueueEntries;
+    const entryMasks = this.visibilityEntryMasks;
     visible.clear();
+    entryMasks.clear();
+    entryMasks.set(start.key, (1 << SECTION_VISIBILITY_DIRS.length) - 1);
     queueSections.length = 1;
     queueEntries.length = 1;
     queueSections[0] = start;
@@ -1872,7 +1891,7 @@ export class ChunkManager {
     while (head < queueSections.length) {
       const section = queueSections[head];
       const entry = queueEntries[head++];
-      const mask = section.visibility || SECTION_VISIBILITY_ALL;
+      const mask = section.visibility;
       for (let dir = 0; dir < SECTION_VISIBILITY_DIRS.length; dir++) {
         if (entry >= 0 && !this.visibilityAllows(mask, entry, dir)) continue;
         const delta = SECTION_NEIGHBOR[dir];
@@ -1880,14 +1899,29 @@ export class ChunkManager {
           this.sectionKey(section.cx + delta[0], section.sy + delta[1], section.cz + delta[2]),
         );
         if (!next) continue;
-        if (visible.has(next.key)) continue;
         visible.add(next.key);
+        // Visibility belongs to an entrance, not just to the section. Separate
+        // tunnels can be reached from different sides at different BFS depths.
+        // A solid neighbor is visible at its boundary but cannot transmit sight.
+        if (next.visibility === 0) continue;
+        const entrance = SECTION_OPPOSITE[dir];
+        const entered = entryMasks.get(next.key) ?? 0;
+        if (entered & (1 << entrance)) continue;
+        entryMasks.set(
+          next.key,
+          next.visibility === SECTION_VISIBILITY_ALL
+            ? (1 << SECTION_VISIBILITY_DIRS.length) - 1
+            : entered | (1 << entrance),
+        );
         queueSections.push(next);
-        queueEntries.push(SECTION_OPPOSITE[dir]);
+        queueEntries.push(entrance);
       }
     }
 
     for (const section of this.fullSectionIndex.values()) this.setSectionVisible(section, visible.has(section.key));
+    // Do not retain removed section objects/GPU geometry through the scratch queue.
+    queueSections.length = 0;
+    queueEntries.length = 0;
   }
 
   private specialRenderRadiusChunks(): number {
@@ -2067,14 +2101,7 @@ export class ChunkManager {
     }
     return {
       geometry: g,
-      bytes:
-        b.positions.byteLength +
-        (b.uvs?.byteLength ?? 0) +
-        (b.atlasRects?.byteLength ?? 0) +
-        b.colors.byteLength +
-        b.lights.byteLength +
-        (b.animations?.byteLength ?? 0) +
-        b.indices.byteLength,
+      bytes: meshByteLength(b),
     };
   }
 
@@ -2177,7 +2204,9 @@ export class ChunkManager {
   // #region Cleanup
 
   dispose() {
+    if (this.disposed) return;
     this.disposed = true;
+    this.requests.abort();
     this.coverageSeq++;
     for (const e of this.chunks.values()) this.removeMesh(e);
     this.chunks.clear();
@@ -2197,6 +2226,10 @@ export class ChunkManager {
     this.versionWorker.clear();
     this.meshDiagnosticByVersion.clear();
     this.activeDiagnostics.clear();
+    this.visibleSectionKeys.clear();
+    this.visibilityEntryMasks.clear();
+    this.visibilityQueueSections.length = 0;
+    this.visibilityQueueEntries.length = 0;
     for (const worker of this.workers) worker.terminate();
     this.workers = [];
     this.workerLoads = [];

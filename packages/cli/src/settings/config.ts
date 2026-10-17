@@ -4,6 +4,7 @@ import { readJson, updateJson } from './files.js';
 import type { CliPaths } from './paths.js';
 
 export type CredentialBackend = 'keychain' | 'file';
+
 export interface Profile {
   server?: { url: string };
   database?: { dir?: string; urlRef?: string };
@@ -17,26 +18,31 @@ export interface Profile {
     forcePathStyle?: boolean;
   };
 }
+
 export interface CliConfig {
   version: 1;
   defaultProfile?: string;
   credentialStore?: CredentialBackend;
   profiles: Record<string, Profile>;
 }
+
 export const emptyConfig = (): CliConfig => ({ version: 1, profiles: {} });
 
 function object(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
+
 function keys(value: Record<string, unknown>, allowed: string[], label: string) {
   if (Object.keys(value).some((key) => !allowed.includes(key)))
     throw new Error(`Unknown field in ${label}; credentials must be stored using references`);
 }
+
 export function validName(name: string): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(name) || ['__proto__', 'constructor', 'prototype'].includes(name))
     throw new Error('Names must be 1-64 letters, numbers, dot, dash, or underscore');
   return name;
 }
+
 export function serverBaseUrl(input: string): string {
   let url;
   try {
@@ -48,11 +54,13 @@ export function serverBaseUrl(input: string): string {
     throw new Error('Server URL must be an HTTP(S) origin without credentials, query, or fragment');
   return normalizeApiBaseUrl(input, url.origin).replace(/\/$/, '');
 }
+
 export function validateReference(ref: string): string {
   if (!/^(env:[A-Za-z_][A-Za-z0-9_]*|secret:[A-Za-z0-9][A-Za-z0-9_.-]{0,63}|file:.+)$/.test(ref))
     throw new Error('Credential reference must be env:NAME, secret:NAME, or file:PATH');
   return ref;
 }
+
 export function validateConfig(value: unknown): CliConfig {
   if (!object(value) || value.version !== 1 || !object(value.profiles))
     throw new Error('Expected CLI configuration version 1 and a profiles object');
@@ -114,6 +122,7 @@ export async function loadConfig(paths: CliPaths, explicit = false): Promise<Cli
     }),
   );
 }
+
 export async function editConfig(paths: CliPaths, edit: (value: CliConfig) => void) {
   return updateJson(paths.configFile, emptyConfig, (value) => {
     validateConfig(value);
@@ -121,9 +130,11 @@ export async function editConfig(paths: CliPaths, edit: (value: CliConfig) => vo
     validateConfig(value);
   });
 }
+
 export function selectProfile(config: CliConfig, name?: string): { name?: string; profile: Profile } {
   const selected = name ?? config.defaultProfile;
   if (selected && !Object.hasOwn(config.profiles, selected)) throw new Error(`Unknown profile: ${selected}`);
   return { name: selected, profile: selected ? config.profiles[selected] : {} };
 }
+
 export const profilePath = (paths: CliPaths, value: string) => path.resolve(path.dirname(paths.configFile), value);

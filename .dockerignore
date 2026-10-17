@@ -6,3 +6,7 @@ TEMP*
 packages/server/data
 assets
 *.log
+
+LOCAL*
+**/.env
+**/.env.*

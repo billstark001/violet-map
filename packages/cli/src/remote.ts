@@ -9,11 +9,13 @@ export interface ServerConnection {
   token: string;
   session?: string;
 }
+
 export function remoteOrigin(context: CliContext): string {
   const input = context.options.serverUrl ?? context.env.VIOLET_SERVER_URL ?? context.profile.server?.url;
   if (!input) throw new Error('Provide --server-url, VIOLET_SERVER_URL, or a server profile');
   return serverBaseUrl(input);
 }
+
 export async function resolveServerConnection(context: CliContext): Promise<ServerConnection> {
   const url = remoteOrigin(context);
   if (context.options.serverTokenRef)
@@ -34,6 +36,7 @@ export async function resolveServerConnection(context: CliContext): Promise<Serv
     throw new Error('Saved login has expired; run violet-map auth login');
   return { url, token: await context.secrets.get(session.secret), session: key };
 }
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -44,11 +47,12 @@ export class ApiError extends Error {
     this.name = 'ApiError';
   }
 }
-export async function apiRequest<T>(
+
+export async function apiResponse(
   connection: { url: string; token?: string },
   pathname: string,
   init: RequestInit = {},
-): Promise<T> {
+): Promise<Response> {
   if (!pathname.startsWith('api/')) throw new Error('Invalid API path');
   const headers = new Headers(init.headers);
   if (connection.token) headers.set('authorization', `Bearer ${connection.token}`);
@@ -58,8 +62,8 @@ export async function apiRequest<T>(
     redirect: 'error',
     signal: init.signal ?? AbortSignal.timeout(30_000),
   });
-  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
     const hint =
       response.status === 401
         ? 'Sign in again or replace the credential.'
@@ -72,8 +76,18 @@ export async function apiRequest<T>(
       `HTTP ${response.status}: ${typeof data.error === 'string' ? data.error : 'request failed'} ${hint}`.trim(),
     );
   }
-  return data as T;
+  return response;
 }
+
+export async function apiRequest<T>(
+  connection: { url: string; token?: string },
+  pathname: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const response = await apiResponse(connection, pathname, init);
+  return (await response.json()) as T;
+}
+
 export const jsonRequest = (method: string, body?: unknown): RequestInit => ({
   method,
   headers: { 'content-type': 'application/json' },

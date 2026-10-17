@@ -1,9 +1,11 @@
+import { packNormalizedUint8, packIndices, packNormalizedUint16, boundsOfPositions } from '../meshPacking.js';
 import { TOP_MAP_MISSING_HEIGHT, type PreparedTopMapTile } from '@violet-map/core/formats/top-map';
-import { MeshBuffers } from '@violet-map/render';
+import { type MeshBuffers } from '@violet-map/render';
 import { Float32Writer, Uint32Writer } from '../utils.js';
 
 export const TOP_MAP_POSITION_SCALE = [512, 4096, 512] as const;
 export const TOP_MAP_POSITION_OFFSET = [0, -2048, 0] as const;
+
 export interface BuildTopMapMeshOptions {
   step: number;
   onlineChunks?: ReadonlySet<string>;
@@ -44,18 +46,6 @@ function clamp01(value: number): number {
   return clamp(value, 0, 1);
 }
 
-function packNormalizedUint8(values: Float32Array): Uint8Array {
-  const out = new Uint8Array(values.length);
-  for (let i = 0; i < values.length; i++) out[i] = Math.round(clamp01(values[i]) * 255);
-  return out;
-}
-
-function packNormalizedUint16(values: Float32Array): Uint16Array {
-  const out = new Uint16Array(values.length);
-  for (let i = 0; i < values.length; i++) out[i] = Math.round(clamp01(values[i]) * 65535);
-  return out;
-}
-
 function packTopMapPositions(values: Float32Array): Uint16Array {
   const out = new Uint16Array(values.length);
   for (let i = 0; i < values.length; i += 3) {
@@ -64,27 +54,6 @@ function packTopMapPositions(values: Float32Array): Uint16Array {
     out[i + 2] = Math.round(clamp01((values[i + 2] - TOP_MAP_POSITION_OFFSET[2]) / TOP_MAP_POSITION_SCALE[2]) * 65535);
   }
   return out;
-}
-
-function packIndices(values: Uint32Array, vertexCount: number): Uint16Array | Uint32Array {
-  if (vertexCount > 65535) return values;
-  const out = new Uint16Array(values.length);
-  for (let i = 0; i < values.length; i++) out[i] = values[i];
-  return out;
-}
-
-function boundsOfPositions(values: Float32Array): { min: [number, number, number]; max: [number, number, number] } {
-  const min: [number, number, number] = [Infinity, Infinity, Infinity];
-  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
-  for (let i = 0; i < values.length; i += 3) {
-    min[0] = Math.min(min[0], values[i]);
-    min[1] = Math.min(min[1], values[i + 1]);
-    min[2] = Math.min(min[2], values[i + 2]);
-    max[0] = Math.max(max[0], values[i]);
-    max[1] = Math.max(max[1], values[i + 1]);
-    max[2] = Math.max(max[2], values[i + 2]);
-  }
-  return { min, max };
 }
 
 function createBuilder(): TopMapMeshBuilder {

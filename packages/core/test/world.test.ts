@@ -13,6 +13,37 @@ test('packed values decode correctly across long boundaries', () => {
   assert.equal(values.get(12), 7);
 });
 
+test('packed access and bulk decode match bigint extraction for every bit width and offset buffers', () => {
+  let state = 0x12345678;
+  const next = () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state;
+  };
+  for (let bits = 1; bits <= 64; bits++) {
+    const backing = new BigUint64Array(6);
+    for (let i = 1; i < 5; i++) backing[i] = (BigInt(next()) << 32n) | BigInt(next());
+    const data = backing.subarray(1, 5);
+    const values = new BitArray(bits, data);
+    const perLong = Math.floor(64 / bits),
+      mask = (1n << BigInt(bits)) - 1n;
+    const output = new Uint16Array(perLong * data.length + 3);
+    const expected = new Uint16Array(output.length);
+    for (let index = 0; index < output.length; index++) {
+      const long = data[Math.floor(index / perLong)] ?? 0n;
+      const value = Number((long >> BigInt((index % perLong) * bits)) & mask);
+      assert.equal(values.get(index), value, `bits=${bits}, index=${index}`);
+      expected[index] = value;
+    }
+    values.copyTo(output);
+    assert.deepEqual(output, expected, `bulk bits=${bits}`);
+    const bytes = new Uint8Array(output.length);
+    values.copyTo(bytes);
+    assert.deepEqual(bytes, Uint8Array.from(expected), `byte truncation bits=${bits}`);
+    assert.throws(() => values.get(0.5), RangeError);
+    assert.equal(values.get(-1), 0);
+  }
+});
+
 test('truncated packed arrays leave missing values at zero', () => {
   const values = new BitArray(4, new BigUint64Array([1n]));
   const section = new ChunkSection(
@@ -30,7 +61,61 @@ test('truncated packed arrays leave missing values at zero', () => {
   assert.throws(() => new BitArray(0, new BigUint64Array()), /bits/);
 });
 
-test('malformed section coordinates fail before an invisible chunk is accepted', () => {
-  assert.throws(() => parseChunkColumn({ sections: [{ Y: undefined }] }), /section Y/);
+test('malformed chunk ranges and palettes fail before height-dependent work', () => {
+  for (const Y of [undefined, NaN, Infinity, -129, 128, 1e12, 1.5])
+    assert.throws(() => parseChunkColumn({ sections: [{ Y }] }), /section Y/);
   assert.throws(() => parseChunkColumn({ sections: [null] }), /Invalid chunk section/);
+  assert.throws(() => parseChunkColumn(null), /Invalid chunk root/);
+  assert.throws(() => parseChunkColumn({ sections: [{ Y: 0 }, { Y: 0 }] }), /Duplicate/);
+  assert.throws(() => parseChunkColumn({ sections: Array(257).fill({ Y: 0 }) }), /section count/);
+  for (const xPos of [1.5, 0x80000000, -0x80000001, '1', NaN])
+    assert.throws(() => parseChunkColumn({ xPos, sections: [] }), /xPos\/zPos/);
+  const extremes = parseChunkColumn({ xPos: -0x80000000, zPos: 0x7fffffff, sections: [{ Y: -128 }, { Y: 127 }] });
+  assert.equal(extremes.minY, -2048);
+  assert.equal(extremes.maxY, 2048);
+  for (const palette of [[], {}, null, Array(4097).fill({ Name: 'stone' })])
+    assert.throws(() => parseChunkColumn({ sections: [{ Y: 0, block_states: { palette } }] }), /block palette/);
+  for (const entry of [null, {}, { Name: 1 }, { Name: '' }])
+    assert.throws(
+      () => parseChunkColumn({ sections: [{ Y: 0, block_states: { palette: [entry] } }] }),
+      /block palette/,
+    );
+  for (const palette of [[], Array(65).fill('plains'), [null], ['']])
+    assert.throws(() => parseChunkColumn({ sections: [{ Y: 0, biomes: { palette } }] }), /biome palette/);
+  // Light-only and absent packed arrays remain supported.
+  const sparse = parseChunkColumn({ sections: [{ Y: -4 }, { Y: 0, block_states: { palette: [{ Name: 'stone' }] } }] });
+  assert.equal(sparse.getBlock(0, 0, 0).name, 'minecraft:stone');
+  assert.equal(sparse.getBlock(0, -64, 0).name, 'minecraft:air');
+});
+
+test('canonical height maps restore negative heights, wrap local coordinates and tolerate light-only boundary sections', () => {
+  const bits = 5,
+    perLong = Math.floor(64 / bits);
+  const packed = new BigUint64Array(Math.ceil(256 / perLong));
+  for (let index = 0; index < 256; index++)
+    packed[Math.floor(index / perLong)] |= 16n << BigInt((index % perLong) * bits);
+  const root = {
+    yPos: -4,
+    sections: [
+      { Y: -5, SkyLight: new Uint8Array(2048) },
+      { Y: -4, block_states: { palette: [{ Name: 'minecraft:stone' }] } },
+    ],
+    Heightmaps: { WORLD_SURFACE: packed },
+  };
+  const column = parseChunkColumn(root);
+  assert.ok(column.heightMap);
+  assert.equal(column.heightMap.bits, 5);
+  assert.equal(column.heightMapOffset, -64);
+  for (const [x, z] of [
+    [0, 0],
+    [15, 15],
+    [16, 16],
+    [-16, -16],
+  ])
+    assert.equal(column.heightAt(x, z), -48);
+  for (const invalid of [packed.slice(0, 1), new BigUint64Array(packed.length), { bad: true }]) {
+    const fallback = parseChunkColumn({ ...root, Heightmaps: { WORLD_SURFACE: invalid } });
+    assert.equal(fallback.heightMap, null);
+    assert.equal(fallback.heightAt(0, 0), -48);
+  }
 });

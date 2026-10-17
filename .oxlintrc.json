@@ -1,4 +1,110 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript"]
+  "plugins": ["typescript"],
+  "jsPlugins": ["@stylistic/eslint-plugin"],
+  "rules": {
+    "@stylistic/padding-line-between-statements": [
+      "error",
+      {
+        "blankLine": "always",
+        "prev": {
+          "selector": "Program > *"
+        },
+        "next": {
+          "selector": "Program > *"
+        }
+      },
+      {
+        "blankLine": "any",
+        "prev": "import",
+        "next": "import"
+      },
+      {
+        "blankLine": "any",
+        "prev": {
+          "selector": "Program > :matches(VariableDeclaration, ExportNamedDeclaration[declaration.type=\"VariableDeclaration\"])"
+        },
+        "next": {
+          "selector": "Program > :matches(VariableDeclaration, ExportNamedDeclaration[declaration.type=\"VariableDeclaration\"])"
+        }
+      },
+      {
+        "blankLine": "any",
+        "prev": {
+          "selector": "Program > :matches(ExportAllDeclaration, ExportNamedDeclaration:not([declaration]))"
+        },
+        "next": {
+          "selector": "Program > :matches(ExportAllDeclaration, ExportNamedDeclaration:not([declaration]))"
+        }
+      },
+      {
+        "blankLine": "always",
+        "prev": {
+          "selector": "Program > :matches(VariableDeclaration, ExportNamedDeclaration):has(VariableDeclarator > :matches(ArrowFunctionExpression, FunctionExpression))"
+        },
+        "next": {
+          "selector": "Program > *"
+        }
+      },
+      {
+        "blankLine": "always",
+        "prev": {
+          "selector": "Program > *"
+        },
+        "next": {
+          "selector": "Program > :matches(VariableDeclaration, ExportNamedDeclaration):has(VariableDeclarator > :matches(ArrowFunctionExpression, FunctionExpression))"
+        }
+      }
+    ],
+    "typescript/consistent-type-imports": [
+      "error",
+      {
+        "prefer": "type-imports",
+        "fixStyle": "inline-type-imports",
+        "disallowTypeAnnotations": false
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["scripts/bench/**/*.ts"],
+      "rules": {
+        "@stylistic/padding-line-between-statements": [
+          "error",
+          {
+            "blankLine": "always",
+            "prev": {
+              "selector": "Program > *"
+            },
+            "next": {
+              "selector": "Program > *"
+            }
+          },
+          {
+            "blankLine": "any",
+            "prev": "import",
+            "next": "import"
+          },
+          {
+            "blankLine": "any",
+            "prev": {
+              "selector": "Program > :matches(VariableDeclaration, ExportNamedDeclaration[declaration.type=\"VariableDeclaration\"])"
+            },
+            "next": {
+              "selector": "Program > :matches(VariableDeclaration, ExportNamedDeclaration[declaration.type=\"VariableDeclaration\"])"
+            }
+          },
+          {
+            "blankLine": "any",
+            "prev": {
+              "selector": "Program > :matches(ExportAllDeclaration, ExportNamedDeclaration:not([declaration]))"
+            },
+            "next": {
+              "selector": "Program > :matches(ExportAllDeclaration, ExportNamedDeclaration:not([declaration]))"
+            }
+          }
+        ]
+      }
+    }
+  ]
 }

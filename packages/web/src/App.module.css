@@ -1,0 +1,28 @@
+.app {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.reticle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.8) 0 1.5px, transparent 2px);
+}
+.error {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 100;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 14px 18px;
+  border-radius: 8px;
+  color: #fecaca;
+  background: rgba(69, 10, 10, 0.96);
+  border: 1px solid #ef4444;
+  text-align: center;
+}

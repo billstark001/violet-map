@@ -1,6 +1,6 @@
 {
   "name": "@violet-map/render",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "files": [
     "dist"
   ],
@@ -50,6 +50,11 @@
       "development": "./src/scheduler/cameraGridTracker.ts",
       "types": "./dist/scheduler/cameraGridTracker.d.ts",
       "default": "./dist/scheduler/cameraGridTracker.js"
+    },
+    "./overlays": {
+      "development": "./src/overlays.ts",
+      "types": "./dist/overlays.d.ts",
+      "default": "./dist/overlays.js"
     }
   },
   "scripts": {
@@ -57,7 +62,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@violet-map/core": "workspace:*"
+    "@violet-map/core": "workspace:*",
+    "earcut": "^3.2.4"
   },
   "devDependencies": {
     "typescript": "^6.0.3"

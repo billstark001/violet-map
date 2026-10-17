@@ -24,7 +24,47 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-18
+
 ### Added
+
+- Opt-in public media URLs alongside API proxies via `MEDIA_PUBLIC_BASE_URL` and `delivery=public`, with pinned size/digest verification and automatic proxy fallback. Existing manifest responses remain unchanged; runtime `mediaDelivery: proxy` forces proxy delivery.
+- Shared weighted LRU caching, targeted performance benchmarks, and broader storage, rendering, browser and lifecycle regression coverage.
+
+### Changed
+
+- Web uses native Preact/signals without React compat, split panels and CSS Modules. The canvas and viewer controller live outside the UI tree; loading, settings and diagnostics use signals. Admin retains React.
+- Admin uses shared session/async controls, verified account menus, logout/revocation and retryable confirmation dialogs; stale requests and duplicate submissions no longer overwrite current state.
+- Server caches have bounded retention, oversized-buffer bypass and reusable chunk/entity results. Region-only batches avoid redundant override probes; native asynchronous zlib, packed-index decoding and bulk lighting writeback reduce chunk-processing overhead.
+- Full/LOD meshes reuse a bounded CPU cache before IndexedDB. Entity models share baked variants, and mesh packing uses native typed-array conversion. Cache budgets count complete retained allocations and invalidate obsolete results.
+- Storage reads, hashing, uploads and binary HTTP responses avoid redundant whole-buffer copies while preserving view boundaries and shared-buffer safety. S3 deletion uses bounded batches and reports per-object failures.
+- Overlay triangulation uses Earcut with local coordinates and area checks; contour validation skips disjoint edge pairs. Server/viewer share static GLB policy parsing, and optional media decoders load on first import.
+- Shared resource/path validation and block metadata replace duplicated implementations. OXC enforces top-level spacing and type-only imports; benchmark scripts participate in lint/type checks with scoped spacing allowances.
+
+### Fixed
+
+- Flying consumes browser selection shortcuts, including Windows Ctrl+A, while editable controls retain normal selection. Left/right modifiers, pointer-lock failures, lost capture and disposal now have consistent behavior.
+- Glass/ice cull touching internal faces while leaves and different glass colors retain theirs. Model coverage, disconnected-tunnel visibility, far-coordinate lookups, texture-variable inheritance and biome-color dictionaries render correctly; affected mesh caches rebuild.
+- Stored `Heightmaps.WORLD_SURFACE` data and entity sidecars are read correctly, with packing/offset validation and safe height-scan fallback. Malformed section coordinates, palettes and region filenames fail before unbounded work.
+- IndexedDB failures or blocked upgrades fall back to meshing and recover when available. Resource identities include biome/dimension rules and fallback-atlas layout/colors; world switches and disposal cancel pending loads and release resources.
+- Partial camera URLs preserve unspecified coordinates; restricted storage/history, background-tab resumes and stalled manifest requests no longer interrupt viewer operation.
+- Media HTTP handling supports HEAD, conditional requests, Range/If-Range and CORS without unnecessary blob reads. Errors use consistent response headers; bounded downloads and remote/S3 range reads handle overflow and ignored Range responses correctly.
+- Content imports and metadata writes reserve bounded capacity before buffering bodies. Published metadata must match its storage identity/revision; reference reads are reused within each mutation and checked afresh on later operations.
+- World/path validation and complete batch checks prevent malformed sync/deletion requests from causing partial changes. Storage roots and cache keys normalize consistently; failed mutations invalidate metadata, and local game-data publication is atomic with validated biome edits.
+- Public CLI `overlay manifest` works without login and omits credentials. Relocated maintenance/CLI artifacts retain isolated dependencies; acceptance startup handles colored/fragmented output, bounded diagnostics and timeouts.
+
+### Removed
+
+- Deprecated `WorldReader`/`WorldStorage`, world-named local/S3/cache/scope aliases, `createWorldStorage` and `AppServices.storage`. Use object-storage names and `services.mounts.worlds`; the distinct remote `ServerWorldStorage` protocol and existing HTTP world/sync behavior remain supported.
+
+## [0.2.0] - 2026-10-17
+
+### Added
+
+- External map registrations, immutable overlay revisions and media versions, conditional content APIs and CLI management, named local/S3 storage mounts and independent diagnostics credentials.
+- Adaptive Bezier curves, terrain-fragment region masks, finite double-sided walls, PNG/JPEG/WebP/SVG placement and static GLB instances with label/scene lighting, lazy loading, shared pinned resources and bounded disposal.
+- Production WebGL acceptance with fixed camera paths, pressure/cancellation/heap checks, isolated real-S3 restore and actual pre-overlay binary/config rollback tests.
+- Private quiesced content/blob snapshots and verified empty-target recovery; Railway incremental/full deployment now snapshots external content before world updates.
 
 - Independent render/storage packages, core contracts/formats/default data, AST dependency checks and isolated CLI capability loading.
 - Server configuration/service/application factories, public/sync/full capability presets and static Bearer authentication without a user database.
@@ -46,6 +86,10 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 - Remote APIs distinguish unauthenticated requests (401) from authenticated users lacking permission (403). User roles are checked from current account state; logout and per-user revocation invalidate stored server credentials.
 - S3 supports refreshable AWS credential providers and temporary session tokens, while profiles contain only non-secret settings and credential references. Programmatic S3 storage options now take a `credentials` identity/provider instead of separate key fields.
 - Core and the optional server library provide built JavaScript exports; workspace development uses an explicit `development` condition. The CLI requires Node.js 24 or newer.
+
+### Deprecated
+
+- Published world-storage interfaces/classes/factory and `AppServices.storage` remain available with deprecation annotations; object-storage names and logical mounts are authoritative. HTTP world paths, CLI synchronization and identity rules remain supported. New internal compatibility aliases are not introduced.
 
 ## [0.1.0] - 2026-10-14
 

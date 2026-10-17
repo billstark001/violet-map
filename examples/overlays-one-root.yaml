@@ -1,0 +1,10 @@
+deployment: { profile: sync }
+auth: { mode: static, staticRole: admin }
+features: { contentReads: true, contentWrites: true }
+storage:
+  backends:
+    main: { driver: local, root: ../LOCAL_storage }
+  mounts:
+    worlds: { backend: main, prefix: worlds }
+    content: { backend: main, prefix: content }
+    blobs: { backend: main, prefix: blobs }

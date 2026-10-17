@@ -1,10 +1,17 @@
 /// <reference lib="webworker" />
-import { BlockInfo, type RendererDefinitions, type RendererModelDef, type TintType } from '@violet-map/core/assets';
-import { ChunkColumn, appendChunkEntities, parseChunkColumn } from '@violet-map/core/domain';
 import {
+  type BlockInfo,
+  type RendererDefinitions,
+  type RendererModelDef,
+  type TintType,
+} from '@violet-map/core/assets';
+import { type ChunkColumn, appendChunkEntities, parseChunkColumn } from '@violet-map/core/domain';
+import {
+  meshByteLength,
   ChunkNeighborhood,
-  MeshBuffers,
-  MesherResources,
+  SECTION_VISIBILITY_ALL,
+  type MeshBuffers,
+  type MesherResources,
   ModelBaker,
   computeColumnLight,
   hexToRgb,
@@ -21,15 +28,6 @@ import type { SectionMeshMsg, WorkerRequest, WorkerResponse } from './protocol';
 const DEFAULT_INFO: BlockInfo = { occludes: false, emit: 0, filter: 0, layer: 'cutout', tint: 'none' };
 const WHITE: Rgb = [1, 1, 1];
 const TOP_COLOR_CACHE_LIMIT = 12000;
-const SECTION_VISIBILITY_ALL = (() => {
-  let mask = 0;
-  for (let from = 0; from < 6; from++) {
-    for (let to = 0; to < 6; to++) {
-      if (from !== to) mask += 2 ** (from * 6 + to);
-    }
-  }
-  return mask;
-})();
 
 let res: MesherResources | null = null;
 let avgColors: Record<string, [number, number, number]> = {};
@@ -45,6 +43,7 @@ const topColorStateKeyCache = new WeakMap<BlockStateRef, string>();
 function infoOf(name: string): BlockInfo {
   return blockInfo[name] ?? DEFAULT_INFO;
 }
+
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
@@ -212,23 +211,10 @@ function transfersOf(buffers: (MeshBuffers | null | undefined)[]): Transferable[
   return t;
 }
 
-function meshBytes(b: MeshBuffers | null | undefined): number {
-  if (!b) return 0;
-  return (
-    b.positions.byteLength +
-    (b.uvs?.byteLength ?? 0) +
-    (b.atlasRects?.byteLength ?? 0) +
-    b.colors.byteLength +
-    b.lights.byteLength +
-    (b.animations?.byteLength ?? 0) +
-    b.indices.byteLength
-  );
-}
-
 function sectionBytes(sections: SectionMeshMsg[]): number {
   let total = 0;
   for (const section of sections) {
-    for (const buffers of Object.values(section.layers)) total += meshBytes(buffers);
+    for (const buffers of Object.values(section.layers)) if (buffers) total += meshByteLength(buffers);
   }
   return total;
 }
@@ -328,6 +314,7 @@ function modelInstances(col: ChunkColumn): RenderModelInstance[] {
 
 const post = (msg: WorkerResponse, transfer: Transferable[] = []) =>
   (self as unknown as DedicatedWorkerGlobalScope).postMessage(msg, transfer);
+
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
@@ -470,7 +457,11 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
             version: msg.version,
             step: msg.step,
             mesh,
-            profile: { meshBytes: meshBytes(mesh), meshMs: performance.now() - started, storedColumns: columns.size },
+            profile: {
+              meshBytes: mesh ? meshByteLength(mesh) : 0,
+              meshMs: performance.now() - started,
+              storedColumns: columns.size,
+            },
           },
           transfersOf([mesh]),
         );

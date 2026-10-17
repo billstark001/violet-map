@@ -1,7 +1,14 @@
+import { nonSharedByteView } from '@violet-map/core/http';
 import type { RouteContext } from './context.js';
+import { readRequestJson } from '../httpBody.js';
+import { isWorldDiffInput, validateWorldName } from '../worldValidation.js';
+
 export function mountWorldAdmin(context: RouteContext) {
+  context.app.use('/api/admin/worlds/:world/*', validateWorldName);
+  context.app.use('/api/admin/worlds/:world', validateWorldName);
   const {
     app,
+    config,
     worldStorage,
     diffWorldManifest,
     worldManifest,
@@ -39,7 +46,7 @@ export function mountWorldAdmin(context: RouteContext) {
         'accept-ranges': 'bytes',
       });
     }
-    const responseBytes = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    const responseBytes = nonSharedByteView(bytes);
     return c.body(
       responseBytes,
       range ? 206 : 200,
@@ -58,7 +65,8 @@ export function mountWorldAdmin(context: RouteContext) {
     }),
   );
   app.post('/api/admin/worlds/:world/diff', requireRole(REQUIRED_ROLE.worlds), async (c) => {
-    const body = await c.req.json<{ files?: { path: string; hash?: string; size?: number }[] }>();
-    return c.json(await diffWorldManifest(c.req.param('world'), Array.isArray(body.files) ? body.files : []));
+    const body = await readRequestJson(c, config.limits.uploadBytes);
+    if (!isWorldDiffInput(body)) return c.json({ error: 'invalid world manifest' }, 400);
+    return c.json(await diffWorldManifest(c.req.param('world'), body.files ?? []));
   });
 }

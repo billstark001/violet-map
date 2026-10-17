@@ -15,6 +15,7 @@ export interface BiomeDef {
     grass_color_modifier?: 'none' | 'dark_forest' | 'swamp';
   };
 }
+
 export type BiomeMap = Record<string, BiomeDef>;
 
 export interface DimensionDef {
@@ -23,10 +24,13 @@ export interface DimensionDef {
   sky: 'normal' | 'nether' | 'end';
   defaultBiome: string;
 }
+
 export type DimensionMap = Record<string, DimensionDef>;
 
-export function normalizeId(id: string): string {
-  return id.includes(':') ? id : `minecraft:${id}`;
-}
+export { normalizeId } from './resourceId.js';
+
 export * from './world.js';
 export * from './dimensionId.js';
+export * from './worldName.js';
+export * from './chunkCoordinate.js';
+export { parseBiomeMap } from './biomes.js';

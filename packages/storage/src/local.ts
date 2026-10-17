@@ -1,10 +1,11 @@
 import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import type { Dirent } from 'node:fs';
 import path from 'node:path';
 import { mapWithConcurrency } from '@violet-map/core/async';
 import { cleanStoragePath } from './paths.js';
 import { validateReadRange } from './range.js';
-import type { StoredFileInfo, WorldStorage } from '@violet-map/core/storage';
+import type { StoredFileInfo, ObjectStorage } from '@violet-map/core/storage';
 
 function isMissingPath(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
@@ -12,8 +13,16 @@ function isMissingPath(error: unknown): boolean {
   return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
+/** Adopt an exclusive filesystem allocation; trim pooled or short-read views so
+ * one retained object never pins unrelated pool bytes or an unused read tail. */
+function ownedFileBytes(bytes: Uint8Array): Uint8Array {
+  return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+    ? new Uint8Array(bytes.buffer)
+    : new Uint8Array(bytes);
+}
+
 /** Node filesystem implementation. `root` is never exposed through storage paths. */
-export class LocalWorldStorage implements WorldStorage {
+export class LocalStorage implements ObjectStorage {
   readonly kind = 'local' as const;
   private readonly root: string;
 
@@ -24,13 +33,15 @@ export class LocalWorldStorage implements WorldStorage {
   private abs(filePath: string): string {
     const clean = cleanStoragePath(filePath);
     const abs = path.resolve(this.root, clean);
-    if (abs !== this.root && !abs.startsWith(`${this.root}${path.sep}`)) throw new Error('invalid storage path');
+    const relative = path.relative(this.root, abs);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+      throw new Error('invalid storage path');
     return abs;
   }
 
   async read(filePath: string): Promise<Uint8Array | null> {
     try {
-      return new Uint8Array(await fs.readFile(this.abs(filePath)));
+      return ownedFileBytes(await fs.readFile(this.abs(filePath)));
     } catch (error) {
       if (!isMissingPath(error)) throw error;
       return null;
@@ -48,7 +59,7 @@ export class LocalWorldStorage implements WorldStorage {
       if (available === 0) return new Uint8Array();
       const buffer = Buffer.allocUnsafe(available);
       const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, start);
-      return new Uint8Array(buffer.buffer, buffer.byteOffset, bytesRead).slice();
+      return ownedFileBytes(buffer.subarray(0, bytesRead));
     } catch (error) {
       if (!isMissingPath(error)) throw error;
       return null;
@@ -63,6 +74,18 @@ export class LocalWorldStorage implements WorldStorage {
     await fs.writeFile(file, bytes);
   }
 
+  async replace(filePath: string, bytes: Uint8Array): Promise<void> {
+    const file = this.abs(filePath);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const temporary = path.join(path.dirname(file), `.violet-tmp-${randomUUID()}`);
+    try {
+      await fs.writeFile(temporary, bytes, { flag: 'wx' });
+      await fs.rename(temporary, file);
+    } finally {
+      await fs.rm(temporary, { force: true });
+    }
+  }
+
   async delete(filePath: string): Promise<void> {
     await fs.rm(this.abs(filePath), { force: true });
   }
@@ -70,7 +93,12 @@ export class LocalWorldStorage implements WorldStorage {
   async deletePrefix(prefix: string): Promise<number> {
     const clean = cleanStoragePath(prefix);
     const files = await this.list(clean);
-    await fs.rm(this.abs(clean), { recursive: true, force: true });
+    try {
+      if ((await fs.lstat(this.abs(clean))).isDirectory())
+        await fs.rm(this.abs(clean), { recursive: true, force: true });
+    } catch (error) {
+      if (!isMissingPath(error)) throw error;
+    }
     return files.length;
   }
 
@@ -98,7 +126,7 @@ export class LocalWorldStorage implements WorldStorage {
       for (const entry of entries) {
         const file = path.join(directory, entry.name);
         if (entry.isDirectory()) await walk(file);
-        else if (entry.isFile()) paths.push(file);
+        else if (entry.isFile() && !entry.name.startsWith('.violet-tmp-')) paths.push(file);
       }
     };
     await walk(base);

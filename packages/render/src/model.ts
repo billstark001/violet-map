@@ -1,11 +1,11 @@
 import {
-  AssetBundle,
-  BlockModelJson,
-  BlockStateVariantJson,
-  Direction,
-  ModelElementJson,
+  type AssetBundle,
+  type BlockModelJson,
+  type BlockStateVariantJson,
+  type Direction,
+  type ModelElementJson,
 } from '@violet-map/core/assets';
-import { BlockStateRef, normalizeId } from '@violet-map/core/domain';
+import { type BlockStateRef, normalizeId } from '@violet-map/core/domain';
 
 export interface BakedQuad {
   /** 4 顶点 × xyz，单位为方块（0..1，可越界）。 */
@@ -21,6 +21,7 @@ export interface BakedQuad {
   shade: boolean;
   ao: boolean;
 }
+
 interface WeightedQuads {
   weight: number;
   quads: BakedQuad[];
@@ -100,9 +101,11 @@ function rotateDir(dir: Direction, xSteps: number, ySteps: number): Direction {
   for (let i = 0; i < ySteps; i++) d = ROT_Y[d];
   return d;
 }
+
 function rotXStep(v: Vec3): Vec3 {
   return [v[0], v[2], 16 - v[1]];
 }
+
 function rotYStep(v: Vec3): Vec3 {
   return [16 - v[2], v[1], v[0]];
 }
@@ -194,6 +197,7 @@ function matchVariantKey(key: string, props: Record<string, string>): boolean {
     return props[k] === v;
   });
 }
+
 function matchCondition(cond: any, props: Record<string, string>): boolean {
   if (!cond || typeof cond !== 'object' || Array.isArray(cond)) return false;
   if (Object.hasOwn(cond, 'OR'))
@@ -235,7 +239,8 @@ const MISSING_CUBE_MODEL: BlockModelJson = {
   ],
 };
 
-/** 将 blockstate + 模型 JSON 烘焙为四边形列表，带缓存。 */
+/** Bake Java blockstate/model resources. Treat the bundle and returned cached
+ * quads as immutable; create a new baker when resource definitions change. */
 export class ModelBaker {
   private byRef = new WeakMap<BlockStateRef, WeightedQuads[]>();
   private byKey = new Map<string, WeightedQuads[]>();
@@ -243,6 +248,8 @@ export class ModelBaker {
 
   constructor(private bundle: AssetBundle) {}
 
+  /** Resolve a stable block state with a nonnegative integer variant seed.
+   * Positions use block units; missing models use the missing-texture cube. */
   getQuads(state: BlockStateRef, seed: number): BakedQuad[] {
     let variants = this.byRef.get(state);
     if (!variants) {
@@ -266,10 +273,10 @@ export class ModelBaker {
     return variants[0].quads;
   }
 
-  /** Bake a resource-registered block-entity/entity model directly. These use
-   * the exact same Java model JSON dialect as ordinary block models. */
+  /** Bake a registered entity model using the block-model dialect. Rotations
+   * are quarter turns expressed in degrees; returned quads share the cache. */
   getModelQuads(model: string, rotationY = 0, rotationX = 0, uvlock = false): BakedQuad[] {
-    return this.bake(normalizeId(model), (rotationX / 90) & 3, (rotationY / 90) & 3, uvlock);
+    return this.bakeVariant({ model, x: rotationX, y: rotationY, uvlock });
   }
 
   private build(state: BlockStateRef): WeightedQuads[] {
@@ -301,10 +308,14 @@ export class ModelBaker {
   }
 
   private bakeVariant(variant: BlockStateVariantJson): BakedQuad[] {
-    const key = `${variant.model}|${variant.x ?? 0}|${variant.y ?? 0}|${variant.uvlock ? 1 : 0}`;
+    const model = normalizeId(variant.model);
+    const rotX = ((variant.x ?? 0) / 90) & 3;
+    const rotY = ((variant.y ?? 0) / 90) & 3;
+    const uvlock = !!variant.uvlock;
+    const key = `${model}|${rotX}|${rotY}|${uvlock ? 1 : 0}`;
     let baked = this.variantCache.get(key);
     if (!baked) {
-      baked = this.bake(variant.model, ((variant.x ?? 0) / 90) & 3, ((variant.y ?? 0) / 90) & 3, !!variant.uvlock);
+      baked = this.bake(model, rotX, rotY, uvlock);
       this.variantCache.set(key, baked);
     }
     return baked;
@@ -316,7 +327,7 @@ export class ModelBaker {
     ao: boolean;
     textureSize: [number, number];
   } {
-    const textures: Record<string, string> = {};
+    const textures: Record<string, string> = Object.create(null);
     let elements: ModelElementJson[] | undefined;
     let ao: boolean | undefined;
     let textureSize: [number, number] | undefined;

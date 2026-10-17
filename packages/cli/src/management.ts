@@ -12,6 +12,7 @@ export interface ManagementOptions {
   databaseUrlRef?: string;
   serverConfig?: string;
 }
+
 export interface ManagementClient {
   users: {
     list(): Promise<PublicUser[]>;
@@ -28,6 +29,7 @@ export interface ManagementClient {
   };
   close(): Promise<void>;
 }
+
 export async function managementClient(context: CliContext, options: ManagementOptions): Promise<ManagementClient> {
   if (options.databaseDir === '' || options.databaseUrlRef === '' || options.serverConfig === '')
     throw new Error('Database connection options must not be empty');
@@ -90,6 +92,7 @@ export async function managementClient(context: CliContext, options: ManagementO
     }),
   );
 }
+
 export async function withManagement<T>(
   context: CliContext,
   options: ManagementOptions,
