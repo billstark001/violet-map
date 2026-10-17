@@ -8,6 +8,8 @@ packages/server/data/users.pglite.lock
 
 TEMP
 TEMP_*
+LOCAL
+LOCAL_*
 
 .DS_Store
 
