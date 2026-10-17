@@ -26,6 +26,8 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ### Fixed
 
+- Restricted browser history no longer interrupts camera targeting or animation; URL persistence tolerates sandbox restrictions and history rate limits, independently of local-storage persistence.
+
 - Model texture variables such as `constructor`, `toString` and `__proto__` resolve through normal inheritance; missing variables use the fallback instead of inherited JavaScript prototype values.
 
 - Content metadata mutations reserve configurable bounded capacity before buffering JSON; queued requests keep bodies unread and excess traffic gets retryable `CONTENT_BUSY`, independently of media imports.

@@ -203,7 +203,13 @@ function persistView(view: FlyView, updateUrl: boolean) {
   } catch {
     // Storage can be unavailable in private or restricted contexts.
   }
-  if (updateUrl) history.replaceState(null, '', buildViewUrl(location.pathname, location.search, location.hash, view));
+  if (updateUrl) {
+    try {
+      history.replaceState(null, '', buildViewUrl(location.pathname, location.search, location.hash, view));
+    } catch {
+      // Sandboxed frames and browser history rate limits must not interrupt a frame.
+    }
+  }
 }
 
 function cameraView(camera: THREE.Camera, yaw: number, pitch: number): FlyView {

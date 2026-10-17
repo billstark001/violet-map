@@ -143,10 +143,16 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
   assert.equal(await viewer.getByRole('tab', { name: 'Settings', exact: true }).getAttribute('aria-selected'), 'true');
   await viewer.getByRole('combobox', { name: 'Language', exact: true }).selectOption('zh-CN');
   await viewer.getByRole('tab', { name: '视图', exact: true }).click();
+  await viewer.evaluate(() => {
+    history.replaceState = () => {
+      throw new DOMException('history is restricted', 'SecurityError');
+    };
+  });
   await viewer.locator('#coord-x').fill('123');
   await viewer.locator('#coord-x').press('Control+a');
   assert.equal(await viewer.locator('#coord-x').evaluate((node: HTMLInputElement) => node.value), '123');
   await viewer.getByRole('button', { name: '前往', exact: true }).click();
+  await viewer.waitForFunction(() => JSON.parse(localStorage.getItem('violet-map:view') ?? '{}').x === 123);
   assert.equal(await originalCanvas!.evaluate((canvas) => canvas.isConnected), true);
   await viewer.getByRole('tab', { name: '设置', exact: true }).click();
   await viewer.getByRole('combobox', { name: '语言', exact: true }).selectOption('en');
@@ -211,4 +217,5 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
   assert.equal(keys.length, 1);
   assert.ok(keys[0].includes(apiBase));
   await viewer.screenshot({ path: path.join(root, 'viewer.png') });
+  assert.deepEqual(errors, [], 'camera persistence must tolerate restricted history without interrupting the viewer');
 });
