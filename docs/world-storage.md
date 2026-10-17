@@ -39,4 +39,4 @@ The server exposes its shared storage adapter under protected `/api/admin/storag
 
 Remote storage accepts an API prefix such as `https://api.example.com/violet/` and requires enabled admin/world-write capabilities for synchronization. A sync deployment uses a static Bearer service credential without a user database. The storage root entry exports decorators and synchronization only; local/HTTP operations do not load the AWS SDK.
 
-See [external overlays and named storage mounts](overlays.md) for the phase 1–4 object storage, content API, CLI, configuration and persistence contract.
+See [external overlays and named storage mounts](overlays.md) for the object storage, content API, CLI, configuration and persistence contract.

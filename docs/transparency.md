@@ -11,7 +11,7 @@ This independently implemented WebGL2 pipeline follows the depth-bin approach in
 1. Render background, opaque and cutout geometry into a color target with a sampled depth texture. Explicitly marked sky objects retain their background blending.
 2. Render translucent geometry against opaque depth. MAX blending records each pixel's minimum/maximum linear view depth and nearest fully opaque translucent surface. The projection inverse handles perspective and orthographic cameras.
 3. Convert alpha to optical thickness, `-log(max(1-alpha, 1e-6))`. Add a ramp into sixteen cumulative depth samples in four RGBA16F attachments. Surfaces behind a fully opaque fragment are rejected.
-4. Shade transparent surfaces using the interpolated thickness in front of them, correcting for each fragment's own contribution. Accumulate premultiplied color and alpha. Terrain skips lighting, fog and region-mask work in the two alpha-only phases.
+4. Shade transparent surfaces using the interpolated thickness in front of them, correcting for each fragment's own contribution. Accumulate premultiplied color and alpha. Terrain skips lighting, fog and region-mask work in the two alpha-only passes.
 5. Derive total coverage from the last depth sample, normalize accumulated color to that coverage and composite over the background. Copy opaque depth to the destination.
 6. Draw explicitly depth-disabled annotations in their established order. Terrain area masks remain a separate ordered operation applied by the terrain shaders.
 
@@ -41,13 +41,14 @@ Run `pnpm test:transparency`. An isolated production build writes screenshots an
 
 The synthetic world uses the real `ModelBaker` and `meshSection`: four sections, 1,924 blocks and 2,472 triangles. Ground, red/blue glass crossing chunk boundaries, water, a rotated special translucent model and a green overlay wall exercise intersecting materials.
 
-Measured 2026-10-18 on Apple M3 / macOS / Chrome 155.0.8059.80 / ANGLE Metal, at 960×720, DPR 1:
+The suite verifies:
 
-- Perspective and orthographic world images changed by at most 1/255 per channel after reversing object and triangle submission order. Screenshot review confirmed glass, water and intersecting models remain visible.
-- Pixel assertions cover 50% alpha, separated and intersecting layers, opaque occlusion, depth-disabled annotations, alpha 0/1, dynamic visibility/opacity/color, texture alpha and cutout holes. A real GLTFLoader-decoded alpha-blended GLB and a direct MeshStandardMaterial check exercise lit materials.
-- Opaque color matches a direct-render reference exactly. A deliberately failing material callback verifies state restoration.
-- A 3840×2160 canvas produces capped 2364×1330 targets (201,223,680 bytes). Shrinking releases the larger allocation.
-- Five world load/unload cycles return to two geometries, nine textures and four programs, with one variant owner. Complete disposal leaves zero geometries and one renderer-owned BRDF lookup texture, released with the renderer.
-- Missing float-blend support produces the explicit capability error without another rendering path.
+- Perspective and orthographic world images remain within a small per-channel tolerance after both object submission order and triangle order are reversed. Actual renderer callbacks record the submission sequences so the test cannot pass without changing draw order.
+- Pixel assertions cover single-layer alpha, separated/intersecting layers, opaque occlusion, explicitly depth-disabled annotations, alpha 0/1, dynamic material state, texture alpha and cutout holes.
+- Fully occluded distant surfaces cannot expand the visible depth-bin range and change front-layer colors. The nearest fully opaque transparent depth also limits the normalized range.
+- A generated alpha-blended GLB is decoded by the real GLTFLoader and rendered with MeshStandardMaterial.
+- Opaque color matches a direct-render reference. A failing material callback restores object and renderer state.
+- High-resolution allocation obeys the pixel/byte limit, shrinking releases the larger allocation, and repeated world load/unload cycles return to the same baseline. Renderer-owned lookup textures are accounted separately from pipeline ownership.
+- Missing float-blend support reports an explicit capability error without starting another rendering path.
 
-The report records CPU submission times, not GPU time or FPS. This small world is a correctness and ownership fixture, not a large-world throughput benchmark.
+Inspect the generated perspective and orthographic PNGs for missing surfaces, overlap colors and seams at chunk boundaries. The JSON records browser/GPU identity, pixel differences, allocation estimates, lifecycle counts and CPU submission timings. Record hardware, viewport and DPR when comparing reports. CPU submission time is not GPU time or FPS; this small world validates correctness and ownership rather than large-world throughput.

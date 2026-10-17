@@ -100,4 +100,4 @@ The only mandatory workspace package is core. Install optional peers in the same
 
 Asset directories resolve from explicit `--assets-dir`, then `ASSETS_DIRS`, then `assets` under the invocation directory. Shared biome/dimension/block defaults are packaged in core; no CLI command searches server source directories.
 
-See [external overlays and named storage mounts](overlays.md) for the phase 1–4 object storage, content API, CLI, configuration and persistence contract.
+See [external overlays and named storage mounts](overlays.md) for the object storage, content API, CLI, configuration and persistence contract.
