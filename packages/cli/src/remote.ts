@@ -76,6 +76,11 @@ export async function apiResponse(
       `HTTP ${response.status}: ${typeof data.error === 'string' ? data.error : 'request failed'} ${hint}`.trim(),
     );
   }
+  const publication = response.headers.get('resource-publication-state');
+  if (publication === 'pending' || publication === 'failed')
+    console.error(
+      `Business revision ${response.headers.get('resource-publication-revision') ?? '(see response)'} committed; resource publication ${publication}. Use resources status to inspect the publisher.`,
+    );
   return response;
 }
 

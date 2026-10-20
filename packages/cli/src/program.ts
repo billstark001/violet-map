@@ -1,11 +1,11 @@
+import type { CreatableRole } from '@violet-map/core/contracts';
+import { Command, InvalidArgumentError, Option } from 'commander';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { Command, InvalidArgumentError, Option } from 'commander';
 import { loadContext, type GlobalOptions } from './context.js';
+import type { ManagementOptions } from './management.js';
 import { cliPaths } from './settings/paths.js';
 import { redact } from './settings/secrets.js';
-import type { ManagementOptions } from './management.js';
-import type { CreatableRole } from '@violet-map/core/contracts';
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
   version: string;
@@ -303,6 +303,30 @@ export function createProgram(): Command {
         await tools.extractAll(options.minVersion, options.dir, !!options.includeSnapshots, !!options.dryRun);
       else if (name === 'generate-biomes') await tools.generateBiomes(options.version, options.output);
       else await tools.generateDimensions(options.version, options.output);
+    });
+  }
+  const resources = child(program, 'resources', 'Prepare, publish and inspect unified resources');
+  for (const operation of ['prepare', 'publish', 'status', 'verify', 'gc', 'reindex', 'recover'] as const) {
+    const command = child(resources, operation, `${operation} resource state`)
+      .addOption(
+        new Option('--via <method>', 'resource management connection (default: api)').choices(['api', 'local']),
+      )
+      .option('--server-config <file>', 'explicit local role and storage configuration')
+      .option('--writers-quiesced', 'confirm every other source/content/publication writer is stopped');
+    if (operation === 'publish')
+      command.requiredOption(
+        '--expected-head <id>',
+        'current publication SHA-256, or none for the initial publication',
+      );
+    action<GlobalOptions & import('./commands/resources.js').ResourceOptions>(command, async (options) => {
+      const { resourceCommand } = await import('./commands/resources.js');
+      console.log(
+        JSON.stringify(
+          await resourceCommand(operation, options, options.via === 'local' ? undefined : await loadContext(options)),
+          null,
+          2,
+        ),
+      );
     });
   }
   const bake = child(program, 'bake-topmap', 'Bake top-map tiles from a local world')

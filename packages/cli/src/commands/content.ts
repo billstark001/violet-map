@@ -1,15 +1,15 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
+import { parseServiceCapabilities } from '@violet-map/core/contracts';
 import {
-  parseLayerDocument,
   contentId,
   normalizeContentDimension,
+  parseLayerDocument,
   revisionTag,
   type MapDocument,
 } from '@violet-map/core/overlays';
-import { parseServiceCapabilities } from '@violet-map/core/contracts';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import type { CliContext } from '../context.js';
-import { apiRequest, jsonRequest, resolveServerConnection, remoteOrigin, type ServerConnection } from '../remote.js';
+import { apiRequest, jsonRequest, remoteOrigin, resolveServerConnection, type ServerConnection } from '../remote.js';
 
 export interface ContentOptions {
   name?: string;
@@ -128,11 +128,14 @@ export async function bindingCommand(context: CliContext, operation: string, opt
     operation === 'manifest' ? 'public' : operation === 'bindings' ? 'admin' : 'write',
   );
   const map = segment(options.map!);
-  if (operation === 'manifest')
+  if (operation === 'manifest') {
+    const { parseResourceViewHead } = await import('@violet-map/core/resources');
+    const head = parseResourceViewHead(await apiRequest(server, 'api/resources/views/current'));
     return apiRequest(
       server,
-      `api/maps/${map}/overlays?dimension=${encodeURIComponent(normalizeContentDimension(options.dimension))}`,
+      `api/maps/${map}/overlays?dimension=${encodeURIComponent(normalizeContentDimension(options.dimension))}&viewId=${encodeURIComponent(head.viewId)}`,
     );
+  }
   const base = `api/admin/maps/${map}/bindings`;
   if (operation === 'bindings') return apiRequest(server, base);
   const binding = segment(options.binding!);
