@@ -28,6 +28,7 @@
     "@types/node": "^26.1.0",
     "@types/pngjs": "^6.0.5",
     "@violet-map/render": "workspace:*",
+    "@violet-map/resources": "workspace:*",
     "@violet-map/server": "workspace:*",
     "@violet-map/storage": "workspace:*",
     "tsx": "^4.23.0",
@@ -35,6 +36,7 @@
   },
   "peerDependencies": {
     "@violet-map/render": "workspace:^",
+    "@violet-map/resources": "workspace:^",
     "@violet-map/server": "workspace:^",
     "@violet-map/storage": "workspace:^"
   },
@@ -46,6 +48,9 @@
       "optional": true
     },
     "@violet-map/storage": {
+      "optional": true
+    },
+    "@violet-map/resources": {
       "optional": true
     }
   },

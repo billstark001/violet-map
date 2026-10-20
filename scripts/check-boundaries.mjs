@@ -6,10 +6,11 @@ const allowed = {
   core: [],
   render: ['core'],
   storage: ['core'],
-  server: ['core', 'storage'],
+  resources: ['core', 'storage'],
+  server: ['core', 'storage', 'resources'],
   web: ['core', 'render'],
   admin: ['core'],
-  cli: ['core', 'render', 'storage', 'server'],
+  cli: ['core', 'render', 'storage', 'server', 'resources'],
 };
 function files(dir) {
   return fs
@@ -46,7 +47,7 @@ for (const [owner, dependencies] of Object.entries(allowed)) {
             ? path.resolve(path.dirname(file), name).match(/\/packages\/([^/]+)\//)?.[1]
             : undefined);
         if (target && target !== owner && !dependencies.includes(target)) fail(`forbidden dependency ${name}`);
-        if (owner === 'cli' && ['render', 'storage', 'server'].includes(target)) {
+        if (owner === 'cli' && ['render', 'storage', 'server', 'resources'].includes(target)) {
           if (
             ts.isImportDeclaration(node) &&
             !node.importClause?.isTypeOnly &&
@@ -90,7 +91,7 @@ for (const [owner, dependencies] of Object.entries(allowed)) {
           fail(`React compatibility/runtime dependency in native Preact viewer: ${name}`);
       }
       if (
-        owner === 'render' &&
+        ['render', 'resources'].includes(owner) &&
         ts.isPropertyAccessExpression(node) &&
         ts.isIdentifier(node.expression) &&
         ['document', 'window', 'navigator', 'process'].includes(node.expression.text)
@@ -122,7 +123,7 @@ if (
   JSON.stringify(['@violet-map/core'])
 )
   violations.push('CLI required project dependencies must be exactly core');
-for (const name of ['render', 'storage', 'server'])
+for (const name of ['render', 'storage', 'server', 'resources'])
   if (!cli.peerDependenciesMeta?.[`@violet-map/${name}`]?.optional)
     violations.push(`CLI ${name} peer must be optional`);
 for (const [owner, dependencies] of Object.entries(allowed)) {

@@ -1,0 +1,41 @@
+{
+  "name": "@violet-map/resources",
+  "version": "0.3.0",
+  "files": [
+    "dist",
+    "data-defaults"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./catalog/sqlite": {
+      "development": "./src/catalog/sqlite.ts",
+      "types": "./dist/catalog/sqlite.d.ts",
+      "default": "./dist/catalog/sqlite.js"
+    }
+  },
+  "scripts": {
+    "build": "node ../../scripts/clean-dist.mjs && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:artifact": "node --test test/artifact.test.mjs"
+  },
+  "dependencies": {
+    "@msgpack/msgpack": "^3.1.3",
+    "@violet-map/core": "workspace:*",
+    "@violet-map/storage": "workspace:*",
+    "minecraft-data": "^3.111.0",
+    "pngjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "@types/pngjs": "^6.0.5",
+    "typescript": "^6.0.3"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

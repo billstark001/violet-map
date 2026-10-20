@@ -264,6 +264,9 @@ importers:
       '@violet-map/render':
         specifier: workspace:*
         version: link:../render
+      '@violet-map/resources':
+        specifier: workspace:*
+        version: link:../resources
       '@violet-map/server':
         specifier: workspace:*
         version: link:../server
@@ -309,6 +312,34 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4
     devDependencies:
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  packages/resources:
+    dependencies:
+      '@msgpack/msgpack':
+        specifier: ^3.1.3
+        version: 3.1.3
+      '@violet-map/core':
+        specifier: workspace:*
+        version: link:../core
+      '@violet-map/storage':
+        specifier: workspace:*
+        version: link:../storage
+      minecraft-data:
+        specifier: ^3.111.0
+        version: 3.111.0
+      pngjs:
+        specifier: ^7.0.0
+        version: 7.0.0
+    devDependencies:
+      '@types/node':
+        specifier: ^26.1.0
+        version: 26.1.0
+      '@types/pngjs':
+        specifier: ^6.0.5
+        version: 6.0.5
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
