@@ -1,0 +1,18 @@
+# Build/run explicitly with a source-free public-reader configuration.
+services:
+  reader:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      VIOLET_MAP_CONFIG: /reader.yaml
+    env_file: ['${RESOURCE_READER_ENV_FILE:?Select a private file containing only reader credentials}']
+    volumes:
+      - type: bind
+        source: ${RESOURCE_READER_CONFIG:?Select a public-reader YAML configuration}
+        target: /reader.yaml
+        read_only: true
+    ports: ['3300:3300']

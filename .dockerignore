@@ -10,3 +10,10 @@ assets
 LOCAL*
 **/.env
 **/.env.*
+
+**/*.sqlite
+**/*.sqlite-wal
+**/*.sqlite-shm
+**/.violet-http
+artifacts
+.resource-cache

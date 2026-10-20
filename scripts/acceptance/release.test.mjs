@@ -46,7 +46,7 @@ async function configFile(root, name, worlds, content, blobs, extra = {}) {
 }
 const env = {
   STATIC_API_TOKEN: 'release-fixture-token',
-  CACHE_PREWARM: 'false',
+
   CORS_ORIGINS: 'https://viewer.example',
 };
 async function service(file) {
@@ -187,8 +187,8 @@ test('quiesced snapshot restores retained revisions/blobs and registrations acro
   assert.deepEqual(await digestMount(target.mounts.content), expected.content);
   assert.deepEqual(await digestMount(target.mounts.blobs), expected.blobs);
   assert.equal((await target.content.getLayer(seeded.layer.layerId, 1)).name, 'fixture');
-  assert.equal((await target.content.manifest(seeded.map.mapId, 'overworld')).sourceStatus, 'verified');
-  assert.equal((await target.content.manifest(seeded.map.mapId, 'overworld')).layers[0].document.revision, 2);
+  assert.equal((await target.content.snapshot(seeded.map.mapId, 'overworld')).sourceStatus, 'verified');
+  assert.equal((await target.content.snapshot(seeded.map.mapId, 'overworld')).layers[0].document.revision, 2);
   await assert.rejects(restoreContent({ configFile: two, input: snapshot, env, quiesced: true }), /empty/);
   const broken = path.join(root, 'damaged');
   await fs.cp(snapshot, broken, { recursive: true });
@@ -214,7 +214,7 @@ test('quiesced snapshot restores retained revisions/blobs and registrations acro
   await target.worldStore.deleteWorld('village');
   assert.deepEqual(await digestMount(target.mounts.content), expected.content);
   assert.deepEqual(await digestMount(target.mounts.blobs), expected.blobs);
-  assert.equal((await target.content.manifest(seeded.map.mapId, 'overworld')).sourceStatus, 'missing');
+  assert.equal((await target.content.snapshot(seeded.map.mapId, 'overworld')).sourceStatus, 'missing');
   const deletedSnapshot = path.join(root, 'deleted-world-snapshot');
   await target.close();
   await backupContent({ configFile: two, output: deletedSnapshot, env, quiesced: true });
@@ -228,7 +228,7 @@ test('quiesced snapshot restores retained revisions/blobs and registrations acro
   await restoreContent({ configFile: deletedTarget, input: deletedSnapshot, env, quiesced: true });
   const deletedService = await service(deletedTarget);
   try {
-    assert.equal((await deletedService.content.manifest(seeded.map.mapId, 'overworld')).sourceStatus, 'missing');
+    assert.equal((await deletedService.content.snapshot(seeded.map.mapId, 'overworld')).sourceStatus, 'missing');
   } finally {
     await deletedService.close();
   }
@@ -357,7 +357,10 @@ test(
     );
     try {
       const manifest = await (
-        await fetch(forward.url + `/api/maps/${seeded.map.mapId}/overlays?dimension=overworld`)
+        await fetch(
+          forward.url +
+            `/api/maps/${seeded.map.mapId}/overlays?dimension=overworld&viewId=${(await (await fetch(forward.url + '/api/resources/views/current')).json()).viewId}`,
+        )
       ).json();
       assert.equal(manifest.sourceStatus, 'verified');
       assert.equal(manifest.layers[0].document.revision, 2);
@@ -471,19 +474,24 @@ test(
       if (!api.listening) await new Promise((resolve) => api.once('listening', resolve));
       const base = `http://127.0.0.1:${api.address().port}/violet/`,
         request = (key, init) => fetch(new URL(key, base), init);
-      const manifestResponse = await request(`api/maps/${seeded.map.mapId}/overlays?dimension=overworld`);
+      const manifestResponse = await request(
+        `api/maps/${seeded.map.mapId}/overlays?dimension=overworld&viewId=${(await (await request('api/resources/views/current')).json()).viewId}`,
+      );
       assert.equal(manifestResponse.status, 200);
       const etag = manifestResponse.headers.get('etag'),
         manifest = await manifestResponse.json();
       assert.equal(
         (
-          await request(`api/maps/${seeded.map.mapId}/overlays?dimension=overworld`, {
-            headers: { 'if-none-match': etag },
-          })
+          await request(
+            `api/maps/${seeded.map.mapId}/overlays?dimension=overworld&viewId=${(await (await request('api/resources/views/current')).json()).viewId}`,
+            {
+              headers: { 'if-none-match': etag },
+            },
+          )
         ).status,
         304,
       );
-      const resource = manifest.media[0].url.slice(1),
+      const resource = manifest.media[0].resource.url.slice(1),
         bytes = await request(resource);
       assert.equal(bytes.status, 200);
       const mediaEtag = bytes.headers.get('etag');
@@ -520,7 +528,9 @@ test(
       const key = `maps/${seeded.map.mapId}.json`,
         original = await services.mounts.content.read(key);
       await services.mounts.content.replace(key, Buffer.from('{broken'));
-      const corrupt = await request(`api/maps/${seeded.map.mapId}/overlays?dimension=overworld`);
+      const corrupt = await request(
+        `api/maps/${seeded.map.mapId}/overlays?dimension=overworld&viewId=${(await (await request('api/resources/views/current')).json()).viewId}`,
+      );
       assert.equal(corrupt.status, 500);
       assert.equal((await corrupt.json()).code, 'CORRUPT_CONTENT');
       assert.equal((await request('api/worlds')).status, 200);
@@ -530,7 +540,9 @@ test(
         throw new Error('private-backend-error-marker');
       };
       try {
-        const failure = await request(`api/maps/${seeded.map.mapId}/overlays?dimension=overworld`);
+        const failure = await request(
+          `api/maps/${seeded.map.mapId}/overlays?dimension=overworld&viewId=${(await (await request('api/resources/views/current')).json()).viewId}`,
+        );
         assert.equal(failure.status, 503);
         assert.ok(!(await failure.text()).includes('private-backend-error-marker'));
         assert.equal((await request('api/worlds')).status, 200);
@@ -558,7 +570,7 @@ test(
       });
       const mixed = await createServices(loadServerConfig({ configFile: targetFile, env: environment, cwd: root }));
       try {
-        assert.equal((await mixed.content.manifest(seeded.map.mapId, 'overworld')).sourceStatus, 'verified');
+        assert.equal((await mixed.content.snapshot(seeded.map.mapId, 'overworld')).sourceStatus, 'verified');
         assert.deepEqual(await digestMount(mixed.mounts.content), await digestMount(services.mounts.content));
         assert.deepEqual(await digestMount(mixed.mounts.blobs), await digestMount(services.mounts.blobs));
         await services.worldStore.deleteWorld('village');

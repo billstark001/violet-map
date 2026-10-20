@@ -10,7 +10,6 @@ services:
       ROOT_USERNAME: ${ROOT_USERNAME:-}
       ROOT_PASSWORD: ${ROOT_PASSWORD:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3305,http://localhost:3310}
-      CACHE_PREWARM: 'true'
     ports: ['3300:3300']
     volumes: [violet-data:/data]
   web:

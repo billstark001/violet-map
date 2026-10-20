@@ -8,10 +8,11 @@ const docker = async (...args) =>
   (await execute('docker', args, { timeout: 60_000, maxBuffer: 2 * 1024 ** 2 })).stdout.trim();
 const image = (service) => `violet-acceptance-${service}`;
 
-async function launch(t, service, port, env = {}, command = []) {
+async function launch(t, service, port, env = {}, command = [], runOptions = []) {
   const id = await docker(
     'run',
     '--detach',
+    ...runOptions,
     '--publish',
     `127.0.0.1::${port}`,
     ...Object.entries(env).flatMap(([key, value]) => ['--env', `${key}=${value}`]),
@@ -43,7 +44,6 @@ test('production containers run independently with only their own artifacts', as
     const container = await launch(t, service, service === 'web' ? 3305 : 3310, { API_BASE_URL: unreachable });
     assert.deepEqual(await (await fetch(container.origin + '/runtime-config.json')).json(), {
       apiBaseUrl: unreachable,
-      capabilityFallback: 'legacy',
     });
     assert.equal((await fetch(container.origin + '/runtime-config.json')).headers.get('cache-control'), 'no-store');
     assert.equal((await fetch(container.origin + '/brand/violet-map-icon.svg')).status, 200);
@@ -75,7 +75,7 @@ test('production containers run independently with only their own artifacts', as
       3300,
       {
         DEPLOYMENT_PROFILE: profile,
-        CACHE_PREWARM: 'false',
+
         STATIC_API_TOKEN: 'container-test-token',
         ROOT_USERNAME: 'operator',
         ROOT_PASSWORD: 'container-test-password',
@@ -134,7 +134,11 @@ test('production containers run independently with only their own artifacts', as
         { bindingId: 'main', layerId: layer.layerId, dimension: 'overworld', enabled: true, order: 0 },
         1,
       );
-      const manifest = await (await request(`/api/maps/${map.mapId}/overlays?dimension=overworld`)).json();
+      const manifest = await (
+        await request(
+          `/api/maps/${map.mapId}/overlays?dimension=overworld&viewId=${(await (await request('/api/resources/views/current')).json()).viewId}`,
+        )
+      ).json();
       assert.equal(manifest.layers.length, 1);
       const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><path d="M0 0h8v8H0z"/></svg>';
       const imported = await request('/api/admin/media?name=container', {
@@ -174,4 +178,41 @@ test('production containers run independently with only their own artifacts', as
     await docker('stop', '--time', '15', container.id);
     assert.equal(await docker('inspect', '--format', '{{.State.ExitCode}}', container.id), '0');
   }
+});
+
+test('E02 production server runs with read-only root, zero optional retention and no writable mounts', async (t) => {
+  const server = await launch(
+    t,
+    'server',
+    3300,
+    { DEPLOYMENT_PROFILE: 'public', RESOURCES_CACHE_MEMORY_BYTES: '0', RESOURCES_CACHE_SHARED_BYTES: '0' },
+    [],
+    ['--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges'],
+  );
+  const state = JSON.parse(await docker('inspect', server.id))[0];
+  assert.equal(state.HostConfig.ReadonlyRootfs, true);
+  assert.ok(state.Mounts.every((mount) => !mount.RW));
+  const head = await (await fetch(server.origin + '/api/resources/views/current')).json();
+  assert.equal(head.mode, 'server');
+  const response = await fetch(server.origin + '/api/resources/resolve', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      viewId: head.viewId,
+      selectors: [
+        { kind: 'atlas', textureSetId: 'default' },
+        { kind: 'game-data', name: 'biomes' },
+      ],
+    }),
+  });
+  assert.equal(response.status, 200);
+  const batch = await response.json();
+  for (const item of batch.resources)
+    for (const ref of item.resource ? [item.resource] : [item.manifest, item.image]) {
+      const result = await fetch(server.origin + ref.url);
+      assert.equal(result.status, 200);
+      assert.equal((await result.arrayBuffer()).byteLength, ref.artifact.bytes);
+    }
+  await docker('stop', server.id);
+  assert.equal(await docker('inspect', '--format', '{{.State.ExitCode}}', server.id), '0');
 });

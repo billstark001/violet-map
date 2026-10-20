@@ -6,6 +6,8 @@ import { pathToFileURL } from 'node:url';
 import { loadServerConfig } from '../../packages/server/dist/src/configuration.js';
 import { createObjectStorage } from '../../packages/storage/dist/factory.js';
 import { ScopedStorage } from '../../packages/storage/dist/prefixed.js';
+import { PublicationStore } from '../../packages/resources/dist/publication.js';
+import { parseArtifactRef } from '../../packages/core/dist/resources.js';
 import {
   parseMapDocument,
   parseLayerDocument,
@@ -48,7 +50,71 @@ async function openMounts(configFile, env) {
           },
     ]),
   );
-  return { mounts, locations, bindings: config.storage.mounts };
+  return { mounts, locations, bindings: config.storage.mounts, config };
+}
+/** Private snapshots protect originals. Public closures are checked but excluded
+ * from this backup; a separate public-object backup must hold an authority pin. */
+async function publicationContext(config) {
+  const mount = config.resources.publication.storeMount;
+  if (!mount)
+    return {
+      roles: config.resources.roles,
+      delivery: config.resources.delivery.mode,
+      publicCopiesIncluded: false,
+      head: null,
+      prepared: [],
+      pins: [],
+    };
+  const backend = config.storage.backends[mount.backend];
+  const physical = await createObjectStorage(
+    backend.driver === 'local' ? { kind: 'local', root: backend.root } : { ...backend, kind: 's3' },
+  );
+  const storage = new ScopedStorage(physical, mount.prefix);
+  const store = new PublicationStore(storage);
+  try {
+    const head = await store.head();
+    const validate = async (value) => {
+      const manifest = await store.manifest(value);
+      for (const region of manifest.regions) await store.page(region.artifact);
+    };
+    if (head) await validate(head);
+    const prepared = [],
+      pins = [];
+    for (const prefix of ['prepared', 'pins'])
+      for await (const entry of storage.scan(prefix)) {
+        const raw = await storage.readRange(entry.path, 0, 16 * 1024 ** 2 + 1);
+        if (!raw || raw.length > 16 * 1024 ** 2) throw new Error('publication backup root exceeds inspection limit');
+        const value = JSON.parse(Buffer.from(raw).toString('utf8'));
+        if (value.schemaVersion !== 1) throw new Error('unsupported publication backup root');
+        if (prefix === 'prepared') {
+          const ref = parseArtifactRef(value.manifest);
+          if (!value.input) throw new Error('invalid prepared publication root');
+          // Prepared records can precede the immutable manifest. Validate their
+          // canonical input and index closure without assuming head visibility.
+          const { parsePublicationManifest } = await import('../../packages/resources/dist/publication.js');
+          const { canonicalJson } = await import('../../packages/core/dist/resources.js');
+          const manifest = parsePublicationManifest(value.input);
+          if (hash(Buffer.from(canonicalJson(manifest))) !== ref.digest)
+            throw new Error('prepared publication digest mismatch');
+          for (const region of manifest.regions) await store.page(region.artifact);
+          prepared.push(ref.digest);
+        } else {
+          await validate(value.head);
+          pins.push({ name: entry.path, publicationId: value.head.publicationId });
+        }
+      }
+    return {
+      roles: config.resources.roles,
+      delivery: config.resources.delivery.mode,
+      publicCopiesIncluded: false,
+      head,
+      prepared,
+      pins,
+    };
+  } finally {
+    await store.close();
+    await physical.close?.();
+  }
 }
 async function inventory(mounts) {
   const result = [];
@@ -139,7 +205,7 @@ async function validateContent(entries, read) {
 export async function backupContent({ configFile, output, env = process.env, quiesced = false }) {
   if (!quiesced) throw new Error('stop all writers and pass --quiesced before making a snapshot');
   const root = path.resolve(output),
-    { mounts, locations, bindings } = await openMounts(configFile, env);
+    { mounts, locations, bindings, config } = await openMounts(configFile, env);
   for (const name of ['worlds', 'content', 'blobs']) {
     const definition = locations[bindings[name].backend];
     if (definition.driver === 'local') {
@@ -178,6 +244,7 @@ export async function backupContent({ configFile, output, env = process.env, qui
     createdAt: new Date().toISOString(),
     writerQuiesced: true,
     storage: { backends: locations, mounts: bindings },
+    resources: await publicationContext(config),
     worlds,
     maps,
     entries,
