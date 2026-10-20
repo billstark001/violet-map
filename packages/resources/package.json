@@ -16,6 +16,46 @@
       "development": "./src/catalog/sqlite.ts",
       "types": "./dist/catalog/sqlite.d.ts",
       "default": "./dist/catalog/sqlite.js"
+    },
+    "./asset-pack": {
+      "development": "./src/assetPack.ts",
+      "types": "./dist/assetPack.d.ts",
+      "default": "./dist/assetPack.js"
+    },
+    "./world-chunks": {
+      "development": "./src/sources/worldChunks.ts",
+      "types": "./dist/sources/worldChunks.d.ts",
+      "default": "./dist/sources/worldChunks.js"
+    },
+    "./nbt-codec": {
+      "development": "./src/sources/nbtCodec.ts",
+      "types": "./dist/sources/nbtCodec.d.ts",
+      "default": "./dist/sources/nbtCodec.js"
+    },
+    "./game-data": {
+      "development": "./src/gameData.ts",
+      "types": "./dist/gameData.d.ts",
+      "default": "./dist/gameData.js"
+    },
+    "./top-map": {
+      "development": "./src/topMapDependencies.ts",
+      "types": "./dist/topMapDependencies.d.ts",
+      "default": "./dist/topMapDependencies.js"
+    },
+    "./asset-digest": {
+      "development": "./src/assetDigest.ts",
+      "types": "./dist/assetDigest.d.ts",
+      "default": "./dist/assetDigest.js"
+    },
+    "./top-map-source": {
+      "development": "./src/topMapSource.ts",
+      "types": "./dist/topMapSource.d.ts",
+      "default": "./dist/topMapSource.js"
+    },
+    "./top-map-bake": {
+      "development": "./src/topMapBake.ts",
+      "types": "./dist/topMapBake.d.ts",
+      "default": "./dist/topMapBake.js"
     }
   },
   "scripts": {
