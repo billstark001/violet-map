@@ -2,6 +2,67 @@
 
 Date: 2026-10-21 (Asia/Tokyo). Branch: `feature/unified-resource-cache-public-delivery` in the primary checkout. Baseline: `da048f422e155861f153088e2a73ad4ac0d3fce2`. No deployment, cloud bucket configuration or production uploads were performed.
 
+## Second audit of the twelve commits
+
+The independent follow-up audit reviewed the final tree at `c77c910a6feb5147b4b9edd176d8611bcbddb419` against the full October 19 plan, including its zero-capacity, optional persistence, role, package, publication and deletion contracts. That audit ended with uncommitted fixes in the same primary checkout. The user subsequently authorized the responsibility-scoped commits listed below, a separate formatting commit and pushing the current branch. The original twelve commits are preserved. The later sections record the previous implementation/acceptance run; this section records the corrected implementation.
+
+| Commit | Audited responsibility and follow-up |
+| --- | --- |
+| `70ee708` | Browser-safe identities, strict resource references, canonical keys, source contracts. Retained the single current protocol. |
+| `75cc4a3` | Object CAS, conditional operations, exact reads, local/S3/HTTP adapters and common URL encoding. Storage remains independent of generators. |
+| `8f6e8d2` | Byte budgets, singleflight, handoff, memory/SQLite indexes and persistent caches. Fixed failed-write and concurrent-read catalog state. |
+| `0e84bab` | Shared world/asset/top-map generators and CLI bake dependencies. Bounded asset JSON inputs, rejected corrupt declared MCA records, and removed obsolete CLI scanning helpers. |
+| `25dee90` | Durable publication closure, writer recovery, retention and GC. Fixed configured retention reads and independently budgeted public verification. |
+| `433882c` | Common browser downloader and atomic view refresh. Fixed first-world generation races and byte-length validation across cached/coalesced downloads. |
+| `3938923` | Coordinated application protocol switch, role assembly, business authorization and source-free public projections. Fixed optional-driver activation, overlap validation and producer lease cleanup. |
+| `26b18c7` | Resource CLI and explicit online/offline writer modes. Added complete prepared-manifest output/reviewed publication checks; disabled background reconciliation in offline commands. |
+| `fd500ee` | Role/container/MinIO and backup acceptance. Rebuilt and reran with the corrected implementation; restricted reader and original-media boundaries remain enforced. |
+| `1c63939` | Repository capacity/offered-load benchmark methodology and thresholds. No measured dependency source changed in this audit. |
+| `740ce4c` | Benchmark evidence/history. Recomputed the recorded source fingerprint; all 76 capacity points and 152 load points still describe the measured implementation. |
+| `c77c910` | 0.4 release/package/deployment documentation and prior PostgreSQL acceptance. Updated resource workflow documentation and recorded fresh acceptance below. |
+
+### Findings fixed and regression coverage
+
+- **Failed optional cache writes:** body/action catalog admission could survive a failed write. A concurrent reader could also observe an action before its write completed and remove its inventory entry. Pending entries are now hidden and failed admission rolls back without deleting uncertain or corrupt stored bytes. Failure injection verifies both retries and interleaved reads.
+- **Producer leases:** render-root failure, failed resolve issuance, publisher materialization and body regeneration now release their generation leases on success and failure. Zero-retention tests include repeated GET reconstruction and repeated publication with zero remaining handoff/work bytes.
+- **Optional persistence by capability:** content-only public reads no longer initialize derived cache directories, workspace or SQLite. Pure readers also avoid opening an unused shared cache. When explicit world/data capabilities activate generators, their local cache/index/workspace paths participate in the same physical overlap checks as the business mounts. Instrumented tests forbid all filesystem writes and SQLite imports in the content-only role and reject the corresponding active overlap.
+- **Browser consistency:** first reads of a new world must agree with already selected render/world generations in both modes. JSON and atlas-document downloads recheck their captured view after transfer. Downloader cache/singleflight identity includes the declared byte length, so an inconsistent reference cannot inherit another caller's successful size check.
+- **Publication retention and work:** old-head reads use the configured retention instead of a hardcoded seven-day limit. Public verification reserves bounded read/assembly memory before fetching, including when no dynamic repository exists. Bounded source observation uses the same work budget as generation.
+- **Prepared CLI workflow:** `prepare` exposes the complete manifest and can save it with `--output`; `publish --prepared` validates that document, compares the current snapshot before any public uploads and compares the final closure before head commit. A source change fails with `SOURCE_SNAPSHOT_CHANGED` and preserves the committed head. CLI artifact tests exercise the API workflow without installing resources/server/storage/render. Offline commands explicitly suppress service background publication scheduling.
+- **Source failures and allocation:** existing but truncated region headers, declared invalid terrain/entity records and disappearance during a known read are errors, rather than logical missing resources. Asset JSON file sizes and aggregate input are checked before allocation; failed builds can be explicitly retried after repair.
+- **Responsibility/deletion cleanup:** removed the unused CLI JSON/PNG scanning chain and a redundant world-source forwarding function. Boundary checks now reject generator libraries in storage source/manifests and SQLite imports outside the explicit catalog sub-entry. No transport fallback, old resource parser, media URL alias or alternative driver was added.
+
+Direct expected-parent publication remains necessary for the online writer reconciling committed business revisions. Prepared publication adds an explicit reviewed-input constraint to that same pipeline; it does not introduce another publisher or resource protocol. Existing binding/retained-media authorization, source precedence, genuine missing sprites, documented configuration and runtime-config 404 behavior retain the business bases in the register below.
+
+### Follow-up acceptance
+
+| Check | Result |
+| --- | --- |
+| Frozen install; version, boundary, type, lint, format and whitespace checks; workspace build | Passed |
+| Full workspace tests with local PostgreSQL 17.11 | **294 passed, 0 failed, 0 skipped** |
+| Node 24.19.0 resources/storage/role tests, including explicit SQLite | **74 passed, 0 failed, 0 skipped** |
+| Production artifact tests; CLI, database and resources isolated artifacts | **2 + 1 + 1 + 1 passed** |
+| Frontend; overlays; transparency | **4 + 1 + 1 passed** |
+| Final four-family resource browser rerun | **2 passed** |
+| Final rebuilt production containers; real local MinIO with distinct read-only identity | **2 + 1 passed** |
+| Release acceptance | **3 passed; 1 real AWS/R2 environment test skipped** |
+| Existing capacity report fingerprint | Exact match: `c54a3d6471822162cdb3802ade826ec3b991231338c06c42c4759e15106aed93` |
+
+Test counts overlap and must not be added. The final browser and container reruns include the last source/allocation fixes. Benchmark policy/repository dependency sources were unchanged, so the existing full capacity sweep was fingerprint-verified rather than relabeling a new performance run. Production CDN, AWS/R2 credentials and supplier behavior remain untested. No deployment, production upload, commit or push was performed during this audit.
+
+### Audit fix commit boundaries
+
+| Commit | Responsibility and accompanying regression coverage |
+| --- | --- |
+| `a893857` | Cache admission and delivery leases; failed body/action writes, concurrent action reads and zero-retention reconstruction/publication. |
+| `887c75a` | Bounded source preparation and package boundaries; oversized JSON, corrupt declared regions and forbidden generator/SQLite dependencies. Removes obsolete source helpers. |
+| `efc2b4c` | Persistence activation and storage overlap checks; content-only public reader filesystem/driver isolation and explicitly enabled dynamic capabilities. |
+| `76521b2` | Publication retention and public verification work; longer configured retention and rejection before fetching without a dynamic repository. |
+| `3e8327e` | Browser view and byte-size consistency; initial mixed-generation heads and inconsistent cached/coalesced download references. |
+| `0decf36` | Reviewed prepared publications and explicit offline writers; local manifest output, source drift before upload and API-only CLI artifact isolation. |
+
+The split preserves the exact bytes of all 29 audited implementation, regression-test and workflow-document files. Post-split verification passed version/boundary/type/lint checks and **85 Node 24.19.0 targeted tests with zero failures or skips**. The audit record is committed separately. The final formatting checkpoint runs `pnpm format` across the workspace and has its own commit; a clean formatter result is recorded with an empty checkpoint commit. Deployment remains unexecuted.
+
 ## Takeover audit
 
 The interrupted checkout already contained substantial P1–P7 code, beyond the plan's old progress note. It was preserved and audited. Initial checks found one failing media error-contract test, lint errors and unformatted source. The initial capacity benchmark measured cache operations rather than repository delivery and did not execute the configured offered loads; the initial browser test used synthetic three-byte objects rather than actual resource formats.
