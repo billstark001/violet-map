@@ -14,7 +14,22 @@ test('world-list retries cancel superseded requests and never restore an obsolet
     if (url.endsWith('runtime-config.json')) return Response.json({});
     if (url.endsWith('api/capabilities'))
       return Response.json({
-        protocolVersion: 1,
+        protocolVersion: 2,
+        resourcesProtocol: 1,
+        delivery: {
+          mode: 'server',
+          families: [
+            'chunk',
+            'texture',
+            'atlas-image',
+            'atlas-manifest',
+            'asset-bundle',
+            'game-data',
+            'top-map-tile',
+            'overlay-media',
+          ],
+        },
+        worldReads: true,
         adminApi: false,
         users: false,
         worldWrites: false,

@@ -1,9 +1,26 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { initializeRuntime, apiUrl, apiTokenKey } from '../src/runtime.js';
+import { apiTokenKey, apiUrl, initializeRuntime } from '../src/runtime.js';
 
 const full = {
-  protocolVersion: 1,
+  protocolVersion: 2,
+  resourcesProtocol: 1,
+  delivery: {
+    mode: 'server',
+    families: [
+      'chunk',
+      'texture',
+      'atlas-image',
+      'atlas-manifest',
+      'asset-bundle',
+      'game-data',
+      'top-map-tile',
+      'overlay-media',
+    ],
+  },
+  worldReads: true,
+  contentReads: true,
+  contentWrites: false,
   adminApi: true,
   users: true,
   worldWrites: true,
@@ -38,7 +55,7 @@ test('runtime configuration only falls back on explicit 404 and isolates API tok
     String(input).endsWith('runtime-config.json')
       ? new Response(null, { status: 404 })
       : new Response(null, { status: 404 });
-  await initializeRuntime({ origin: 'https://map.test', fallbackApi: '/violet/' });
+  await assert.rejects(initializeRuntime({ origin: 'https://map.test', fallbackApi: '/violet/' }), /404/);
   assert.equal(apiUrl('api/worlds'), 'https://map.test/violet/api/worlds');
   globalThis.fetch = async (input) =>
     String(input).endsWith('runtime-config.json') ? Response.json({}) : new Response(null, { status: 500 });

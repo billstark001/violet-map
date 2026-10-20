@@ -1,15 +1,16 @@
+import { TOP_MAP_POSITION_OFFSET, TOP_MAP_POSITION_SCALE } from '@violet-map/render/top-map/mesh';
 import * as THREE from 'three';
-import { OverlayManager } from '../src/render/overlayManager';
 import {
   createMaterials,
   createSharedUniforms,
   createTextureAnimationUniforms,
   createTopMapMaterial,
 } from '../src/render/materials';
-import { TOP_MAP_POSITION_OFFSET, TOP_MAP_POSITION_SCALE } from '@violet-map/render/top-map/mesh';
-import { initializeRuntime } from '../src/runtime';
 import { OVERLAY_LIMITS } from '../src/render/overlayLimits';
+import { OverlayManager } from '../src/render/overlayManager';
 import { TransparencyRenderer } from '../src/render/transparency';
+import { resourceDownloader } from '../src/resources/download';
+import { initializeRuntime } from '../src/runtime';
 
 const query = new URLSearchParams(location.search);
 
@@ -199,6 +200,9 @@ setCamera('topOrthographic');
 renderer.setAnimationLoop(draw);
 
 const harness = {
+  clearDownloads() {
+    resourceDownloader.clear();
+  },
   set: (mapId: string | null, dimension = 'overworld', enabled = true) => manager.configure(mapId, dimension, enabled),
   refresh: () => manager.refresh(),
   camera: setCamera,

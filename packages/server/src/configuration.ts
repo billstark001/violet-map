@@ -1,14 +1,14 @@
-import path from 'node:path';
-import fs from 'node:fs';
 import type { S3StorageOptions } from '@violet-map/storage/types';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { YamlValue } from './configYaml.js';
 import { configurationSettings, type ConfigurationOptions } from './configurationSettings.js';
 
 import type { CreatableRole, ServiceCapabilities } from '@violet-map/core/contracts';
-import { createPublicObjectUrl } from '@violet-map/storage';
+import { resourceConfiguration } from './resourceConfiguration.js';
 
-export type { ConfigurationOptions } from './configurationSettings.js';
 export { readAdminConfig } from './adminConfiguration.js';
+export type { ConfigurationOptions } from './configurationSettings.js';
 
 const presets = {
   public: { adminApi: false, users: false, worldWrites: false, dataWrites: false, diagnostics: false },
@@ -19,12 +19,14 @@ const presets = {
 export function loadServerConfig(options: ConfigurationOptions = {}) {
   const setting = configurationSettings({ ...options, env: options.env ?? process.env });
   const { env, yamlValue, string, number, boolean, filePath, list } = setting;
+  const resources = resourceConfiguration(setting);
   const profile = string('DEPLOYMENT_PROFILE', 'full', 'deployment.profile');
   if (!Object.hasOwn(presets, profile)) throw new Error('DEPLOYMENT_PROFILE must be public, sync, or full');
   const preset = presets[profile as keyof typeof presets];
   const features = {
     adminApi: boolean('ADMIN_API_ENABLED', preset.adminApi, 'features.adminApi'),
     users: boolean('USERS_ENABLED', preset.users, 'features.users'),
+    worldReads: boolean('WORLD_READS_ENABLED', resources.delivery.mode === 'server', 'features.worldReads'),
     worldWrites: boolean('WORLD_WRITES_ENABLED', preset.worldWrites, 'features.worldWrites'),
     dataWrites: boolean('DATA_WRITES_ENABLED', preset.dataWrites, 'features.dataWrites'),
     diagnostics: boolean('DIAGNOSTICS_ENABLED', preset.diagnostics, 'features.diagnostics'),
@@ -94,13 +96,29 @@ export function loadServerConfig(options: ConfigurationOptions = {}) {
           : undefined,
     },
   };
-  const resolvedStorage = resolveStorage(setting, legacyStorage, features.contentReads, dataDir);
-  const mediaPublicBaseUrl = string('MEDIA_PUBLIC_BASE_URL', '', 'content.mediaPublicBaseUrl');
-  if (mediaPublicBaseUrl) createPublicObjectUrl(mediaPublicBaseUrl);
+  if (setting.env.CACHE_PREWARM !== undefined || setting.yamlValue('cache.prewarm') !== undefined)
+    throw new Error('CACHE_PREWARM/cache.prewarm was removed; use resources prepare');
+  const resolvedStorage = resolveStorage(
+    setting,
+    legacyStorage,
+    features.contentReads,
+    dataDir,
+    resources,
+    resources.delivery.mode === 'server' ||
+      resources.roles.includes('publish') ||
+      features.worldReads ||
+      features.worldWrites ||
+      features.dataWrites ||
+      features.contentReads,
+  );
+  if (env.MEDIA_PUBLIC_BASE_URL !== undefined || yamlValue('content.mediaPublicBaseUrl') !== undefined)
+    throw new Error('MEDIA_PUBLIC_BASE_URL/content.mediaPublicBaseUrl was removed; configure resources.delivery');
+  for (const mount of [resources.cache.sharedMount, resources.delivery.targetMount, resources.publication.storeMount])
+    if (mount && !resolvedStorage.backends[mount.backend]) throw new Error('unknown resource storage backend');
   return {
     deployment: { profile: profile as keyof typeof presets },
     features,
-    content: { mediaPublicBaseUrl: mediaPublicBaseUrl || undefined },
+    resources,
     server: {
       port: number('PORT', 3300, 1, 65535, 'port', 'server.port'),
       cors: { origins },
@@ -141,7 +159,6 @@ export function loadServerConfig(options: ConfigurationOptions = {}) {
       storageListMs: number('STORAGE_LIST_CACHE_MS', 2000, 0, Number.MAX_SAFE_INTEGER, 'cache.storageListMs'),
       manifestMs: number('MANIFEST_CACHE_MS', 5000, 0, Number.MAX_SAFE_INTEGER, 'cache.manifestMs'),
       worldListMs: number('WORLD_LIST_CACHE_MS', 15000, 0, Number.MAX_SAFE_INTEGER, 'cache.worldListMs'),
-      prewarm: boolean('CACHE_PREWARM', true, 'cache.prewarm'),
     },
     limits: {
       chunkReads: number('CHUNK_READ_CONCURRENCY', 8, 1, 1024, 'limits.chunkReads'),
@@ -174,7 +191,10 @@ export function loadServerConfig(options: ConfigurationOptions = {}) {
 
 export type ServerConfig = ReturnType<typeof loadServerConfig>;
 
-export type StorageBackend = { driver: 'local'; root: string } | ({ driver: 's3' } & Omit<S3StorageOptions, 'prefix'>);
+export type StorageBackend =
+  | { driver: 'server'; url: string; token: string }
+  | { driver: 'local'; root: string }
+  | ({ driver: 's3' } & Omit<S3StorageOptions, 'prefix'>);
 
 export interface StorageMount {
   backend: string;
@@ -186,6 +206,8 @@ function resolveStorage(
   legacy: { driver: 'local' | 's3'; worldsDir: string; s3: Omit<S3StorageOptions, 'bucket'> & { bucket?: string } },
   enabled: boolean,
   dataDir: string,
+  resources: import('./resourceConfiguration.js').ResourceConfiguration,
+  worldsEnabled: boolean,
 ) {
   const { env, cwd, base, yamlValue } = setting;
   const backends: Record<string, StorageBackend> = {};
@@ -206,7 +228,7 @@ function resolveStorage(
   const names = new Set(Object.keys(definitions));
   for (const key of Object.keys(env)) {
     const match =
-      /^STORAGE_BACKEND_([A-Z][A-Z0-9]*)_(DRIVER|ROOT|ENDPOINT|REGION|BUCKET|FORCE_PATH_STYLE|ACCESS_KEY_ID_ENV|SECRET_ACCESS_KEY_ENV|SESSION_TOKEN_ENV)$/.exec(
+      /^STORAGE_BACKEND_([A-Z][A-Z0-9]*)_(DRIVER|ROOT|ENDPOINT|REGION|BUCKET|FORCE_PATH_STYLE|ACCESS_KEY_ID_ENV|SECRET_ACCESS_KEY_ENV|SESSION_TOKEN_ENV|URL|TOKEN_ENV)$/.exec(
         key,
       );
     if (match) names.add(match[1].toLowerCase());
@@ -258,7 +280,24 @@ function resolveStorage(
         forcePathStyle: ['true', '1'].includes(force),
         credentials: accessKeyId && secretAccessKey ? { accessKeyId, secretAccessKey, sessionToken } : undefined,
       };
-    } else throw new Error(`backend ${name}.driver must be local or s3`);
+    } else if (driver === 'server') {
+      if (Object.keys(definition).some((key) => !['driver', 'url', 'tokenEnv'].includes(key)))
+        throw new Error('invalid remote world backend fields');
+      const url = get('url', 'URL'),
+        reference = get('tokenEnv', 'TOKEN_ENV');
+      if (!url || !reference || !/^[A-Z_][A-Z0-9_]*$/.test(reference) || !env[reference])
+        throw new Error('remote world source requires URL and credential environment reference');
+      const parsed = new URL(url);
+      if (
+        !['http:', 'https:'].includes(parsed.protocol) ||
+        parsed.username ||
+        parsed.password ||
+        parsed.search ||
+        parsed.hash
+      )
+        throw new Error('invalid remote world URL');
+      backends[name] = { driver: 'server', url: parsed.href, token: env[reference]! };
+    } else throw new Error(`backend ${name}.driver must be local, s3 or server`);
   }
   for (const backend of Object.values(backends))
     if (backend.driver === 's3' && backend.endpoint) {
@@ -379,7 +418,9 @@ function resolveStorage(
       return parent === root ? root : path.join(effectivePath(parent), path.basename(root));
     }
   };
-  const locations = (['worlds', ...(enabled ? ['content', 'blobs'] : [])] as (keyof typeof mounts)[]).map((name) => {
+  const locations = (
+    [...(worldsEnabled ? ['worlds'] : []), ...(enabled ? ['content', 'blobs'] : [])] as (keyof typeof mounts)[]
+  ).map((name) => {
     const mount = mounts[name],
       backend = backends[mount.backend];
     return {
@@ -387,10 +428,45 @@ function resolveStorage(
       identity:
         backend.driver === 'local'
           ? 'local'
-          : `s3:${new URL(backend.endpoint ?? `https://s3.${backend.region ?? 'auto'}.amazonaws.com`).href}:${backend.bucket}`,
+          : backend.driver === 'server'
+            ? `server:${backend.url}`
+            : `s3:${new URL(backend.endpoint ?? `https://s3.${backend.region ?? 'auto'}.amazonaws.com`).href}:${backend.bucket}`,
       prefix: backend.driver === 'local' ? effectivePath(path.resolve(backend.root, mount.prefix)) : mount.prefix,
     };
   });
+  for (const name of ['content', 'blobs'] as const)
+    if (enabled && backends[mounts[name].backend].driver === 'server')
+      throw new Error('remote world protocol is only a source backend');
+  const extras: [string, StorageMount][] = [];
+  for (const [name, mount] of [
+    ['resourceTarget', resources.delivery.targetMount],
+    ['publicationStore', resources.publication.storeMount],
+    ['sharedCache', resources.cache.sharedBytes > 0 ? resources.cache.sharedMount : null],
+  ] as const)
+    if (mount) extras.push([name, mount]);
+  for (const [name, mount] of extras) {
+    const backend = backends[mount.backend];
+    if (!backend) throw new Error(`unknown backend for ${name}`);
+    if (backend.driver === 'server')
+      throw new Error('resource authority/cache mounts require conditional object storage');
+    locations.push({
+      name: name as keyof typeof mounts,
+      identity:
+        backend.driver === 'local'
+          ? 'local'
+          : `s3:${new URL(backend.endpoint ?? `https://s3.${backend.region ?? 'auto'}.amazonaws.com`).href}:${backend.bucket}`,
+      prefix: backend.driver === 'local' ? effectivePath(path.resolve(backend.root, mount.prefix)) : mount.prefix,
+    });
+  }
+  const dynamic = resources.delivery.mode === 'server' || resources.roles.includes('publish');
+  const directories: [string, string][] = [];
+  if (dynamic && resources.cache.local && resources.cache.local.bytes > 0)
+    directories.push(['resourceLocal', resources.cache.local.directory]);
+  if (dynamic && resources.cache.index.driver === 'sqlite')
+    directories.push(['resourceIndex', resources.cache.index.path]);
+  if (dynamic && resources.work.workspace) directories.push(['resourceWorkspace', resources.work.workspace.directory]);
+  for (const [name, directory] of directories)
+    locations.push({ name: name as keyof typeof mounts, identity: 'local', prefix: effectivePath(directory) });
   for (let a = 0; a < locations.length; a++)
     for (let b = a + 1; b < locations.length; b++) {
       const x = locations[a],

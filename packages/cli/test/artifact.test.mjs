@@ -81,9 +81,24 @@ test('relocated CLI works without render/storage/server, TS sources, tsx, or nat
       response.setHeader('content-type', 'application/json');
       response.end(
         JSON.stringify({
-          protocolVersion: 1,
+          protocolVersion: 2,
+          resourcesProtocol: 1,
+          delivery: {
+            mode: 'server',
+            families: [
+              'chunk',
+              'texture',
+              'atlas-image',
+              'atlas-manifest',
+              'asset-bundle',
+              'game-data',
+              'top-map-tile',
+              'overlay-media',
+            ],
+          },
           adminApi: true,
           users: false,
+          worldReads: true,
           worldWrites: true,
           dataWrites: false,
           diagnostics: false,
@@ -192,6 +207,8 @@ test('relocated CLI works without render/storage/server, TS sources, tsx, or nat
     const destination = path.join(root, 'node_modules/@violet-map', name);
     await fs.mkdir(destination);
     await fs.cp(new URL('dist/', source), path.join(destination, 'dist'), { recursive: true });
+    if (name === 'resources')
+      await fs.cp(new URL('data-defaults/', source), path.join(destination, 'data-defaults'), { recursive: true });
     const metadata = JSON.parse(await fs.readFile(new URL('package.json', source), 'utf8'));
     await fs.writeFile(path.join(destination, 'package.json'), JSON.stringify(metadata));
     for (const dependency of Object.keys(metadata.dependencies)) {
@@ -203,6 +220,9 @@ test('relocated CLI works without render/storage/server, TS sources, tsx, or nat
     return destination;
   }
   await installCapability('render');
+  await assert.rejects(run(['bake-topmap', archive]), /requires @violet-map\/resources/);
+  await installCapability('storage');
+  await installCapability('resources');
   await run(['bake-topmap', archive, '--out', path.join(root, 'topmap')]);
   const renderEntry = path.join(root, 'node_modules/@violet-map/render/dist/index.js');
   const originalRender = await fs.readFile(renderEntry, 'utf8');
@@ -213,7 +233,6 @@ test('relocated CLI works without render/storage/server, TS sources, tsx, or nat
     return true;
   });
   await fs.writeFile(renderEntry, originalRender);
-  await installCapability('storage');
   await run([
     'world',
     'sync',

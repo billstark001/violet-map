@@ -71,7 +71,7 @@ export interface AtlasDocument {
 
 export interface TextureAtlasManifest {
   cacheKey: string;
-  image: string;
+  image: import('./resourceTypes.js').ResourceRef;
   width: number;
   height: number;
   index: AtlasIndex;
@@ -104,21 +104,22 @@ export interface ChunkCoverage {
 }
 
 export interface ServiceCapabilities {
-  protocolVersion: 1;
+  protocolVersion: 2;
+  resourcesProtocol: 1;
+  delivery: { mode: 'server' | 'public'; families: import('./resourceTypes.js').ResourceKind[] };
   adminApi: boolean;
   users: boolean;
+  worldReads: boolean;
   worldWrites: boolean;
   dataWrites: boolean;
   diagnostics: boolean;
-  contentReads?: boolean;
-  contentWrites?: boolean;
+  contentReads: boolean;
+  contentWrites: boolean;
   authMode: 'none' | 'static' | 'users';
 }
 
 export interface FrontendRuntimeConfig {
   apiBaseUrl?: string;
-  capabilityFallback?: 'legacy' | 'error';
-  mediaDelivery?: 'proxy' | 'public';
 }
 
 export function asCreatableRole(value: unknown): CreatableRole | undefined {
@@ -162,44 +163,63 @@ export function parseFrontendRuntimeConfig(value: unknown): FrontendRuntimeConfi
     throw new Error('runtime-config.json must be an object');
   const config = value as Record<string, unknown>;
   for (const key of Object.keys(config))
-    if (!['apiBaseUrl', 'capabilityFallback', 'mediaDelivery'].includes(key))
-      throw new Error(`unknown runtime configuration field: ${key}`);
+    if (!['apiBaseUrl'].includes(key)) throw new Error(`unknown runtime configuration field: ${key}`);
   if (config.apiBaseUrl !== undefined && typeof config.apiBaseUrl !== 'string')
     throw new Error('apiBaseUrl must be a string');
-  if (config.capabilityFallback !== undefined && !['legacy', 'error'].includes(String(config.capabilityFallback)))
-    throw new Error('capabilityFallback must be legacy or error');
-  if (config.mediaDelivery !== undefined && !['proxy', 'public'].includes(String(config.mediaDelivery)))
-    throw new Error('mediaDelivery must be proxy or public');
   return config as FrontendRuntimeConfig;
 }
 
 export function parseServiceCapabilities(value: unknown): ServiceCapabilities {
   if (!value || typeof value !== 'object') throw new Error('invalid service capabilities');
+  if (
+    Object.keys(value).some(
+      (key) =>
+        ![
+          'protocolVersion',
+          'resourcesProtocol',
+          'delivery',
+          'adminApi',
+          'users',
+          'worldReads',
+          'worldWrites',
+          'dataWrites',
+          'diagnostics',
+          'contentReads',
+          'contentWrites',
+          'authMode',
+        ].includes(key),
+    )
+  )
+    throw new Error('unknown service capability');
   const capabilities = value as ServiceCapabilities;
   if (
-    capabilities.protocolVersion !== 1 ||
+    capabilities.protocolVersion !== 2 ||
+    capabilities.resourcesProtocol !== 1 ||
+    !capabilities.delivery ||
+    Object.keys(capabilities.delivery).some((key) => !['mode', 'families'].includes(key)) ||
+    !['server', 'public'].includes(capabilities.delivery.mode) ||
+    !Array.isArray(capabilities.delivery.families) ||
+    new Set(capabilities.delivery.families).size !== capabilities.delivery.families.length ||
+    capabilities.delivery.families.some(
+      (kind) =>
+        ![
+          'chunk',
+          'texture',
+          'atlas-image',
+          'atlas-manifest',
+          'asset-bundle',
+          'game-data',
+          'top-map-tile',
+          'overlay-media',
+        ].includes(kind),
+    ) ||
     !['none', 'static', 'users'].includes(capabilities.authMode) ||
-    ['adminApi', 'users', 'worldWrites', 'dataWrites', 'diagnostics'].some(
+    ['adminApi', 'users', 'worldReads', 'worldWrites', 'dataWrites', 'diagnostics'].some(
       (key) => typeof (value as Record<string, unknown>)[key] !== 'boolean',
     )
   )
     throw new Error('invalid service capabilities');
   for (const key of ['contentReads', 'contentWrites'] as const)
-    if (capabilities[key] !== undefined && typeof capabilities[key] !== 'boolean')
-      throw new Error('invalid service capabilities');
-  return {
-    ...capabilities,
-    contentReads: capabilities.contentReads ?? false,
-    contentWrites: capabilities.contentWrites ?? false,
-  };
+    if (typeof capabilities[key] !== 'boolean') throw new Error('invalid service capabilities');
+  return capabilities;
 }
-
-export const LEGACY_SERVICE_CAPABILITIES: ServiceCapabilities = {
-  protocolVersion: 1,
-  adminApi: true,
-  users: true,
-  worldWrites: true,
-  dataWrites: true,
-  diagnostics: true,
-  authMode: 'users',
-};

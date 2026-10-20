@@ -1,16 +1,7 @@
+import { type AtlasIndex, type TextureAlphaMap } from '@violet-map/core/assets';
+import { fetchTexture, fetchTextureAtlas } from './api';
 import { loadBrowserImage } from './browserImage';
-import { hashString32 } from '@violet-map/core/hash';
-import { resolveApiResourceUrl } from './runtime';
-import { normalizeId } from '@violet-map/core/domain';
-import { mapWithConcurrency } from '@violet-map/core/async';
-import {
-  type AssetBundle,
-  type AtlasIndex,
-  type BlockInfoMap,
-  type BlockModelJson,
-  type TextureAlphaMap,
-} from '@violet-map/core/assets';
-import { fetchTextureAtlas, textureUrl } from './api';
+import { downloadResource } from './resources/download';
 
 export interface BuiltAtlas {
   cacheKey: string;
@@ -39,7 +30,6 @@ function encode16(target: Uint8Array, offset: number, value: number) {
 
 const MAX_ANIMATION_TABLE_ENTRIES = 65535;
 const MAX_ANIMATION_FRAME_TICKS = 255;
-const MAX_PARALLEL_FALLBACK_TEXTURE_LOADS = 16;
 
 /** Encode animation sequences within the 16-bit start and length fields used by shaders. */
 export function textureAnimationData(index: AtlasIndex): TextureAnimationData {
@@ -92,253 +82,52 @@ export function textureAnimationData(index: AtlasIndex): TextureAnimationData {
   return { ids, info, infoSize: [infoWidth, infoHeight], frames, frameSize: [frameWidth, frameHeight] };
 }
 
-export function collectTextureIds(bundle: AssetBundle, blockInfo: BlockInfoMap): string[] {
-  const ids = new Set<string>();
-  const models = new Set<string>();
-  const seenModels = new Set<string>();
-  const add = (v: unknown) => {
-    if (v && typeof v === 'object') v = (v as { sprite?: unknown }).sprite;
-    if (typeof v !== 'string') return;
-    if (!v.startsWith('#')) ids.add(normalizeId(v));
-  };
-  const addModel = (v: unknown) => {
-    if (v && typeof v === 'object') v = (v as { model?: unknown }).model;
-    if (typeof v === 'string') models.add(normalizeId(v));
-  };
-  const collectBlockstateModels = (bs: any) => {
-    if (bs?.variants) {
-      for (const value of Object.values<any>(bs.variants)) {
-        if (Array.isArray(value)) value.forEach(addModel);
-        else addModel(value);
-      }
-    }
-    if (Array.isArray(bs?.multipart)) {
-      for (const part of bs.multipart as any[]) {
-        const apply = part?.apply;
-        if (Array.isArray(apply)) apply.forEach(addModel);
-        else addModel(apply);
-      }
-    }
-  };
-  for (const bs of Object.values(bundle.blockstates)) collectBlockstateModels(bs);
-  const collectRenderer = (definition: unknown) => {
-    if (!definition || typeof definition !== 'object') return;
-    const renderer = definition as {
-      model?: unknown;
-      texture?: unknown;
-      textureByBlock?: unknown;
-      variants?: Record<string, unknown>;
-    };
-    addModel(renderer.model);
-    add(renderer.texture);
-    if (renderer.textureByBlock && typeof renderer.textureByBlock === 'object') {
-      for (const texture of Object.values(renderer.textureByBlock)) add(texture);
-    }
-    for (const variant of Object.values(renderer.variants ?? {})) collectRenderer(variant);
-  };
-  for (const definition of Object.values(bundle.renderers?.blockEntities ?? {})) collectRenderer(definition);
-  for (const definition of Object.values(bundle.renderers?.entities ?? {})) collectRenderer(definition);
-
-  const visitModel = (id: string) => {
-    if (seenModels.has(id)) return;
-    seenModels.add(id);
-    const model = bundle.models[id] as BlockModelJson | undefined;
-    if (!model) return;
-    if (model.textures) for (const v of Object.values(model.textures)) add(v);
-    if (typeof model.parent === 'string') visitModel(normalizeId(model.parent));
-  };
-  for (const id of models) {
-    visitModel(id);
-  }
-  for (const info of Object.values(blockInfo)) {
-    if (!info.fluid) continue;
-    add(info.fluid.texture);
-    add(info.fluid.flowTexture);
-  }
-  return [...ids];
-}
-
-/** Identify mesh-relevant fallback output, including UV placement, LOD colors
- * and alpha classification. Texture names alone cannot identify changed packs. */
-export function fallbackAtlasKey(
-  index: AtlasIndex,
-  avgColors: BuiltAtlas['avgColors'],
-  hasAlpha: TextureAlphaMap,
-): string {
-  const entries = Object.entries(index).sort(([a], [b]) => a.localeCompare(b));
-  const metadata = entries.map(([id, rectangle]) => [id, rectangle, avgColors[id], hasAlpha[id]]);
-  return `client-native-v2:${hashString32(JSON.stringify(metadata)).toString(36)}`;
-}
-
-/** The fallback atlas freezes declared vertical sprite sheets at their first square frame. */
-export function fallbackTextureSize(width: number, height: number, animated: boolean): [number, number] {
-  return [width, animated && height > width ? width : height];
-}
-
-/** 构建纹理图集。动画贴图（竖长条）只取第一帧。 */
-export async function buildAtlas(
-  ids: string[],
-  animatedIds: ReadonlySet<string> = new Set(),
+export async function resourceImage(
+  reference: import('@violet-map/core/resources').ResourceRef,
   signal?: AbortSignal,
-): Promise<BuiltAtlas> {
-  signal?.throwIfAborted();
+): Promise<HTMLImageElement> {
+  const bytes = await downloadResource(reference, signal);
+  const url = URL.createObjectURL(new Blob([bytes], { type: reference.artifact.mediaType }));
   try {
-    const manifest = await fetchTextureAtlas(ids, signal);
-    const img = await loadBrowserImage(resolveApiResourceUrl(manifest.image), signal);
-    const canvas = document.createElement('canvas');
-    canvas.width = manifest.width;
-    canvas.height = manifest.height;
-    const ctx = canvas.getContext('2d')!;
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(img, 0, 0);
-    return {
-      cacheKey: manifest.cacheKey ?? manifest.image.split('/').pop() ?? 'server-atlas',
-      canvas,
-      index: manifest.index,
-      avgColors: manifest.avgColors,
-      hasAlpha: manifest.hasAlpha,
-      animations: textureAnimationData(manifest.index),
-    };
-  } catch (e) {
-    signal?.throwIfAborted();
-    console.warn('batched texture atlas failed; falling back to individual textures', e);
+    return await loadBrowserImage(url, signal);
+  } finally {
+    URL.revokeObjectURL(url);
   }
+}
 
-  const PAD = 8;
-  const results = await mapWithConcurrency(ids, MAX_PARALLEL_FALLBACK_TEXTURE_LOADS, async (id) => {
-    try {
-      return await loadBrowserImage(textureUrl(id), signal);
-    } catch {
-      signal?.throwIfAborted();
-      return null;
-    }
-  });
-  const entries: {
-    id: string;
-    img: HTMLImageElement | null;
-    sourceWidth: number;
-    sourceHeight: number;
-    width: number;
-    height: number;
-  }[] = [{ id: '__missing__', img: null, sourceWidth: 16, sourceHeight: 16, width: 16, height: 16 }];
-  results.forEach((img, i) => {
-    // Declared animated sprites use the first square frame. Static textures
-    // keep their native aspect and resolution for pixel-accurate model UVs.
-    const [sourceWidth, sourceHeight] = fallbackTextureSize(
-      img?.width ?? 16,
-      img?.height ?? 16,
-      animatedIds.has(ids[i]),
-    );
-    const scale = Math.min(1, 256 / Math.max(sourceWidth, sourceHeight));
-    entries.push({
-      id: ids[i],
-      img,
-      sourceWidth,
-      sourceHeight,
-      width: Math.max(1, Math.round(sourceWidth * scale)),
-      height: Math.max(1, Math.round(sourceHeight * scale)),
-    });
-  });
+export async function loadTextureImage(id: string, signal?: AbortSignal): Promise<HTMLImageElement | null> {
+  const reference = await fetchTexture(id, signal);
+  return reference ? resourceImage(reference, signal) : null;
+}
 
-  type Placement = { x: number; y: number };
-  const tryPack = (size: number): Placement[] | null => {
-    const placements: Placement[] = [];
-    let x = 0;
-    let y = 0;
-    let rowHeight = 0;
-    for (const entry of entries) {
-      const cellWidth = entry.width + PAD * 2;
-      const cellHeight = entry.height + PAD * 2;
-      if (cellWidth > size || cellHeight > size) return null;
-      if (x + cellWidth > size) {
-        x = 0;
-        y += rowHeight;
-        rowHeight = 0;
-      }
-      if (y + cellHeight > size) return null;
-      placements.push({ x, y });
-      x += cellWidth;
-      rowHeight = Math.max(rowHeight, cellHeight);
-    }
-    return placements;
-  };
-  let size = 64;
-  let placements = tryPack(size);
-  while (!placements && size < 8192) {
-    size *= 2;
-    placements = tryPack(size);
-  }
-  if (!placements) throw new Error('client texture atlas exceeds 8192px');
+export async function buildAtlas(ids: string[], signal?: AbortSignal): Promise<BuiltAtlas> {
+  const manifest = await fetchTextureAtlas(ids, signal);
+  const image = await resourceImage(manifest.image, signal);
   const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
-  ctx.imageSmoothingEnabled = false;
-
-  const index: AtlasIndex = {};
-  const avgColors: Record<string, [number, number, number]> = {};
-  const hasAlpha: TextureAlphaMap = {};
-
-  entries.forEach((e, i) => {
-    const { x, y } = placements![i];
-    const tx = x + PAD;
-    const ty = y + PAD;
-    if (e.img) {
-      ctx.drawImage(e.img, 0, 0, e.sourceWidth, e.sourceHeight, tx, ty, e.width, e.height);
-    } else {
-      ctx.fillStyle = '#f800f8';
-      ctx.fillRect(tx, ty, e.width, e.height);
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(tx, ty, 8, 8);
-      ctx.fillRect(tx + 8, ty + 8, 8, 8);
-    }
-    ctx.drawImage(canvas, tx, ty, e.width, 1, tx, y, e.width, PAD);
-    ctx.drawImage(canvas, tx, ty + e.height - 1, e.width, 1, tx, ty + e.height, e.width, PAD);
-    ctx.drawImage(canvas, tx, ty, 1, e.height, x, ty, PAD, e.height);
-    ctx.drawImage(canvas, tx + e.width - 1, ty, 1, e.height, tx + e.width, ty, PAD, e.height);
-    ctx.drawImage(canvas, tx, ty, 1, 1, x, y, PAD, PAD);
-    ctx.drawImage(canvas, tx + e.width - 1, ty, 1, 1, tx + e.width, y, PAD, PAD);
-    ctx.drawImage(canvas, tx, ty + e.height - 1, 1, 1, x, ty + e.height, PAD, PAD);
-    ctx.drawImage(canvas, tx + e.width - 1, ty + e.height - 1, 1, 1, tx + e.width, ty + e.height, PAD, PAD);
-    index[e.id] = { u0: tx / size, v0: ty / size, u1: (tx + e.width) / size, v1: (ty + e.height) / size };
-    const data = ctx.getImageData(tx, ty, e.width, e.height).data;
-    let r = 0,
-      g = 0,
-      b = 0,
-      n = 0;
-    let alpha = false;
-    for (let p = 0; p < data.length; p += 4) {
-      if (data[p + 3] < 250) alpha = true;
-      if (data[p + 3] < 32) continue;
-      r += data[p];
-      g += data[p + 1];
-      b += data[p + 2];
-      n++;
-    }
-    avgColors[e.id] = n ? [r / n / 255, g / n / 255, b / n / 255] : [1, 0, 1];
-    hasAlpha[e.id] = alpha;
-  });
-  const ret: BuiltAtlas = {
-    cacheKey: fallbackAtlasKey(index, avgColors, hasAlpha),
+  canvas.width = manifest.width;
+  canvas.height = manifest.height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('atlas canvas is unavailable');
+  context.imageSmoothingEnabled = false;
+  context.drawImage(image, 0, 0);
+  return {
+    cacheKey: manifest.cacheKey,
     canvas,
-    index,
-    avgColors,
-    hasAlpha,
-    animations: textureAnimationData(index),
+    index: manifest.index,
+    avgColors: manifest.avgColors,
+    hasAlpha: manifest.hasAlpha,
+    animations: textureAnimationData(manifest.index),
   };
-  return ret;
 }
 
 /** 载入原版 colormap（256×256 RGBA）。 */
 export async function loadColormap(id: string, signal?: AbortSignal): Promise<Uint8Array | null> {
-  try {
-    const img = await loadBrowserImage(textureUrl(id), signal);
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = 256;
-    const ctx = canvas.getContext('2d')!;
-    ctx.drawImage(img, 0, 0, 256, 256);
-    return new Uint8Array(ctx.getImageData(0, 0, 256, 256).data.buffer);
-  } catch {
-    signal?.throwIfAborted();
-    return null;
-  }
+  const image = await loadTextureImage(id, signal);
+  if (!image) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 256;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('colormap canvas is unavailable');
+  context.drawImage(image, 0, 0, 256, 256);
+  return new Uint8Array(context.getImageData(0, 0, 256, 256).data.buffer);
 }

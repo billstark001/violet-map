@@ -1,9 +1,9 @@
+import { decompress } from '@violet-map/core/nbt';
+import { getRegionChunk } from '@violet-map/core/region';
+import { decodeRegionChunk, decompressNbt } from '@violet-map/resources/nbt-codec';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { deflateSync, gzipSync } from 'node:zlib';
-import { decompress } from '@violet-map/core/nbt';
-import { getRegionChunk } from '@violet-map/core/region';
-import { decodeRegionChunk, decompressNbt } from '../src/nbtCodec.js';
 
 const raw = new Uint8Array([10, 0, 0, 0]);
 

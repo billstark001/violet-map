@@ -8,8 +8,7 @@ const base = process.env.STATIC_BASE_PATH ?? '/';
 if (!base.startsWith('/') || !base.endsWith('/') || base.includes('..'))
   throw new Error('STATIC_BASE_PATH must start and end with /');
 const apiBaseUrl = process.env.API_BASE_URL ?? process.argv[3];
-if (apiBaseUrl !== undefined)
-  await writeFile(path.join(root, 'runtime-config.json'), JSON.stringify({ apiBaseUrl, capabilityFallback: 'legacy' }));
+if (apiBaseUrl !== undefined) await writeFile(path.join(root, 'runtime-config.json'), JSON.stringify({ apiBaseUrl }));
 const mime = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',

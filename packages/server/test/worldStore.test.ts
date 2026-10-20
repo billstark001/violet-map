@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { test } from 'node:test';
 
 test('a world can discover its first region in a modern dimension directory', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-world-'));
@@ -16,8 +16,8 @@ test('a world can discover its first region in a modern dimension directory', as
     const config = loadServerConfig();
     const { createStorage } = await import('../src/storage.js');
     const { createWorldStore } = await import('../src/worldStore.js');
-    const { createTopMapService } = await import('../src/topMap.js');
     const worldStorage = await createStorage(config);
+    const { createTopMapService } = await import('../src/topMap.js');
     const topMap = createTopMapService(worldStorage, config);
     const { getTopMapManifest, getWorldCapabilities } = topMap;
     const {
@@ -29,7 +29,7 @@ test('a world can discover its first region in a modern dimension directory', as
       listWorlds,
       saveChunkNbt,
       saveWorldFile,
-    } = createWorldStore(worldStorage, topMap, config);
+    } = createWorldStore(worldStorage, config);
     const chunks = [{ cx: 0, cz: 0 }];
     assert.equal((await getChunkMetadataBatch('testworld', 'minecraft:overworld', chunks))[0].missing, true);
     assert.deepEqual(await listWorlds(), []);
@@ -110,7 +110,7 @@ test('a world can discover its first region in a modern dimension directory', as
       encode({ 'minecraft:overworld': { hasTopMap: true, topMap: { regions: [] } } }),
     );
     invalidateStoredFile(manifestPath);
-    assert.equal((await getTopMapManifest('testworld'))?.dimensions['minecraft:overworld']?.hasTopMap, true);
+    await assert.rejects(getTopMapManifest('testworld'), { code: 'TOPMAP_REBAKE_REQUIRED' });
 
     await saveWorldFile(
       'testworld',
@@ -121,8 +121,8 @@ test('a world can discover its first region in a modern dimension directory', as
 
     await worldStorage.write(manifestPath, encode({ 'minecraft:overworld': null }));
     invalidateStoredFile(manifestPath);
-    assert.equal(await getTopMapManifest('testworld'), null);
-    assert.equal((await getWorldCapabilities('testworld')).hasTopMap, false);
+    await assert.rejects(getTopMapManifest('testworld'), { code: 'TOPMAP_REBAKE_REQUIRED' });
+    await assert.rejects(getWorldCapabilities('testworld'), { code: 'TOPMAP_REBAKE_REQUIRED' });
   } finally {
     if (previousWorldsDir === undefined) delete process.env.WORLDS_DIR;
     else process.env.WORLDS_DIR = previousWorldsDir;
@@ -138,10 +138,9 @@ test('warm chunk reads reuse entity NBT and deleting a world releases its cached
   const { loadServerConfig } = await import('../src/configuration.js');
   const { LocalStorage } = await import('@violet-map/storage/local');
   const { createWorldStore } = await import('../src/worldStore.js');
-  const { createTopMapService } = await import('../src/topMap.js');
   const config = loadServerConfig({ env: { WORLDS_DIR: root }, cwd: root });
   const storage = new LocalStorage(root);
-  const store = createWorldStore(storage, createTopMapService(storage, config), config);
+  const store = createWorldStore(storage, config);
   const region = (payload: Uint8Array) => {
     const bytes = new Uint8Array(3 * 4096);
     const view = new DataView(bytes.buffer);
@@ -180,7 +179,6 @@ test('region-only batches avoid per-chunk negative HEADs and still discover newl
   const { CachedStorage } = await import('@violet-map/storage');
   const { loadServerConfig } = await import('../src/configuration.js');
   const { createWorldStore } = await import('../src/worldStore.js');
-  const { createTopMapService } = await import('../src/topMap.js');
   let probes = 0;
   class CountingStorage extends LocalStorage {
     override async stat(file: string) {
@@ -190,7 +188,7 @@ test('region-only batches avoid per-chunk negative HEADs and still discover newl
   }
   const storage = new CachedStorage(new CountingStorage(root), { listTtlMs: 60_000 });
   const config = loadServerConfig({ env: { DEPLOYMENT_PROFILE: 'public' }, cwd: root });
-  const store = createWorldStore(storage, createTopMapService(storage, config), config);
+  const store = createWorldStore(storage, config);
   const region = new Uint8Array(3 * 4096);
   const view = new DataView(region.buffer);
   for (let index = 0; index < 128; index++) view.setUint32(index * 4, (2 << 8) | 1);

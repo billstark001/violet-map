@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-import type { AtomicObjectStorage, ObjectReader } from '@violet-map/core/storage';
 import {
   contentId,
   ContentValidationError,
@@ -14,14 +12,19 @@ import {
   type MapSourceStatus,
   type MediaDocument,
   type MediaVersion,
-  type OverlayManifest,
+  type OverlaySnapshot,
 } from '@violet-map/core/overlays';
+import { mediaArtifact } from '@violet-map/core/resources';
+import type { AtomicObjectStorage, ObjectReader } from '@violet-map/core/storage';
+import type { ArtifactRead, BlobRepository } from '@violet-map/resources';
+import type { ConditionalObjectWriter } from '@violet-map/storage';
+import { randomUUID } from 'node:crypto';
 import type { ByteRange } from './httpRange.js';
 
 /** Published metadata with deferred blob access; ranges are inclusive and must be in bounds. */
 export interface PublishedMedia {
   version: MediaVersion;
-  read(range?: ByteRange): Promise<Uint8Array>;
+  read(range?: ByteRange): Promise<ArtifactRead>;
 }
 
 export class ContentError extends Error {
@@ -90,12 +93,13 @@ export class ContentService {
   private pending: Promise<unknown> = Promise.resolve();
   constructor(
     private readonly content: AtomicObjectStorage,
-    private readonly blobs: AtomicObjectStorage,
+    private readonly blobs: AtomicObjectStorage & ConditionalObjectWriter,
     private readonly worlds: ObjectReader,
-    private readonly options: { publicMediaUrl?: (blob: string) => string } = {},
+    private readonly repository: BlobRepository,
+    private readonly coordinate: <T>(operation: () => Promise<T>) => Promise<T> = (operation) => operation(),
   ) {}
   private mutate<T>(operation: () => Promise<T>): Promise<T> {
-    const next = this.pending.then(operation);
+    const next = this.pending.then(() => this.coordinate(operation));
     this.pending = next.catch(() => {});
     return next;
   }
@@ -377,12 +381,11 @@ export class ContentService {
       name,
       versions: [version.versionId],
     });
-    // Blob uploads are independent; no metadata references them until publication.
-    await this.blobs.replace(version.blob, bytes, type);
     return this.mutate(async () => {
       const current = id ? await this.getMedia(id) : null;
       const previousHead = id ? await this.mediaHead(id) : null;
       if (current) this.match(current, expected);
+      await this.repository.ensureOriginal(this.blobs, mediaArtifact(version), bytes);
       const document = parseMediaDocument({
         ...candidate,
         revision: current ? current.revision + 1 : 1,
@@ -438,12 +441,11 @@ export class ContentService {
         await this.content.replace(`assets/${id}/head.json`, encode({ ...head, deleted: true }), 'application/json');
     });
   }
-  async manifest(id: string, dimension: string, delivery: 'proxy' | 'public' = 'proxy'): Promise<OverlayManifest> {
+  async snapshot(id: string, dimension: string): Promise<OverlaySnapshot> {
     const map = await this.getMap(id);
     const dim = normalizeContentDimension(dimension);
     const sourceStatus = await this.sourceStatus(map);
-    const result: OverlayManifest = {
-      schemaVersion: 1,
+    const result: OverlaySnapshot = {
       mapId: id,
       mapRevision: map.revision,
       dimension: dim,
@@ -469,58 +471,63 @@ export class ContentService {
           if (!versions.has(key)) versions.set(key, await this.getMediaVersion(f.assetId, f.versionId));
         }
     }
-    result.media = [...versions.values()].map((version) => ({
-      version,
-      url: `/api/maps/${id}/media/${version.assetId}/${version.versionId}?dimension=${encodeURIComponent(dim)}`,
-      ...(delivery === 'public' && this.options.publicMediaUrl
-        ? { publicUrl: this.options.publicMediaUrl(version.blob) }
-        : {}),
-    }));
+    result.media = [...versions.values()];
     return result;
   }
   /** Resolve public binding and source identity before permitting any blob access. */
   async openPublicMedia(mapId: string, dimension: string, assetId: string, versionId: string): Promise<PublishedMedia> {
-    const manifest = await this.manifest(mapId, dimension);
+    const manifest = await this.snapshot(mapId, dimension);
     if (manifest.sourceStatus === 'mismatch')
       throw new ContentError('SOURCE_MISMATCH', 409, 'world archive identity does not match');
-    const item = manifest.media.find((m) => m.version.assetId === assetId && m.version.versionId === versionId);
+    const item = manifest.media.find((m) => m.assetId === assetId && m.versionId === versionId);
     if (!item) throw new ContentError('CONTENT_NOT_FOUND', 404, 'resource is not bound for public display');
-    return this.mediaObject(item.version);
+    return this.mediaObject(item);
   }
   /** Resolve a retained media version without reading its blob. */
   async openMedia(id: string, versionId: string): Promise<PublishedMedia> {
     return this.mediaObject(await this.getMediaVersion(id, versionId));
   }
-  private mediaObject(version: MediaVersion): PublishedMedia {
+  private async mediaObject(version: MediaVersion): Promise<PublishedMedia> {
+    const stat = await this.blobs.stat(version.blob);
+    if (!stat || stat.size !== version.bytes)
+      throw new ContentError('BACKEND_UNAVAILABLE', 503, 'retained media original is missing or incomplete');
     return {
       version,
-      read: async (range) => {
-        if (
-          range &&
-          (!Number.isSafeInteger(range.start) ||
-            !Number.isSafeInteger(range.end) ||
-            range.start < 0 ||
-            range.end < range.start ||
-            range.end >= version.bytes)
-        )
-          throw new RangeError('media range is out of bounds');
-        const bytes = range
-          ? await this.blobs.readRange(version.blob, range.start, range.end - range.start + 1)
-          : await this.blobs.read(version.blob);
-        if (!bytes || bytes.length !== (range ? range.end - range.start + 1 : version.bytes))
-          throw new ContentError('CONTENT_BACKEND_UNAVAILABLE', 503, 'published blob is missing or incomplete');
-        return bytes;
-      },
+      read: (range) => this.repository.readObject(this.blobs, version.blob, mediaArtifact(version), range),
     };
+  }
+  async verifyRetainedMedia() {
+    let versions = 0,
+      bytes = 0;
+    for (const file of await this.content.list('assets')) {
+      const match = /^assets\/([^/]+)\/head\.json$/.exec(file.path);
+      if (!match) continue;
+      const head = await this.mediaHead(match[1]);
+      for (const id of head.retainedVersions) {
+        const media = await this.openMedia(match[1], id);
+        const lease = await media.read();
+        try {
+          versions++;
+          bytes += lease.bytes.byteLength;
+        } finally {
+          lease.release();
+        }
+      }
+    }
+    return { versions, bytes };
   }
   /** Read an entire publicly bound media version, validating its source identity first. */
   async publicMedia(mapId: string, dimension: string, assetId: string, versionId: string) {
     const media = await this.openPublicMedia(mapId, dimension, assetId, versionId);
-    return { version: media.version, bytes: await media.read() };
+    const read = await media.read();
+    read.release();
+    return { version: media.version, bytes: read.bytes };
   }
   /** Read an entire retained media version for authenticated management. */
   async readMedia(id: string, versionId: string) {
     const media = await this.openMedia(id, versionId);
-    return { version: media.version, bytes: await media.read() };
+    const read = await media.read();
+    read.release();
+    return { version: media.version, bytes: read.bytes };
   }
 }

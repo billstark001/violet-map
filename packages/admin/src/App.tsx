@@ -15,6 +15,14 @@ export default function App() {
     <Theme appearance="dark" accentColor="violet">
       <Container size="3" py="5">
         <Header session={session} state={state} />
+        {state.publication && (
+          <Callout.Root role="status" mb="3">
+            <Callout.Text>
+              Business revision {state.publication.revision ?? '(see response)'} committed. Resource publication{' '}
+              {state.publication.state}; inspect the publisher before publishing again.
+            </Callout.Text>
+          </Callout.Root>
+        )}
         {!serviceCapabilities().adminApi ? (
           <Callout.Root>
             <Callout.Text>This server has not enabled management features.</Callout.Text>

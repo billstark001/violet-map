@@ -1,7 +1,11 @@
-import * as THREE from 'three';
-import { Line2 } from 'three/addons/lines/Line2.js';
-import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
-import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import {
+  normalizeContentDimension,
+  parseOverlayManifest,
+  type CurveFeature,
+  type OverlayFeature,
+  type OverlayManifest,
+  type OverlayMediaReference,
+} from '@violet-map/core/overlays';
 import {
   boundsOf,
   buildAreaFill,
@@ -11,21 +15,18 @@ import {
   sampleCurve,
   type OverlayBounds,
 } from '@violet-map/render/overlays';
-import {
-  normalizeContentDimension,
-  parseOverlayManifest,
-  type CurveFeature,
-  type OverlayMediaReference,
-  type OverlayFeature,
-  type OverlayManifest,
-} from '@violet-map/core/overlays';
-import { apiFetch, mediaDelivery } from '../runtime';
+import * as THREE from 'three';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { log } from '../logger';
+import { resourceClient } from '../resources/client';
+import { apiFetch } from '../runtime';
 import type { SharedUniforms } from './materials';
-import { OverlayMask, createMaskMaterial } from './overlayMask';
-import { OverlayResourcePool, type ResourceLease } from './overlayResources';
-import { loadOverlayMedia, type OverlayMediaResource } from './overlayMedia';
 import { OVERLAY_LIMITS } from './overlayLimits';
+import { OverlayMask, createMaskMaterial } from './overlayMask';
+import { loadOverlayMedia, type OverlayMediaResource } from './overlayMedia';
+import { OverlayResourcePool, type ResourceLease } from './overlayResources';
 
 const REFRESH_MS = 30_000;
 const RETRY_MS = 12_000;
@@ -106,7 +107,11 @@ export class OverlayManager {
   constructor(
     private readonly scene: THREE.Scene,
     private readonly shared: SharedUniforms,
-    private readonly dependencies: { manifest?: typeof apiFetch; media?: typeof loadOverlayMedia } = {},
+    private readonly dependencies: {
+      manifest?: typeof apiFetch;
+      media?: typeof loadOverlayMedia;
+      head?: typeof resourceClient.head;
+    } = {},
   ) {
     this.mask = new OverlayMask(shared);
     this.group.name = 'map-overlays';
@@ -145,8 +150,13 @@ export class OverlayManager {
     this.abort = controller;
     this.loading = true;
     try {
+      const view = await (this.dependencies.head ?? resourceClient.head.bind(resourceClient))(
+        '',
+        false,
+        controller.signal,
+      );
       const response = await (this.dependencies.manifest ?? apiFetch)(
-        `api/maps/${encodeURIComponent(mapId)}/overlays?dimension=${encodeURIComponent(dimension)}&delivery=${mediaDelivery.value}`,
+        `api/maps/${encodeURIComponent(mapId)}/overlays?dimension=${encodeURIComponent(dimension)}&viewId=${encodeURIComponent(view.viewId)}`,
         {
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(MANIFEST_TIMEOUT_MS)]),
           headers: this.etag ? { 'if-none-match': this.etag } : undefined,
@@ -160,6 +170,7 @@ export class OverlayManager {
       if (!response.ok) throw new Error(`overlay manifest: HTTP ${response.status}`);
       const manifest = parseOverlayManifest(await response.json());
       if (controller.signal.aborted || generation !== this.generation || this.disposed) return;
+      if (!this.dependencies.head) resourceClient.assertCurrent(view);
       if (manifest.mapId !== mapId || manifest.dimension !== dimension)
         throw new Error('overlay manifest belongs to a different map/dimension');
       this.apply(manifest);
@@ -440,12 +451,8 @@ export class OverlayManager {
     } else {
       const item = this.media.get(`${feature.assetId}/${feature.versionId}`);
       if (!item) throw new Error('unknown pinned media version');
-      const lease = this.pool.acquire(`${feature.assetId}/${feature.versionId}`, (signal) =>
-        (this.dependencies.media ?? loadOverlayMedia)(
-          mediaDelivery.value === 'public' ? item : { version: item.version, url: item.url },
-          signal,
-          renderer.capabilities.maxTextureSize,
-        ),
+      const lease = this.pool.acquire(`${item.version.digest}:${item.version.mediaType}:decode-v1`, (signal) =>
+        (this.dependencies.media ?? loadOverlayMedia)(item, signal, renderer.capabilities.maxTextureSize),
       );
       record.lease = lease;
       lease.promise

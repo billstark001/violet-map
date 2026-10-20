@@ -1,16 +1,15 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import os from 'node:os';
 import { createHash } from 'node:crypto';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { getRegionChunk, getRegionChunkRecord } from '../../packages/core/src/region.js';
-import { LocalStorage } from '../../packages/storage/src/local.js';
-import { CachedStorage } from '../../packages/storage/src/cached.js';
-import { createWorldStore } from '../../packages/server/src/worldStore.js';
-import { createTopMapService } from '../../packages/server/src/topMap.js';
-import { loadServerConfig } from '../../packages/server/src/configuration.js';
 import type { ObjectStorage } from '../../packages/core/src/storage.js';
+import { loadServerConfig } from '../../packages/server/src/configuration.js';
+import { createWorldStore } from '../../packages/server/src/worldStore.js';
+import { CachedStorage } from '../../packages/storage/src/cached.js';
+import { LocalStorage } from '../../packages/storage/src/local.js';
 
 // Read-only soak with two explicit regions, small cache budgets and a bounded
 // request rate. Run with tsx --expose-gc for comparable post-GC heap samples.
@@ -83,11 +82,10 @@ try {
       DATA_DIR: temporary,
       REGION_CACHE_BYTES: String(8 * 1024 ** 2),
       CHUNK_NBT_CACHE_BYTES: String(1024 ** 2),
-      CACHE_PREWARM: 'false',
     },
     cwd: temporary,
   });
-  const store = createWorldStore(storage, createTopMapService(storage, config), config);
+  const store = createWorldStore(storage, config);
   const world = path.basename(worldRoot);
   let batches = 0,
     nextReport = 0;

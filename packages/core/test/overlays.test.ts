@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { parseServiceCapabilities } from '../src/contracts.js';
 import {
+  normalizeContentDimension,
   parseLayerDocument,
   parseMapDocument,
-  normalizeContentDimension,
   parseMediaVersion,
   parseOverlayManifest,
 } from '../src/overlays.js';
-import { parseServiceCapabilities } from '../src/contracts.js';
 
 const fill = { color: '#8844ff', opacity: 0.4 };
 const area = {
@@ -134,7 +134,7 @@ test('contour bounds rejection preserves nonadjacent edge/vertex touching detect
       assert.throws(() => parseLayerDocument(layer({ ...area, ring: points })), /self-intersect or touch/);
 });
 
-test('map dimensions normalize and capabilities default new fields while retaining strict old fields', () => {
+test('map dimensions normalize and capabilities accept only the explicit current protocol', () => {
   const map = {
     schemaVersion: 1,
     mapId: 'm',
@@ -147,7 +147,12 @@ test('map dimensions normalize and capabilities default new fields while retaini
   assert.equal(normalizeContentDimension('custom:moon/deep'), 'custom:moon/deep');
   assert.throws(() => normalizeContentDimension('custom:../bad'));
   const old = {
-    protocolVersion: 1,
+    protocolVersion: 2,
+    resourcesProtocol: 1,
+    delivery: { mode: 'server', families: ['chunk'] },
+    worldReads: true,
+    contentReads: false,
+    contentWrites: false,
     adminApi: true,
     users: false,
     worldWrites: true,
@@ -156,6 +161,7 @@ test('map dimensions normalize and capabilities default new fields while retaini
     authMode: 'static',
   };
   assert.equal(parseServiceCapabilities(old).contentReads, false);
+  assert.throws(() => parseServiceCapabilities({ ...old, protocolVersion: 1 }));
   assert.throws(() => parseServiceCapabilities({ ...old, contentReads: 'yes' }));
   assert.throws(() => parseServiceCapabilities({ ...old, users: undefined }));
   assert.throws(() => parseMediaVersion({ schemaVersion: 1 }));
@@ -164,7 +170,7 @@ test('map dimensions normalize and capabilities default new fields while retaini
 test('public manifests enforce binding identity and media lighting is a strict optional display field', () => {
   const binding = { bindingId: 'b', layerId: 'layer', dimension: 'overworld', order: 0, enabled: true };
   const manifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     mapId: 'map',
     mapRevision: 1,
     dimension: 'overworld',
@@ -180,7 +186,7 @@ test('public manifests enforce binding identity and media lighting is a strict o
   ])
     assert.throws(() => parseOverlayManifest({ ...manifest, layers: [{ binding: change, document: layer(area) }] }));
   assert.throws(() => parseOverlayManifest({ ...manifest, layers: [...manifest.layers, ...manifest.layers] }));
-  assert.throws(() => parseOverlayManifest({ ...manifest, schemaVersion: 2 }));
+  assert.throws(() => parseOverlayManifest({ ...manifest, schemaVersion: 1 }));
   const media = {
     featureId: 'media',
     kind: 'media',

@@ -24,7 +24,6 @@ test(
         WORLDS_DIR: path.join(root, 'worlds'),
         ROOT_USERNAME: 'operator',
         ROOT_PASSWORD: 'browser-root-password',
-        CACHE_PREWARM: 'false',
       },
       cwd: root,
     });
@@ -96,7 +95,7 @@ test(
     await page.getByRole('alertdialog').waitFor({ state: 'hidden' });
     await row.waitFor();
     assert.equal(await row.count(), 1);
-    assert.ok(await services.mounts.worlds.stat('admin-dialog/level.dat'));
+    assert.ok(await services.mounts.worlds!.stat('admin-dialog/level.dat'));
     await row.getByRole('button', { name: 'Delete', exact: true }).click();
     const deleteRoute = '**/api/admin/worlds/admin-dialog';
     await page.route(deleteRoute, (route) =>

@@ -1,14 +1,14 @@
+import type { LayerDocument, MapDocument } from '@violet-map/core/overlays';
+import { LocalStorage } from '@violet-map/storage/local';
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { LocalStorage } from '@violet-map/storage/local';
-import { ContentService } from '../src/content.js';
+import { test } from 'node:test';
 import { createApp } from '../src/app.js';
-import { createServices } from '../src/services.js';
 import { loadServerConfig } from '../src/configuration.js';
-import type { LayerDocument, MapDocument } from '@violet-map/core/overlays';
+import { ContentService } from '../src/content.js';
+import { createServices } from '../src/services.js';
 
 const layer = { schemaVersion: 1, layerId: 'imported', revision: 1, name: 'route', features: [] };
 
@@ -23,8 +23,6 @@ async function fixture(t: { after: (fn: () => Promise<unknown>) => void }) {
       CONTENT_WRITES_ENABLED: 'true',
       WORLDS_DIR: path.join(root, 'worlds'),
       DATA_DIR: root,
-      CACHE_PREWARM: 'false',
-      MEDIA_PUBLIC_BASE_URL: 'https://media.example/blobs/',
     },
     cwd: root,
   });
@@ -72,7 +70,11 @@ test('HTTP content lifecycle uses conditional revisions, public scope, restart a
   ).json()) as MapDocument;
   const binding = { bindingId: 'main', dimension: 'overworld', layerId: doc.layerId, enabled: true, order: 1 };
   assert.equal((await request(`/api/admin/maps/${map.mapId}/bindings/main`, 'PUT', binding, 1)).status, 200);
-  const manifest = await (await request(`/api/maps/${map.mapId}/overlays?dimension=overworld`)).json();
+  const manifest = await (
+    await request(
+      `/api/maps/${map.mapId}/overlays?dimension=overworld&viewId=${(await services.resources.head('world')).viewId}`,
+    )
+  ).json();
   assert.equal(manifest.layers[0].document.revision, 2);
   assert.equal(manifest.sourceStatus, 'unverified');
   assert.equal((await request(`/api/admin/overlays/layers/${doc.layerId}`, 'DELETE', undefined, 2)).status, 409);
@@ -101,15 +103,15 @@ test('HTTP content lifecycle uses conditional revisions, public scope, restart a
     anchor: [0.5, 0.5],
   };
   await content.replaceLayer(doc.layerId, { ...doc, revision: 3, features: [feature] }, 2);
-  const loaded = await content.manifest(map.mapId, 'overworld');
-  assert.equal(loaded.media[0].publicUrl, undefined);
+  const view = await services.resources.head('world');
+  const loaded = await services.resources.overlays(map.mapId, 'minecraft:overworld', view.viewId);
+  const mediaUrl = loaded.media[0].resource.url;
   const publicManifest = await (
-    await request(`/api/maps/${map.mapId}/overlays?dimension=overworld&delivery=public`)
+    await request(`/api/maps/${map.mapId}/overlays?dimension=overworld&viewId=${view.viewId}`)
   ).json();
-  assert.equal(publicManifest.media[0].publicUrl, `https://media.example/blobs/${asset.version.blob}`);
-  assert.equal(publicManifest.media[0].url, loaded.media[0].url);
-  assert.equal((await request(`/api/maps/${map.mapId}/overlays?dimension=overworld&delivery=unknown`)).status, 400);
-  const file = await request(loaded.media[0].url);
+  assert.deepEqual(publicManifest.media[0].resource, loaded.media[0].resource);
+  assert.equal('publicUrl' in publicManifest.media[0], false);
+  const file = await request(mediaUrl);
   assert.equal(file.status, 200);
   assert.equal(file.headers.get('content-type'), 'image/svg+xml');
   assert.deepEqual(Buffer.from(await file.arrayBuffer()), svg);
@@ -125,49 +127,48 @@ test('HTTP content lifecycle uses conditional revisions, public scope, restart a
   );
   const fullReads = t.mock.method(services.mounts.blobs, 'read');
   const rangeReads = t.mock.method(services.mounts.blobs, 'readRange');
-  const range = await app.request(loaded.media[0].url, { headers: { range: 'bytes=0-3' } });
+  const range = await app.request(mediaUrl, { headers: { range: 'bytes=0-3' } });
   assert.equal(range.status, 206);
   assert.equal(await range.text(), '<svg');
   assert.equal(fullReads.mock.callCount(), 0);
   assert.equal(rangeReads.mock.callCount(), 1);
   assert.deepEqual(rangeReads.mock.calls[0].arguments, [asset.version.blob, 0, 4]);
-  assert.equal(
-    (await app.request(loaded.media[0].url, { headers: { 'if-none-match': file.headers.get('etag')! } })).status,
-    304,
-  );
+  assert.equal((await app.request(mediaUrl, { headers: { 'if-none-match': file.headers.get('etag')! } })).status, 304);
   const etag = file.headers.get('etag')!;
   for (const value of [`W/${etag}`, `"different", W/${etag}`, '*']) {
-    const cached = await app.request(loaded.media[0].url, { headers: { 'if-none-match': value } });
+    const cached = await app.request(mediaUrl, { headers: { 'if-none-match': value } });
     assert.equal(cached.status, 304);
     assert.equal((await cached.arrayBuffer()).byteLength, 0);
   }
-  const head = await app.request(loaded.media[0].url, { method: 'HEAD', headers: { range: 'bytes=0-3' } });
+  const head = await app.request(mediaUrl, { method: 'HEAD', headers: { range: 'bytes=0-3' } });
   assert.equal(head.status, 200);
   assert.equal(head.headers.get('content-length'), String(svg.length));
   assert.equal((await head.arrayBuffer()).byteLength, 0);
-  assert.equal((await app.request(loaded.media[0].url, { headers: { range: 'bytes=999999-' } })).status, 416);
+  assert.equal((await app.request(mediaUrl, { headers: { range: 'bytes=999999-' } })).status, 416);
   assert.equal(fullReads.mock.callCount(), 0);
   assert.equal(rangeReads.mock.callCount(), 1);
-  const revalidated = await app.request(loaded.media[0].url, {
+  const revalidated = await app.request(mediaUrl, {
     headers: { 'if-none-match': etag, 'cache-control': 'no-cache' },
   });
   assert.equal(revalidated.status, 200);
   assert.deepEqual(Buffer.from(await revalidated.arrayBuffer()), svg);
-  assert.equal(fullReads.mock.callCount(), 1);
+  assert.equal(fullReads.mock.callCount(), 0);
+  assert.equal(rangeReads.mock.callCount(), 2);
+  assert.deepEqual(rangeReads.mock.calls[1].arguments, [asset.version.blob, 0, svg.length + 1]);
   for (const ifRange of ['"different"', `W/${etag}`, 'Wed, 21 Oct 2015 07:28:00 GMT']) {
-    const complete = await app.request(loaded.media[0].url, { headers: { range: 'bytes=0-3', 'if-range': ifRange } });
+    const complete = await app.request(mediaUrl, { headers: { range: 'bytes=0-3', 'if-range': ifRange } });
     assert.equal(complete.status, 200);
     assert.deepEqual(Buffer.from(await complete.arrayBuffer()), svg);
   }
-  const partial = await app.request(loaded.media[0].url, { headers: { range: 'bytes=-4', 'if-range': etag } });
+  const partial = await app.request(mediaUrl, { headers: { range: 'bytes=-4', 'if-range': etag } });
   assert.equal(partial.status, 206);
   assert.deepEqual(Buffer.from(await partial.arrayBuffer()), svg.subarray(-4));
-  assert.equal(rangeReads.mock.callCount(), 2);
+  assert.equal(rangeReads.mock.callCount(), 6);
   // Management's full-byte API remains useful to non-HTTP consumers.
   assert.deepEqual(Buffer.from((await content.readMedia(asset.document.assetId, asset.version.versionId)).bytes), svg);
   const restored = await createServices(config);
   t.after(() => restored.close());
-  assert.equal((await restored.content!.manifest(map.mapId, 'overworld')).layers[0].document.revision, 3);
+  assert.equal((await restored.content!.snapshot(map.mapId, 'overworld')).layers[0].document.revision, 3);
   await content.setBinding(map.mapId, 'main', null, 2);
   await content.deleteLayer(doc.layerId, 3);
   assert.equal((await content.getLayer(doc.layerId, 1)).name, 'route');
@@ -192,8 +193,8 @@ test('source identity lifecycle hides overlays on replacements and preserves reg
     'world/.violet-map/identity.json',
     new TextEncoder().encode(JSON.stringify({ schema: 1, id: 'replacement', createdAt: 'now' })),
   );
-  assert.equal((await content.manifest(map.mapId, 'overworld')).sourceStatus, 'mismatch');
-  assert.deepEqual((await content.manifest(map.mapId, 'overworld')).layers, []);
+  assert.equal((await content.snapshot(map.mapId, 'overworld')).sourceStatus, 'mismatch');
+  assert.deepEqual((await content.snapshot(map.mapId, 'overworld')).layers, []);
   const moved = await content.replaceMap(map.mapId, { ...map, revision: 2, worldKey: 'copy' }, 1);
   assert.equal(await content.sourceStatus(moved), 'verified');
   await storage.deletePrefix('copy');
@@ -205,7 +206,7 @@ test('head failure leaves complete old revision; reads survive restart and write
   const { root, services } = await fixture(t);
   const meta = new LocalStorage(path.join(root, 'isolated-meta')),
     blobs = new LocalStorage(path.join(root, 'isolated-blobs'));
-  const service = new ContentService(meta, blobs, services.mounts.worlds);
+  const service = new ContentService(meta, blobs, services.mounts.worlds!, services.resources.repository!);
   const doc = await service.createLayer(layer);
   const replace = meta.replace.bind(meta);
   let fail = true;
@@ -226,7 +227,8 @@ test('stored publication IDs and revisions must match their object keys', async 
   const service = new ContentService(
     metadata,
     new LocalStorage(path.join(root, 'identity-blobs')),
-    services.mounts.worlds,
+    services.mounts.worlds!,
+    services.resources.repository!,
   );
   const document = await service.createLayer(layer);
   const map = await service.createMap({ name: 'map', worldKey: 'world' });
@@ -427,7 +429,8 @@ test('failed revision/version publication never exposes orphan files or protects
   const service = new ContentService(
     metadata,
     new LocalStorage(path.join(root, 'publication-blobs')),
-    services.mounts.worlds,
+    services.mounts.worlds!,
+    services.resources.repository!,
   );
   const doc = await service.createLayer(layer);
   const bytes = new TextEncoder().encode(
@@ -588,7 +591,7 @@ test('media read failures return JSON without stale representation length, MIME,
     for (const header of ['content-length', 'content-range', 'etag', 'accept-ranges'])
       assert.equal(response.headers.get(header), null, header);
     assert.match(response.headers.get('content-type')!, /application\/json/);
-    assert.equal((await response.json()).code, 'CONTENT_BACKEND_UNAVAILABLE');
+    assert.equal((await response.json()).code, 'RESOURCE_BACKEND_UNAVAILABLE');
   }
   const preflight = await app.request(url, {
     method: 'OPTIONS',

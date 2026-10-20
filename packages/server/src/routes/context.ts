@@ -1,31 +1,25 @@
-import { type Hono, type Context } from 'hono';
+import { type Context, type Hono } from 'hono';
 
+import { decode, encode } from '@msgpack/msgpack';
+import { isChunkCoordinate, isDimensionId } from '@violet-map/core/domain';
+import { nonSharedByteView, readLimitedBody } from '@violet-map/core/http';
+import { cleanStoragePath } from '@violet-map/storage';
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { decode, encode } from '@msgpack/msgpack';
-import { parseByteRange } from '../httpRange.js';
-import { ChunkReadLimiter, ChunkServiceBusyError } from '../chunkReadLimiter.js';
-import { parseChunkCoordinates } from '../chunkCoordinates.js';
-import { nonSharedByteView, readLimitedBody } from '@violet-map/core/http';
-import { isDimensionId, isChunkCoordinate } from '@violet-map/core/domain';
 import { REQUIRED_ROLE } from '../auth.js';
-import { cleanStoragePath } from '@violet-map/storage';
+import { parseChunkCoordinates } from '../chunkCoordinates.js';
+import { ChunkReadLimiter, ChunkServiceBusyError } from '../chunkReadLimiter.js';
 import type { ServerConfig } from '../configuration.js';
+import { parseByteRange } from '../httpRange.js';
 
 import type { AppServices } from '../serviceTypes.js';
 
 export function createRouteContext(app: Hono, config: ServerConfig, services: AppServices) {
+  if (!services.assets || !services.gameData || !services.topMap || !services.worldStore || !services.mounts.worlds)
+    throw new Error('dynamic source routes are disabled');
   const worldStorage = services.mounts.worlds;
-  const {
-    buildAssetBundle,
-    buildTextureAtlas,
-    clearTextureAtlasCache,
-    getAssetBundlePayload,
-    getTextureAtlasPng,
-    readTextureFile,
-    MAX_ATLAS_TEXTURES,
-  } = services.assets;
+  const { buildAssetBundle, clearTextureAtlasCache, MAX_ATLAS_TEXTURES } = services.assets;
   const { buildBlockInfo, clearGameDataCaches, readBiomes, readDimensions, writeDataFile } = services.gameData;
   const { getTopMapManifest, getWorldCapabilities, readTopMapTile } = services.topMap;
   const {
@@ -89,16 +83,13 @@ export function createRouteContext(app: Hono, config: ServerConfig, services: Ap
 
   return {
     app,
+    resources: services.resources,
     config,
     content: services.content,
     mounts: services.mounts,
     worldStorage,
     buildAssetBundle,
-    buildTextureAtlas,
     clearTextureAtlasCache,
-    getAssetBundlePayload,
-    getTextureAtlasPng,
-    readTextureFile,
     MAX_ATLAS_TEXTURES,
     buildBlockInfo,
     clearGameDataCaches,

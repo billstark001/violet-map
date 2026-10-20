@@ -1,52 +1,67 @@
-import assert from 'node:assert/strict';
-import { test } from 'node:test';
 import { encode } from '@msgpack/msgpack';
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { test } from 'node:test';
 import { fetchChunkHashes, fetchChunks } from '../src/api.js';
 
-test('chunk endpoints encode dimensions containing path separators', async (t) => {
-  const urls: string[] = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input) => {
-    urls.push(String(input));
-    const bytes = encode({ chunks: [] });
-    return new Response(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
-  };
-  t.after(() => {
-    globalThis.fetch = originalFetch;
-  });
+const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
-  const world = 'example';
-  const dim = 'mod:sky/islands';
-  assert.deepEqual(await fetchChunkHashes(world, dim, [{ cx: 0, cz: 0 }]), []);
-  assert.deepEqual(await fetchChunks(world, dim, [{ cx: 0, cz: 0 }]), []);
-  assert.deepEqual(urls, [
-    'http://localhost/api/worlds/example/mod%3Asky%2Fislands/chunk-hashes',
-    'http://localhost/api/worlds/example/mod%3Asky%2Fislands/chunks',
-  ]);
-});
-
-test('chunk batches propagate cancellation and reject malformed payloads instead of treating chunks as absent', async (t) => {
+test('chunk selectors preserve dimensions with path separators and one exact verified format', async (t) => {
   const original = globalThis.fetch;
   t.after(() => {
     globalThis.fetch = original;
   });
-  const controller = new AbortController();
-  globalThis.fetch = async (_input, init) => {
-    assert.equal(init?.signal, controller.signal);
-    const bytes = encode({ chunks: 'invalid' });
-    return new Response(bytes);
+  const bytes = encode({ schemaVersion: 1, cx: 0, cz: 0, data: new Uint8Array([1]) });
+  const head = {
+    schemaVersion: 1,
+    viewId: 'a'.repeat(64),
+    mode: 'server',
+    sourceScope: 'fixture',
+    generation: 0,
+    renderRoot: 'b'.repeat(64),
   };
-  await assert.rejects(
-    fetchChunks('world', 'overworld', [{ cx: 0, cz: 0 }], controller.signal),
-    /invalid chunks response/,
-  );
-  globalThis.fetch = (_input, init) =>
-    new Promise((_resolve, reject) => {
-      init!.signal!.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), {
-        once: true,
+  const selectors: unknown[] = [];
+  let bodies = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes('/views/current')) return Response.json(head);
+    if (url.endsWith('/resolve')) {
+      const body = JSON.parse(init!.body as string);
+      selectors.push(...body.selectors);
+      return Response.json({
+        viewId: head.viewId,
+        validUntil: Date.now() + 30000,
+        resources: body.selectors.map((selector: unknown) => ({
+          selector,
+          nbtHash: 'c'.repeat(64),
+          terrainHash: 'd'.repeat(64),
+          resource: {
+            schemaVersion: 1,
+            kind: 'chunk',
+            artifact: {
+              digest: hash(bytes),
+              bytes: bytes.length,
+              mediaType: 'application/msgpack',
+              format: 'chunk-msgpack-v1',
+            },
+            url: 'https://resources.example/chunk',
+          },
+        })),
       });
-    });
-  const request = fetchChunkHashes('world', 'overworld', [{ cx: 0, cz: 0 }], controller.signal);
-  controller.abort();
-  await assert.rejects(request, { name: 'AbortError' });
+    }
+    bodies++;
+    return new Response(bytes, { headers: { 'content-type': 'application/msgpack' } });
+  };
+  const coordinates = [{ cx: 0, cz: 0 }];
+  const hashes = await fetchChunkHashes('example', 'mod:sky/islands', coordinates);
+  assert.equal(hashes[0].nbtHash, 'c'.repeat(64));
+  assert.equal(bodies, 0);
+  const chunks = await fetchChunks('example', 'mod:sky/islands', coordinates);
+  assert.deepEqual(chunks[0].data, new Uint8Array([1]));
+  assert.equal(bodies, 1);
+  assert.ok(selectors.every((s: any) => s.dimension === 'mod:sky/islands'));
+  globalThis.fetch = async () => new Response(null, { status: 503 });
+  await assert.rejects(fetchChunks('example', 'mod:sky/islands', coordinates), {
+    code: 'RESOURCE_BACKEND_UNAVAILABLE',
+  });
 });

@@ -1,11 +1,22 @@
-import { loadBrowserImage } from '../browserImage';
-import { buildRenderKey } from './resourceKey';
-import * as THREE from 'three';
-import type { BiomeMap, DimensionMap } from '@violet-map/core/domain';
-import { hexToRgb } from '@violet-map/render';
-import { fetchBiomes, fetchBlockInfo, fetchBundle, fetchDimensions, fetchWorldCapabilities, textureUrl } from '../api';
+import { collectTextureIds } from '@violet-map/core/assets';
 import { type WorldCapabilities } from '@violet-map/core/contracts';
-import { buildAtlas, collectTextureIds, loadColormap } from '../atlas';
+import type { BiomeMap, DimensionMap } from '@violet-map/core/domain';
+import { ResourceError } from '@violet-map/core/resources';
+import { hexToRgb } from '@violet-map/render';
+import * as THREE from 'three';
+import { fetchBiomes, fetchBlockInfo, fetchBundle, fetchDimensions, fetchWorldCapabilities } from '../api';
+import { buildAtlas, loadColormap, loadTextureImage } from '../atlas';
+import { browserStorage, readStored } from '../browserStorage';
+import { resourceClient } from '../resources/client';
+import { serviceCapabilities } from '../runtime';
+import type { WorkerInit } from '../worker/protocol';
+import {
+  buildViewUrl,
+  lookAtTargetFromParams,
+  readInitialView,
+  VIEW_STORAGE_KEY,
+  type InitialView,
+} from './cameraState';
 import { ChunkManager, type ChunkManagerDiagnosticSnapshot, type TopClipRange } from './chunkManager';
 import {
   EMPTY_CHUNK_SCHEDULER_STATS,
@@ -22,19 +33,10 @@ import {
   type TerrainMaterials,
   type TextureAnimationUniforms,
 } from './materials';
-import { TopMapManager, type TopMapDiagnosticSnapshot } from './topMapManager';
 import { OverlayManager, type OverlayDiagnosticSnapshot } from './overlayManager';
+import { buildRenderKey } from './resourceKey';
+import { TopMapManager, type TopMapDiagnosticSnapshot } from './topMapManager';
 import { TransparencyRenderer, type TransparencyDiagnosticSnapshot } from './transparency';
-import { serviceCapabilities } from '../runtime';
-import type { WorkerInit } from '../worker/protocol';
-import { browserStorage, readStored } from '../browserStorage';
-import {
-  VIEW_STORAGE_KEY,
-  readInitialView,
-  buildViewUrl,
-  lookAtTargetFromParams,
-  type InitialView,
-} from './cameraState';
 
 // Fluid UVs, exterior AO for partial models, and special-model transforms all
 // changed mesh bytes. Keep stale IndexedDB entries from reviving the old
@@ -307,6 +309,7 @@ function dimensionDefinition(dimensions: DimensionMap, dimension: string): Viewe
 }
 
 async function loadViewerResources(signal: AbortSignal): Promise<ViewerResources> {
+  const selectedHead = await resourceClient.head('', false, signal);
   const [bundle, blockInfo, biomes, dimensions, grassMap, foliageMap] = await Promise.all([
     fetchBundle(signal),
     fetchBlockInfo(signal),
@@ -315,11 +318,9 @@ async function loadViewerResources(signal: AbortSignal): Promise<ViewerResources
     loadColormap('minecraft:colormap/grass', signal),
     loadColormap('minecraft:colormap/foliage', signal),
   ]);
-  const atlas = await buildAtlas(
-    collectTextureIds(bundle, blockInfo),
-    new Set(Object.keys(bundle.textureAnimations ?? {})),
-    signal,
-  );
+  const atlas = await buildAtlas(collectTextureIds(bundle, blockInfo), signal);
+  if (resourceClient.current()?.viewId !== selectedHead.viewId)
+    throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'render resources changed while preparing the root', true);
   return {
     bundle,
     blockInfo,
@@ -394,8 +395,12 @@ function loadCanvasBackedTexture(
   const tryLoad = (index: number) => {
     const candidate = candidates[index];
     if (!candidate || signal.aborted) return;
-    void loadBrowserImage(textureUrl(candidate.id), signal)
+    void loadTextureImage(candidate.id, signal)
       .then((img) => {
+        if (!img) {
+          tryLoad(index + 1);
+          return;
+        }
         if (signal.aborted) return;
         if (candidate.cropMoonSheet && img.width > img.height) {
           const frameW = Math.floor(img.width / 4);
@@ -412,8 +417,8 @@ function loadCanvasBackedTexture(
         }
         texture.needsUpdate = true;
       })
-      .catch(() => {
-        if (!signal.aborted) tryLoad(index + 1);
+      .catch((error) => {
+        if (!signal.aborted) console.error('[violet-map] sky resource failed', error);
       });
   };
   tryLoad(0);
@@ -1010,7 +1015,7 @@ function renderFrame({ engine, manager, latestStats, props, capabilities, state 
   engine.overlays.configure(
     props.overlayMapId ?? null,
     props.dimension,
-    !!props.overlaysEnabled && !!serviceCapabilities().contentReads,
+    !!props.overlaysEnabled && !!serviceCapabilities().delivery.families.includes('overlay-media'),
   );
   engine.overlays.update(engine.renderer, {
     camera,
@@ -1033,6 +1038,7 @@ function createWorldManager(engine: Engine, props: ViewerOptions): ChunkManager 
   const dimDef = dimensionDefinition(engine.dimensions, props.dimension);
   return new ChunkManager(engine.scene, engine.materials, engine.initPayload, {
     world: props.world,
+    sourceScope: resourceClient.current(props.world)!.sourceScope,
     dimension: props.dimension,
     renderKey: engine.renderKey,
     dimensionDef: dimDef,
@@ -1088,7 +1094,9 @@ export class ViewerController {
   private capabilityGeneration = 0;
   private capabilityRequest: AbortController | null = null;
   private disposed = false;
-  private readonly resourceRequest = new AbortController();
+  private resourceRequest = new AbortController();
+  private resourceGeneration = 0;
+  private readonly unsubscribe: () => void;
   private onResize: (() => void) | null = null;
   private frameState: FrameState | null = null;
 
@@ -1098,16 +1106,36 @@ export class ViewerController {
     private readonly onError: (message: string) => void,
     private readonly onReady?: () => void,
   ) {
+    this.unsubscribe = resourceClient.subscribe((previous, current) => {
+      if (current.renderRoot !== previous.renderRoot) {
+        this.resourceRequest.abort();
+        this.resourceRequest = new AbortController();
+        void this.initialize();
+      } else if (current.sourceScope !== previous.sourceScope && resourceClient.current(this.props.world) === current) {
+        this.syncEngine(null);
+      } else {
+        void this.manager?.refreshResources().catch((error) => this.onError(String(error)));
+        void this.engine?.overlays.refresh();
+      }
+    });
     this.loadCapabilities(props.world);
     this.registerDiagnostics(props.onDiagnosticSnapshotProvider);
     void this.initialize();
   }
 
   private async initialize(): Promise<void> {
+    const generation = ++this.resourceGeneration;
+    const controller = this.resourceRequest;
     try {
       THREE.ColorManagement.enabled = false;
-      const resources = await loadViewerResources(this.resourceRequest.signal);
-      if (this.disposed) return;
+      const [resources, worldHead] = await Promise.all([
+        loadViewerResources(controller.signal),
+        this.props.world ? resourceClient.head(this.props.world, false, controller.signal) : Promise.resolve(),
+      ]);
+      if (worldHead && worldHead.renderRoot !== resourceClient.current()?.renderRoot)
+        throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'world and render resources belong to different roots', true);
+      if (worldHead) resourceClient.assertCurrent(worldHead, this.props.world);
+      if (this.disposed || generation !== this.resourceGeneration) return;
       const props = this.props;
       const engine = createEngine(
         this.container,
@@ -1117,6 +1145,13 @@ export class ViewerController {
         props.fastMoveMultiplier,
         props.inertiaEnabled,
       );
+      if (this.engine) {
+        this.manager?.dispose();
+        this.manager = null;
+        this.frameState?.timer.dispose();
+        if (this.onResize) window.removeEventListener('resize', this.onResize);
+        disposeEngine(this.engine);
+      }
       this.engine = engine;
       this.onResize = createResizeHandler(engine, this.container);
       window.addEventListener('resize', this.onResize);
@@ -1141,7 +1176,8 @@ export class ViewerController {
       });
       this.onReady?.();
     } catch (error) {
-      this.resourceRequest.abort();
+      if (this.disposed || generation !== this.resourceGeneration) return;
+      controller.abort();
       if (!this.disposed) this.onError(error instanceof Error ? error.message : String(error));
     }
   }
@@ -1192,6 +1228,15 @@ export class ViewerController {
     const engine = this.engine;
     if (!engine) return;
     const props = this.props;
+    if (props.world && !resourceClient.current(props.world)) {
+      void resourceClient.head(props.world).then(
+        () => {
+          if (!this.disposed && this.props.world === props.world) this.syncEngine(null);
+        },
+        (error) => this.onError(String(error)),
+      );
+      return;
+    }
     const contextChanged = !previous || previous.world !== props.world || previous.dimension !== props.dimension;
     if (contextChanged) {
       this.manager?.dispose();
@@ -1240,6 +1285,8 @@ export class ViewerController {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.unsubscribe();
+    this.resourceGeneration++;
     this.resourceRequest.abort();
     this.capabilityGeneration++;
     this.capabilityRequest?.abort();

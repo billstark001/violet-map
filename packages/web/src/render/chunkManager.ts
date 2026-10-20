@@ -1,12 +1,12 @@
-import { meshByteLength } from '@violet-map/render';
-import * as THREE from 'three';
+import type { RenderLayer } from '@violet-map/core/assets';
+import { type ChunkCoverage, type ChunkHashPayload, type ChunkPayload } from '@violet-map/core/contracts';
 import type { DimensionDef } from '@violet-map/core/domain';
 import type { MeshBuffers } from '@violet-map/render';
-import { SECTION_VISIBILITY_ALL } from '@violet-map/render';
-import type { RenderLayer } from '@violet-map/core/assets';
+import { meshByteLength, SECTION_VISIBILITY_ALL } from '@violet-map/render';
+import * as THREE from 'three';
 import { fetchChunkHashes, fetchChunks, fetchChunkSourceCoverage } from '../api';
-import { type ChunkHashPayload, type ChunkPayload, type ChunkCoverage } from '@violet-map/core/contracts';
 import { debugLog, isDebugLoggingEnabled } from '../logger';
+import { getCachedFull, getCachedLod, putCachedFull, putCachedLod, type MeshCacheKeyParts } from '../meshCache';
 import {
   chunkKey,
   type SectionMeshMsg,
@@ -14,26 +14,25 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from '../worker/protocol';
-import { getCachedFull, getCachedLod, putCachedFull, putCachedLod, type MeshCacheKeyParts } from '../meshCache';
-import type { TerrainMaterials } from './materials';
 import {
   ChunkScheduler,
   LOD_STEPS,
-  type ChunkProfileStats,
   type ChunkDiagnosticEvent,
   type ChunkDiagnosticOp,
-  type ChunkRenderStats,
   type ChunkPriority,
-  type ChunkSchedulingTuning,
-  type SchedulerAction,
+  type ChunkProfileStats,
+  type ChunkRenderStats,
   type ChunkSchedulerCamera,
   type ChunkSchedulerDiagnosticSnapshot,
   type ChunkSchedulerEntry,
   type ChunkSchedulerStats,
+  type ChunkSchedulingTuning,
   type ChunkState,
   type LodStep,
   type MeshTaskKind,
+  type SchedulerAction,
 } from './chunkScheduler';
+import type { TerrainMaterials } from './materials';
 
 const UPDATE_INTERVAL_MS = 80;
 const STATS_REPORT_INTERVAL_MS = 100;
@@ -264,6 +263,7 @@ interface ChunkEntry extends ChunkSchedulerEntry {
 }
 
 export interface ChunkManagerOptions {
+  sourceScope: string;
   world: string;
   dimension: string;
   renderKey: string;
@@ -576,7 +576,7 @@ export class ChunkManager {
     return {
       schema: 1,
       capturedAt: new Date().toISOString(),
-      world: this.opts.world,
+      world: `${this.opts.sourceScope}:${this.opts.world}`,
       dimension: this.opts.dimension,
       renderKey: this.opts.renderKey,
       topDownView: this.topDownView,
@@ -944,7 +944,7 @@ export class ChunkManager {
     const contentHash = this.contentHash(e);
     if (!contentHash) throw new Error(`missing content hash for mesh cache key: ${e.key}`);
     return {
-      world: this.opts.world,
+      world: `${this.opts.sourceScope}:${this.opts.world}`,
       dimension: this.opts.dimension,
       renderKey: this.opts.renderKey,
       cx: e.cx,
@@ -958,7 +958,7 @@ export class ChunkManager {
   }
 
   private payloadContentHash(payload: Pick<ChunkHashPayload, 'hash' | 'fileHash' | 'nbtHash'>): string | null {
-    return payload.nbtHash ?? payload.hash ?? payload.fileHash ?? null;
+    return payload.nbtHash ?? null;
   }
 
   private invalidatePendingMeshes(e: ChunkEntry) {
@@ -1528,6 +1528,31 @@ export class ChunkManager {
     }
   }
 
+  async refreshResources() {
+    const rows = await fetchChunkHashes(
+      this.opts.world,
+      this.opts.dimension,
+      [...this.chunks.values()].map((e) => ({ cx: e.cx, cz: e.cz })),
+      this.requests.signal,
+    );
+    if (this.disposed) return;
+    for (const row of rows) {
+      const entry = this.chunks.get(this.key(row.cx, row.cz));
+      if (!entry) continue;
+      if (row.missing) {
+        this.markUnavailable(entry, 'absent', true);
+        continue;
+      }
+      if (row.nbtHash !== this.contentHash(entry)) {
+        this.resetAfterSourceChange(entry);
+        entry.nbtHash = row.nbtHash ?? null;
+        entry.sourceHash = row.nbtHash ?? null;
+        entry.state = 'hashed';
+        this.queueFetch(entry.key);
+      }
+    }
+    await this.loadChunkSourceCoverage();
+  }
   private handleFetchedHash(payload: ChunkHashPayload) {
     const key = this.key(payload.cx, payload.cz);
     const e = this.chunks.get(key);
@@ -1600,7 +1625,7 @@ export class ChunkManager {
       this.markUnavailable(e, 'absent', true);
       return;
     }
-    const sourceHash = payload.hash ?? payload.fileHash ?? null;
+    const sourceHash = payload.nbtHash ?? null;
     const contentHash = this.payloadContentHash(payload);
     if (!contentHash) {
       this.markUnavailable(e, 'error', false, false);

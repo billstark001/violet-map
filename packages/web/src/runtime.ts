@@ -1,18 +1,16 @@
 import { signal } from '@preact/signals';
 import {
   normalizeApiBaseUrl,
-  apiUrl as resolveApiUrl,
-  resolveApiResourceUrl as resolveResource,
   parseFrontendRuntimeConfig,
   parseServiceCapabilities,
-  LEGACY_SERVICE_CAPABILITIES,
+  apiUrl as resolveApiUrl,
+  resolveApiResourceUrl as resolveResource,
   type ServiceCapabilities,
 } from '@violet-map/core/contracts';
 
 const origin = typeof location === 'undefined' ? 'http://localhost' : location.origin;
 const baseUrl = signal(normalizeApiBaseUrl('/', origin));
 export const capabilities = signal<ServiceCapabilities | undefined>(undefined);
-export const mediaDelivery = signal<'proxy' | 'public'>('public');
 
 export function apiUrl(path: string): string {
   return resolveApiUrl(baseUrl.value, path);
@@ -44,18 +42,13 @@ export async function initializeRuntime(options: { staticBase?: string; fallback
   });
   if (response.status !== 404 && !response.ok) throw new Error(`runtime-config.json: HTTP ${response.status}`);
   const config = response.status === 404 ? {} : parseFrontendRuntimeConfig(await response.json());
-  mediaDelivery.value = config.mediaDelivery ?? 'public';
   baseUrl.value = normalizeApiBaseUrl(
     config.apiBaseUrl ?? options.fallbackApi ?? import.meta.env?.VITE_API_BASE_URL ?? '/',
     currentOrigin,
   );
   const result = await apiFetch('api/capabilities');
-  if (result.status === 404 && config.capabilityFallback !== 'error')
-    capabilities.value = { ...LEGACY_SERVICE_CAPABILITIES };
-  else {
-    if (!result.ok) throw new Error(`API capabilities: HTTP ${result.status}`);
-    capabilities.value = parseServiceCapabilities(await result.json());
-  }
+  if (!result.ok) throw new Error(`API capabilities: HTTP ${result.status}`);
+  capabilities.value = parseServiceCapabilities(await result.json());
 }
 
 export function showStartupError(error: unknown) {

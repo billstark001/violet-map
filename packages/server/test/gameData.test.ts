@@ -4,14 +4,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { loadServerConfig } from '../src/configuration.js';
-import { createAssetService } from '../src/assets.js';
 import { createGameDataService } from '../src/gameData.js';
 
 test('a malformed versioned data file reports its path instead of falling back', async (t) => {
   const config = loadServerConfig();
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-map-data-'));
   config.data.dir = dir;
-  const { clearGameDataCaches, readBiomes, writeDataFile } = createGameDataService(config, createAssetService(config));
+  const { clearGameDataCaches, readBiomes, writeDataFile } = createGameDataService(config);
   t.after(async () => {
     clearGameDataCaches();
     await fs.rm(dir, { recursive: true, force: true });
@@ -31,7 +30,7 @@ test('writing a data file invalidates a cached value', async (t) => {
   const config = loadServerConfig();
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-map-data-'));
   config.data.dir = dir;
-  const { clearGameDataCaches, readBiomes, writeDataFile } = createGameDataService(config, createAssetService(config));
+  const { clearGameDataCaches, readBiomes, writeDataFile } = createGameDataService(config);
   t.after(async () => {
     clearGameDataCaches();
     await fs.rm(dir, { recursive: true, force: true });
@@ -47,7 +46,7 @@ test('failed local data publication retains the previous complete file and leave
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-data-atomic-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const config = loadServerConfig({ env: { DEPLOYMENT_PROFILE: 'public', DATA_DIR: dir }, cwd: dir });
-  const data = createGameDataService(config, createAssetService(config));
+  const data = createGameDataService(config);
   await data.writeDataFile('biomes.json', { old: {} });
   t.mock.method(fs, 'rename', async () => {
     throw new Error('injected publication failure');

@@ -34,12 +34,12 @@ const fields = [
   'minecraft.dataVersion',
   'features.adminApi',
   'features.users',
+  'features.worldReads',
   'features.worldWrites',
   'features.dataWrites',
   'features.diagnostics',
   'features.contentReads',
   'features.contentWrites',
-  'content.mediaPublicBaseUrl',
   'auth.mode',
   'auth.staticRole',
   'cache.regionBytes',
@@ -49,7 +49,6 @@ const fields = [
   'cache.storageListMs',
   'cache.manifestMs',
   'cache.worldListMs',
-  'cache.prewarm',
   'limits.chunkReads',
   'limits.chunkQueue',
   'limits.chunkRequestBytes',
@@ -74,6 +73,7 @@ export function configurationSettings(options: ConfigurationOptions & { env: Nod
       throw new Error(`configuration ${prefix || 'root'} must be a mapping`);
     for (const [key, child] of Object.entries(value)) {
       const field = prefix ? `${prefix}.${key}` : key;
+      if (field === 'resources') continue;
       const namedBackend =
         /^storage\.backends\.[a-z][a-z0-9]*\.(driver|root|endpoint|region|bucket|forcePathStyle|accessKeyIdEnv|secretAccessKeyEnv|sessionTokenEnv)$/.test(
           field,
@@ -81,13 +81,9 @@ export function configurationSettings(options: ConfigurationOptions & { env: Nod
       const namedMount = /^storage\.mounts\.(worlds|content|blobs)\.(backend|prefix)$/.test(field);
       if (fields.includes(field) || namedBackend || namedMount) {
         const isBoolean =
-          field.startsWith('features.') ||
-          ['s3.forcePathStyle', 'cache.prewarm'].includes(field) ||
-          field.endsWith('.forcePathStyle');
+          field.startsWith('features.') || field === 's3.forcePathStyle' || field.endsWith('.forcePathStyle');
         const isNumber =
-          ['port', 'server.port'].includes(field) ||
-          field.startsWith('limits.') ||
-          (field.startsWith('cache.') && field !== 'cache.prewarm');
+          ['port', 'server.port'].includes(field) || field.startsWith('limits.') || field.startsWith('cache.');
         const isList = ['assetsDirs', 'assets.dirs', 'server.cors.origins'].includes(field);
         const valid = isBoolean
           ? typeof child === 'boolean'

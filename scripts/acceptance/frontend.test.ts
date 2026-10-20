@@ -14,7 +14,7 @@ import { project, closeServer, serverOrigin, startStaticSite } from './helpers/f
 test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities and token isolation', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-frontend-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const { PNG } = createRequire(new URL('../../packages/server/package.json', import.meta.url))('pngjs');
+  const { PNG } = createRequire(new URL('../../packages/resources/package.json', import.meta.url))('pngjs');
   const assetsDir = path.join(root, 'assets');
   for (const [name, size] of [
     ['block/stone', 16],
@@ -39,7 +39,7 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
   });
   const services = await createServices(config);
   t.after(() => services.close());
-  await services.worldStore.createWorld('browser');
+  await services.worldStore!.createWorld('browser');
   const app = createApp(config, services);
   const api = serve({
     fetch: (request) => {
@@ -101,8 +101,9 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
       body: JSON.stringify({ ids: ['minecraft:block/stone'] }),
     });
     const manifest = await response.json();
+    if (!response.ok) throw new Error(`atlas HTTP ${response.status}: ${JSON.stringify(manifest)}`);
     const images = await Promise.all([
-      load(new URL(manifest.image, apiBase).href),
+      load(new URL(manifest.image.url.replace(/^\/api\//, 'api/'), apiBase).href),
       load(`${apiBase}api/assets/texture/minecraft%3Ablock%2Fstone`),
       load(`${apiBase}api/assets/texture/minecraft%3Acolormap%2Fgrass`),
     ]);

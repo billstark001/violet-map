@@ -1,9 +1,9 @@
 import { batch, computed, effect, signal } from '@preact/signals';
 import type { WorldInfo } from '@violet-map/core/contracts';
 import { fetchWorlds } from '../api';
+import { browserStorage, readStored } from '../browserStorage';
 import { setDebugLoggingEnabled } from '../logger';
 import { getMeshCacheStats, setMeshCacheEnabled } from '../meshCache';
-import { serviceCapabilities } from '../runtime';
 import { EMPTY_CHUNK_SCHEDULER_STATS } from '../render/chunkScheduler';
 import type { OverlayDiagnosticSnapshot } from '../render/overlayManager';
 import type {
@@ -12,8 +12,8 @@ import type {
   ViewerOptions,
   ViewerStatsPayload,
 } from '../render/viewerEngine';
+import { serviceCapabilities } from '../runtime';
 import { createSettingsStore } from './settings';
-import { browserStorage, readStored } from '../browserStorage';
 
 export const settings = createSettingsStore(
   typeof location === 'undefined' ? '' : location.search,
@@ -47,7 +47,7 @@ export const dimensions = computed(
   () => worlds.value.find((world) => world.id === settings.state.value.world)?.dimensions ?? [],
 );
 export const overlayMaps = computed(() =>
-  serviceCapabilities().contentReads
+  serviceCapabilities().delivery.families.includes('overlay-media')
     ? (worlds.value.find((world) => world.id === settings.state.value.world)?.mapIds ?? [])
     : [],
 );

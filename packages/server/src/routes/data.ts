@@ -1,14 +1,15 @@
+import { resourceFailure } from '../resourceErrors.js';
+import { artifactResponse } from '../resourceHttp.js';
 import type { RouteContext } from './context.js';
 
-export function mountData(context: RouteContext) {
-  const { app, buildBlockInfo, readBiomes, readDimensions, jsonPayload, cachedObjectPayload } = context;
-  app.get('/api/data/blocks', async (c) =>
-    jsonPayload(c, cachedObjectPayload(await buildBlockInfo()), 'public, max-age=60, must-revalidate'),
-  );
-  app.get('/api/data/biomes', async (c) =>
-    jsonPayload(c, cachedObjectPayload(await readBiomes()), 'public, max-age=60, must-revalidate'),
-  );
-  app.get('/api/data/dimensions', async (c) =>
-    jsonPayload(c, cachedObjectPayload(await readDimensions()), 'public, max-age=60, must-revalidate'),
-  );
+export function mountData({ app, resources }: RouteContext) {
+  for (const name of ['blocks', 'biomes', 'dimensions'] as const)
+    app.get(`/api/data/${name}`, async (c) => {
+      try {
+        const body = await resources.businessResource({ kind: 'game-data', name });
+        return body ? artifactResponse(c, body.artifact, body.read) : c.json({ error: 'data not found' }, 404);
+      } catch (error) {
+        return resourceFailure(error as Error, c);
+      }
+    });
 }

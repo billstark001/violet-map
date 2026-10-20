@@ -9,7 +9,7 @@ export const project = fileURLToPath(new URL('../../../', import.meta.url));
 export const cleanEnv = { ...process.env, NODE_OPTIONS: '', NODE_PATH: '' };
 for (const key of Object.keys(cleanEnv))
   if (
-    /^(VIOLET_|DATABASE_|ROOT_|S3_|AWS_|STORAGE_|CONTENT_|DIAGNOSTICS_|DEPLOYMENT_|AUTH_|STATIC_|USERS_|ADMIN_|WORLD_|WORLDS_|DATA_|ASSETS_|MC_|CACHE_|PORT$)/.test(
+    /^(VIOLET_|DATABASE_|ROOT_|S3_|AWS_|STORAGE_|RESOURCES_|CONTENT_|DIAGNOSTICS_|DEPLOYMENT_|AUTH_|STATIC_|USERS_|ADMIN_|WORLD_|WORLDS_|DATA_|ASSETS_|MC_|CACHE_|PORT$)/.test(
       key,
     )
   )
@@ -26,7 +26,7 @@ export async function boot(artifact, env, cwd) {
   const port = await freePort();
   const child = spawn(process.execPath, [path.join(artifact, 'dist/src/index.js')], {
     cwd,
-    env: { ...cleanEnv, ...env, PORT: String(port), CACHE_PREWARM: 'false' },
+    env: { ...cleanEnv, ...env, PORT: String(port) },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';

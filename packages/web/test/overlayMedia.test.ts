@@ -1,8 +1,8 @@
+import type { MediaFeature, MediaVersion } from '@violet-map/core/overlays';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as THREE from 'three';
 import { loadOverlayMedia, modelResource } from '../src/render/overlayMedia.js';
-import type { MediaFeature, MediaVersion } from '@violet-map/core/overlays';
 
 test('GLB instances share immutable GPU data and close shared image bitmaps exactly once', () => {
   let closed = 0,
@@ -55,7 +55,7 @@ test('media failures and download limits fail before optional loaders, preservin
   let requests = 0;
   globalThis.fetch = async () => {
     requests++;
-    return new Response('not pinned');
+    return new Response('not pinned', { headers: { 'content-type': 'image/png' } });
   };
   const version = {
     assetId: 'a',
@@ -65,16 +65,36 @@ test('media failures and download limits fail before optional loaders, preservin
     mediaType: 'image/png',
   } as MediaVersion;
   await assert.rejects(
-    loadOverlayMedia({ version, url: '/api/maps/m/media/a/v' }, new AbortController().signal, 4096),
-    /digest\/size/,
-  );
-  await assert.rejects(
     loadOverlayMedia(
-      { version: { ...version, bytes: 100 * 1024 ** 2 }, url: '/api/maps/m/media/a/v' },
+      {
+        version,
+        resource: {
+          schemaVersion: 1,
+          kind: 'overlay-media',
+          artifact: { digest: version.digest, bytes: version.bytes, mediaType: version.mediaType, format: 'png' },
+          url: '/api/resources/media',
+        },
+      },
       new AbortController().signal,
       4096,
     ),
-    /download limit/,
+    /resource (?:size|digest)/,
+  );
+  await assert.rejects(
+    loadOverlayMedia(
+      {
+        version: { ...version, bytes: 100 * 1024 ** 2 },
+        resource: {
+          schemaVersion: 1,
+          kind: 'overlay-media',
+          artifact: { digest: version.digest, bytes: 100 * 1024 ** 2, mediaType: version.mediaType, format: 'png' },
+          url: '/api/resources/media',
+        },
+      },
+      new AbortController().signal,
+      4096,
+    ),
+    /download budget/,
   );
   assert.equal(requests, 1);
   let cancelled = false;
@@ -88,15 +108,40 @@ test('media failures and download limits fail before optional loaders, preservin
           cancelled = true;
         },
       }),
+      { headers: { 'content-type': 'image/png' } },
     );
   await assert.rejects(
-    loadOverlayMedia({ version, url: '/api/maps/m/media/a/v' }, new AbortController().signal, 4096),
-    /digest\/size/,
+    loadOverlayMedia(
+      {
+        version,
+        resource: {
+          schemaVersion: 1,
+          kind: 'overlay-media',
+          artifact: { digest: version.digest, bytes: version.bytes, mediaType: version.mediaType, format: 'png' },
+          url: '/api/resources/media',
+        },
+      },
+      new AbortController().signal,
+      4096,
+    ),
+    /resource (?:size|digest)/,
   );
   assert.equal(cancelled, true);
   globalThis.fetch = async () => new Response(null, { status: 503 });
   await assert.rejects(
-    loadOverlayMedia({ version, url: '/api/maps/m/media/a/v' }, new AbortController().signal, 4096),
+    loadOverlayMedia(
+      {
+        version,
+        resource: {
+          schemaVersion: 1,
+          kind: 'overlay-media',
+          artifact: { digest: version.digest, bytes: version.bytes, mediaType: version.mediaType, format: 'png' },
+          url: '/api/resources/media',
+        },
+      },
+      new AbortController().signal,
+      4096,
+    ),
     /HTTP 503/,
   );
 });

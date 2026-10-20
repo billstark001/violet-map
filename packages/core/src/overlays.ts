@@ -1,22 +1,22 @@
 import { ContentValidationError } from './contentValidation.js';
 import { isDimensionId } from './dimensionId.js';
-import { isWorldName } from './worldName.js';
-import { publicResourceUrl } from './http.js';
 import type {
-  OverlayFeature,
-  LayerDocument,
   LayerBinding,
+  LayerDocument,
   MapDocument,
   MapSourceStatus,
-  MediaVersion,
   MediaDocument,
+  MediaVersion,
+  OverlayFeature,
   OverlayManifest,
   OverlaySnapshot,
 } from './overlayTypes.js';
+import { mediaArtifact, parseResourceRef } from './resourceContracts.js';
+import { isWorldName } from './worldName.js';
 
-export type * from './overlayTypes.js';
 export { ContentValidationError } from './contentValidation.js';
 export { parseStaticGlb } from './formats/staticGlb.js';
+export type * from './overlayTypes.js';
 
 function cloneDocument<T>(value: T): T {
   if (Array.isArray(value)) return value.map((item) => cloneDocument(item)) as T;
@@ -324,50 +324,6 @@ export function revisionTag(revision: number): string {
   return `"${revision}"`;
 }
 
-/** Validate the public wire document before it crosses into the renderer. */
-export function parseOverlayManifest(value: unknown): OverlayManifest {
-  const d = record(value, ['schemaVersion', 'mapId', 'mapRevision', 'dimension', 'sourceStatus', 'layers', 'media']);
-  schema(d);
-  contentId(d.mapId);
-  integer(d.mapRevision, 1);
-  oneOf(d.sourceStatus, ['verified', 'unverified', 'missing', 'mismatch', 'unbound']);
-  const dimension = normalizeContentDimension(d.dimension);
-  const layers = array(d.layers, 0, 10000).map((value) => {
-    const item = record(value, ['binding', 'document']);
-    const binding = parseBinding(item.binding),
-      document = parseLayerDocument(item.document);
-    if (binding.layerId !== document.layerId || binding.dimension !== dimension || !binding.enabled)
-      fail('manifest binding mismatch');
-    return { binding, document };
-  });
-  if (new Set(layers.map((item) => item.binding.bindingId)).size !== layers.length) fail('duplicate binding');
-  const media = array(d.media, 0, 10000).map((value) => {
-    const item = record(value, ['version', 'url', 'publicUrl'], ['version', 'url']);
-    const version = parseMediaVersion(item.version);
-    if (typeof item.url !== 'string' || !item.url.startsWith('/api/')) fail('invalid API resource reference');
-    let publicUrl: string | undefined;
-    if (item.publicUrl !== undefined) {
-      try {
-        publicUrl = publicResourceUrl(item.publicUrl);
-      } catch {
-        fail('invalid public media URL');
-      }
-    }
-    return { version, url: item.url, ...(publicUrl ? { publicUrl } : {}) };
-  });
-  if (new Set(media.map((item) => item.version.assetId + '/' + item.version.versionId)).size !== media.length)
-    fail('duplicate media version');
-  return {
-    schemaVersion: 1,
-    mapId: d.mapId as string,
-    mapRevision: d.mapRevision as number,
-    dimension,
-    sourceStatus: d.sourceStatus as MapSourceStatus,
-    layers,
-    media,
-  };
-}
-
 function overlayBase(d: Record<string, unknown>) {
   contentId(d.mapId);
   integer(d.mapRevision, 1);
@@ -398,4 +354,28 @@ export function parseOverlaySnapshot(value: unknown): OverlaySnapshot {
   if (new Set(media.map((item) => item.assetId + '/' + item.versionId)).size !== media.length)
     fail('duplicate media version');
   return { ...base, media };
+}
+
+/** Validate the public wire document before it crosses into the renderer. */
+export function parseOverlayManifest(value: unknown): OverlayManifest {
+  const d = record(value, ['schemaVersion', 'mapId', 'mapRevision', 'dimension', 'sourceStatus', 'layers', 'media']);
+  if (d.schemaVersion !== 2) throw new ContentValidationError('unsupported overlay manifest', 'UNSUPPORTED_FORMAT');
+  const base = overlayBase(d);
+  const media = array(d.media, 0, 10000).map((value) => {
+    const item = record(value, ['version', 'resource']);
+    const version = parseMediaVersion(item.version);
+    const resource = parseResourceRef(item.resource);
+    if (
+      resource.kind !== 'overlay-media' ||
+      resource.artifact.digest !== version.digest ||
+      resource.artifact.bytes !== version.bytes ||
+      resource.artifact.mediaType !== version.mediaType ||
+      resource.artifact.format !== mediaArtifact(version).format
+    )
+      fail('media resource does not match its fixed business version');
+    return { version, resource };
+  });
+  if (new Set(media.map((item) => item.version.assetId + '/' + item.version.versionId)).size !== media.length)
+    fail('duplicate media version');
+  return { schemaVersion: 2, ...base, media };
 }

@@ -5,6 +5,7 @@ export * from './cache.js';
 export * from './catalog.js';
 export * from './catalog/memory.js';
 export * from './delivery.js';
+export * from './engine.js';
 export * from './gc.js';
 export * from './handoff.js';
 export * from './invalidation.js';

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setImmediate } from 'node:timers/promises';
-import { loadBrowserImage } from '../src/browserImage.js';
 import { buildAtlas } from '../src/atlas.js';
+import { loadBrowserImage } from '../src/browserImage.js';
 import { ViewerController, type ViewerOptions } from '../src/render/viewerEngine.js';
 
 function imageFixture(t: { after(callback: () => void): void }) {
@@ -46,7 +46,7 @@ test('image completion, failure and abort release handlers; pre-aborted loads cr
   assert.equal(images[2].src, '');
   assert.equal(images[2].onload, null);
   await assert.rejects(loadBrowserImage('https://assets.test/not-started', controller.signal), { name: 'AbortError' });
-  await assert.rejects(buildAtlas([], new Set(), controller.signal), { name: 'AbortError' });
+  await assert.rejects(buildAtlas([], controller.signal), { name: 'AbortError' });
   assert.equal(images.length, 3);
 });
 
@@ -77,8 +77,8 @@ test('disposing a viewer during bootstrap aborts metadata and colormap IO withou
       ready++;
     },
   );
-  assert.equal(signals.length, 5, 'world capabilities plus four metadata documents');
-  assert.equal(images.length, 2, 'grass and foliage colormaps');
+  assert.equal(signals.length, 2, 'render and world resource heads coalesce during bootstrap');
+  assert.equal(images.length, 0, 'images are created only after verified resource metadata');
   viewer.dispose();
   viewer.dispose();
   await setImmediate();

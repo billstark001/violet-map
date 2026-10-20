@@ -96,14 +96,11 @@ export interface MediaDocument {
 
 export interface OverlayMediaReference {
   version: MediaVersion;
-  /** API-relative authenticated/public-scope proxy, always available. */
-  url: string;
-  /** Optional anonymous HTTP(S) object URL; the pinned digest still applies. */
-  publicUrl?: string;
+  resource: import('./resourceTypes.js').ResourceRef;
 }
 
 export interface OverlayManifest {
-  schemaVersion: 1;
+  schemaVersion: 2;
   mapId: string;
   mapRevision: number;
   dimension: string;

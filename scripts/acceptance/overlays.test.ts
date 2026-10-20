@@ -93,13 +93,12 @@ test(
         CONTENT_WRITES_ENABLED: 'true',
         DATA_DIR: root,
         WORLDS_DIR: path.join(root, 'worlds'),
-        CACHE_PREWARM: 'false',
       },
       cwd: root,
     });
     const services = await createServices(config);
     t.after(() => services.close());
-    await services.worldStore.createWorld('fixture');
+    await services.worldStore!.createWorld('fixture');
     const app = createApp(config, services);
     const api = serve({
       port: 0,
@@ -646,10 +645,11 @@ test(
     const gate = new Promise<void>((resolve) => {
       unblock = resolve;
     });
-    const delayed = `**/api/maps/${imageMap.mapId}/media/**`;
+    await page.evaluate(() => window.overlayHarness.clearDownloads());
+    const delayed = '**/api/resources/**/overlay-media/**';
     let canceled = 0;
     page.on('requestfailed', (request) => {
-      if (request.url().includes(`/maps/${imageMap.mapId}/media/`)) canceled++;
+      if (request.url().includes('/overlay-media/')) canceled++;
     });
     await page.route(delayed, async (route) => {
       blocked++;
@@ -727,7 +727,7 @@ test(
     const uiErrors: string[] = [];
     const uiMedia = new Set<string>();
     ui.on('response', (r) => {
-      if (r.ok() && r.url().includes(`/maps/${imageMap.mapId}/media/`)) uiMedia.add(r.url());
+      if (r.ok() && r.url().includes('/overlay-media/')) uiMedia.add(r.url());
     });
     ui.on('console', (message) => {
       if (/THREE.WebGLProgram|GL_INVALID|VALIDATE_STATUS/.test(message.text())) uiErrors.push(message.text());
@@ -758,7 +758,7 @@ test(
     let modelSource = false,
       loaderSource = false;
     ui.on('response', (response) => {
-      if (response.ok() && response.url().includes(`/maps/${modelMap.mapId}/media/`)) modelSource = true;
+      if (response.ok() && response.url().includes('/overlay-media/')) modelSource = true;
       if (response.ok() && response.url().includes('overlay-gltf')) loaderSource = true;
     });
     await ui.goto(
@@ -790,7 +790,8 @@ test(
     delete legacyCapabilities.contentWrites;
     await legacy.route('**/api/capabilities', (route) => route.fulfill({ json: legacyCapabilities }));
     await legacy.goto(`${builtUrl}/?world=fixture&viewDistance=2&lodDistance=0`);
-    await legacy.locator('canvas').first().waitFor({ timeout: 30000 });
+    await legacy.waitForFunction(() => document.body.textContent?.includes('service capabilit'));
+    assert.equal(await legacy.locator('canvas').count(), 0);
     await legacy.waitForTimeout(400);
     assert.equal(await legacy.locator('#overlay-toggle').count(), 0);
     assert.ok(
@@ -798,7 +799,7 @@ test(
     );
     await legacy.close();
     assert.deepEqual(errors, []);
-    assert.ok(requests.some((url) => url.includes('/violet/api/maps/') && url.includes('/media/')));
+    assert.ok(requests.some((url) => url.includes('/violet/api/resources/') && url.includes('/overlay-media/')));
     await fs.writeFile(
       path.join(output, 'browser-results.json'),
       JSON.stringify(

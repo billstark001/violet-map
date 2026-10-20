@@ -1,14 +1,14 @@
+import type { ObjectStorage } from '@violet-map/core/storage';
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { ObjectStorage } from '@violet-map/core/storage';
-import { createWorldStore } from '../src/worldStore.js';
-import { createTopMapService } from '../src/topMap.js';
+import { test } from 'node:test';
+import { createApp } from '../src/app.js';
 import { loadServerConfig } from '../src/configuration.js';
 import { createServices } from '../src/services.js';
-import { createApp } from '../src/app.js';
+import { createTopMapService } from '../src/topMap.js';
+import { createWorldStore } from '../src/worldStore.js';
 
 test('invalid world names and create inputs fail before any backend access', async () => {
   let calls = 0;
@@ -29,7 +29,7 @@ test('invalid world names and create inputs fail before any backend access', asy
   };
   const config = loadServerConfig({ env: { DEPLOYMENT_PROFILE: 'public' }, cwd: '/tmp' });
   const top = createTopMapService(storage, config);
-  const world = createWorldStore(storage, top, config);
+  const world = createWorldStore(storage, config);
   for (const name of ['.', '..', 'a/b', '']) {
     for (const operation of [
       () => world.deleteWorld(name),

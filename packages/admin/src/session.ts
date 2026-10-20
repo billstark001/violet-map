@@ -7,6 +7,7 @@ export interface SessionState {
   user: Identity | null;
   busy: boolean;
   error: string | null;
+  publication?: { state: 'pending' | 'failed'; revision: string | null };
 }
 
 export class ApiError extends Error {
@@ -172,9 +173,20 @@ export class AdminSession {
     const token = this.state.token;
     const generation = this.generation;
     try {
-      return await jsonResponse<T>(
-        await this.options.fetch(path, { ...init, headers: authHeaders(token, init?.headers) }),
-      );
+      const response = await this.options.fetch(path, { ...init, headers: authHeaders(token, init?.headers) });
+      const result = await jsonResponse<T>(response);
+      const publication = response.headers.get('resource-publication-state');
+      if (generation === this.generation && ['pending', 'failed', 'ready'].includes(publication ?? ''))
+        this.update({
+          publication:
+            publication === 'ready'
+              ? undefined
+              : {
+                  state: publication as 'pending' | 'failed',
+                  revision: response.headers.get('resource-publication-revision'),
+                },
+        });
+      return result;
     } catch (error) {
       if (
         error instanceof ApiError &&

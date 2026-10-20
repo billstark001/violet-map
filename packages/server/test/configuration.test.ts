@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { test } from 'node:test';
 import { loadServerConfig, readAdminConfig } from '../src/configuration.js';
 
 test('configuration validates values, names, secrets, and authentication combinations', () => {
@@ -27,10 +27,7 @@ test('configuration validates values, names, secrets, and authentication combina
   assert.throws(() => load({ AUTH_MODE: 'static', STATIC_API_TOKEN: 'secret' }), /conflicts/);
   assert.equal(load({ ADMIN_API_ENABLED: 'false' }).features.worldWrites, false);
   assert.throws(() => load({ DEPLOYMENT_PROFILE: 'toString' }), /public, sync, or full/);
-  assert.equal(
-    load({ MEDIA_PUBLIC_BASE_URL: 'https://media.example/blobs' }).content.mediaPublicBaseUrl,
-    'https://media.example/blobs',
-  );
+  assert.throws(() => load({ MEDIA_PUBLIC_BASE_URL: 'https://media.example/blobs' }), /removed/);
   for (const value of [
     'file:///tmp/blobs',
     '//media.example',

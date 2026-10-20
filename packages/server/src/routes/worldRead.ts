@@ -1,6 +1,7 @@
 import { nonSharedByteView } from '@violet-map/core/http';
 import type { RouteContext } from './context.js';
 import { validateWorldName } from '../worldValidation.js';
+import { resourceFailure } from '../resourceErrors.js';
 
 export function mountWorldRead(context: RouteContext) {
   context.app.use('/api/worlds/:world/*', validateWorldName);
@@ -45,14 +46,39 @@ export function mountWorldRead(context: RouteContext) {
       return c.json(worlds);
     }
   });
-  app.get('/api/worlds/:world/capabilities', async (c) => c.json(await getWorldCapabilities(c.req.param('world'))));
+  app.get('/api/worlds/:world/capabilities', async (c) => {
+    if (c.req.query('viewId')) {
+      try {
+        return c.json(await context.resources.worldCapabilities(c.req.param('world'), c.req.query('viewId')));
+      } catch (error) {
+        return resourceFailure(error as Error, c);
+      }
+    }
+    return c.json(await getWorldCapabilities(c.req.param('world')));
+  });
   app.get('/api/worlds/:world/:dim/regions', async (c) =>
     c.json(await listRegions(c.req.param('world'), decodeURIComponent(c.req.param('dim')))),
   );
-  app.get('/api/worlds/:world/:dim/chunk-coverage', async (c) =>
-    c.json(await listChunkSourceCoverage(c.req.param('world'), decodeURIComponent(c.req.param('dim')))),
-  );
+  app.get('/api/worlds/:world/:dim/chunk-coverage', async (c) => {
+    try {
+      return c.json(
+        c.req.query('viewId')
+          ? await context.resources.coverage(c.req.param('world'), c.req.param('dim'), c.req.query('viewId'))
+          : await listChunkSourceCoverage(c.req.param('world'), c.req.param('dim')),
+      );
+    } catch (error) {
+      return resourceFailure(error as Error, c);
+    }
+  });
   app.get('/api/worlds/:world/:dim/top-map/manifest', async (c) => {
+    if (c.req.query('viewId')) {
+      try {
+        const record = await context.resources.topMap(c.req.param('world'), c.req.param('dim'), c.req.query('viewId'));
+        return record ? c.json(record) : c.json({ error: 'top map not found' }, 404);
+      } catch (error) {
+        return resourceFailure(error as Error, c);
+      }
+    }
     const manifest = await getTopMapManifest(c.req.param('world'));
     const dim = decodeURIComponent(c.req.param('dim'));
     const dimension = manifest?.dimensions[dim];

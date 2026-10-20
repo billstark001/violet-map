@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import * as THREE from 'three';
-import { OverlayManager, type OverlayFrame } from '../src/render/overlayManager.js';
 import { createSharedUniforms } from '../src/render/materials.js';
+import { OverlayManager, type OverlayFrame } from '../src/render/overlayManager.js';
 
 const manifest = (id: string) => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   mapId: id,
   mapRevision: 1,
   dimension: 'minecraft:overworld',
@@ -61,6 +61,14 @@ test('context changes abort requests and ignore stale manifests, including after
   const pending = new Map<string, (response: Response) => void>();
   let requests = 0;
   const manager = new OverlayManager(new THREE.Scene(), createSharedUniforms(), {
+    head: async () => ({
+      schemaVersion: 1,
+      viewId: '1'.repeat(64),
+      mode: 'server',
+      sourceScope: 'fixture',
+      generation: 1,
+      renderRoot: '2'.repeat(64),
+    }),
     manifest: async (path) => {
       requests++;
       return new Promise((resolve) => pending.set(path, resolve));
@@ -70,6 +78,7 @@ test('context changes abort requests and ignore stale manifests, including after
   assert.equal(requests, 0);
   manager.configure('old', 'overworld', true);
   manager.configure('new', 'overworld', true);
+  await Promise.resolve();
   for (const [path, resolve] of pending) resolve(Response.json(manifest(path.includes('/old/') ? 'old' : 'new')));
   await setImmediate();
   assert.equal(manager.diagnosticSnapshot().mapId, 'new');
@@ -93,6 +102,14 @@ test('context changes abort requests and ignore stale manifests, including after
 test('ETag refresh retains pinned revision objects and transient errors remain local to overlays', async () => {
   let calls = 0;
   const manager = new OverlayManager(new THREE.Scene(), createSharedUniforms(), {
+    head: async () => ({
+      schemaVersion: 1,
+      viewId: '1'.repeat(64),
+      mode: 'server',
+      sourceScope: 'fixture',
+      generation: 1,
+      renderRoot: '2'.repeat(64),
+    }),
     manifest: async (_path, init) => {
       calls++;
       if (calls === 1) return Response.json(manifest('m'), { headers: { etag: '"v1"' } });
@@ -122,6 +139,14 @@ test('a stalled manifest times out, releases loading state and can be retried', 
   });
   let calls = 0;
   const manager = new OverlayManager(new THREE.Scene(), createSharedUniforms(), {
+    head: async () => ({
+      schemaVersion: 1,
+      viewId: '1'.repeat(64),
+      mode: 'server',
+      sourceScope: 'fixture',
+      generation: 1,
+      renderRoot: '2'.repeat(64),
+    }),
     manifest: async (_path, init) => {
       if (++calls > 1) return Response.json(manifest('m'));
       return new Promise((_resolve, reject) => {
@@ -132,6 +157,7 @@ test('a stalled manifest times out, releases loading state and can be retried', 
   t.after(() => manager.dispose());
   manager.configure('m', 'overworld', true);
   assert.equal(manager.diagnosticSnapshot().loading, true);
+  await Promise.resolve();
   timeout.abort(new DOMException('overlay manifest timed out', 'TimeoutError'));
   await setImmediate();
   assert.equal(manager.diagnosticSnapshot().loading, false);
@@ -169,6 +195,14 @@ test('unknown and failed media leave unrelated curves active and identify the fa
   };
   let known = false;
   const manager = new OverlayManager(new THREE.Scene(), createSharedUniforms(), {
+    head: async () => ({
+      schemaVersion: 1,
+      viewId: '1'.repeat(64),
+      mode: 'server',
+      sourceScope: 'fixture',
+      generation: 1,
+      renderRoot: '2'.repeat(64),
+    }),
     manifest: async () =>
       Response.json({
         ...document,
@@ -187,7 +221,12 @@ test('unknown and failed media leave unrelated curves active and identify the fa
                   dependencies: [],
                   blob: `sha256/aa/${versionId}`,
                 },
-                url: `/api/maps/m/media/asset/${versionId}`,
+                resource: {
+                  schemaVersion: 1,
+                  kind: 'overlay-media',
+                  artifact: { digest: versionId, bytes: 10, mediaType: 'image/png', format: 'png' },
+                  url: `https://resources.example/${versionId}`,
+                },
               },
             ]
           : [],

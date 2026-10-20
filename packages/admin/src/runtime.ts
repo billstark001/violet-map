@@ -1,9 +1,8 @@
 import {
   normalizeApiBaseUrl,
-  apiUrl as resolveApiUrl,
   parseFrontendRuntimeConfig,
   parseServiceCapabilities,
-  LEGACY_SERVICE_CAPABILITIES,
+  apiUrl as resolveApiUrl,
   type ServiceCapabilities,
 } from '@violet-map/core/contracts';
 
@@ -42,11 +41,8 @@ export async function initializeRuntime(options: { staticBase?: string; fallback
     currentOrigin,
   );
   const result = await apiFetch('api/capabilities');
-  if (result.status === 404 && config.capabilityFallback !== 'error') capabilities = { ...LEGACY_SERVICE_CAPABILITIES };
-  else {
-    if (!result.ok) throw new Error(`API capabilities: HTTP ${result.status}`);
-    capabilities = parseServiceCapabilities(await result.json());
-  }
+  if (!result.ok) throw new Error(`API capabilities: HTTP ${result.status}`);
+  capabilities = parseServiceCapabilities(await result.json());
 }
 
 export function showStartupError(error: unknown) {

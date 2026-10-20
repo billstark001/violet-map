@@ -1,16 +1,15 @@
+import { LocalStorage } from '@violet-map/storage/local';
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { test } from 'node:test';
 import { createApp } from '../src/app.js';
-import { createServices } from '../src/services.js';
 import { loadServerConfig } from '../src/configuration.js';
-import { createAssetService } from '../src/assets.js';
 import { createGameDataService } from '../src/gameData.js';
+import { createServices } from '../src/services.js';
 import { createTopMapService } from '../src/topMap.js';
 import { createWorldStore } from '../src/worldStore.js';
-import { LocalStorage } from '@violet-map/storage/local';
 
 test('service instances keep world, manifest, and game data caches independent', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-instances-'));
@@ -21,10 +20,9 @@ test('service instances keep world, manifest, and game data caches independent',
       cwd: root,
     });
     const storage = new LocalStorage(path.join(root, name, 'worlds'));
-    const assets = createAssetService(config);
-    const data = createGameDataService(config, assets);
-    const topMap = createTopMapService(storage, config);
-    return { storage, data, topMap, worlds: createWorldStore(storage, topMap, config) };
+    const data = createGameDataService(config);
+    const topMap = createTopMapService(storage, config, data);
+    return { storage, data, topMap, worlds: createWorldStore(storage, config) };
   };
   const first = make('first'),
     second = make('second');
@@ -45,7 +43,7 @@ test('service instances keep world, manifest, and game data caches independent',
     );
   await first.storage.write('same/.violet-map/top-map/manifest.json', manifest(true));
   await second.storage.write('same/.violet-map/top-map/manifest.json', manifest(false));
-  assert.equal((await first.topMap.getWorldCapabilities('same')).hasTopMap, true);
+  await assert.rejects(first.topMap.getWorldCapabilities('same'), { code: 'TOPMAP_REBAKE_REQUIRED' });
   assert.equal((await second.topMap.getWorldCapabilities('same')).hasTopMap, false);
 });
 

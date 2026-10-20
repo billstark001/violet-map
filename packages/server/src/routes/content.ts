@@ -1,13 +1,15 @@
-import { Hono, type Context, type MiddlewareHandler } from 'hono';
-import { ContentValidationError, revisionTag } from '@violet-map/core/overlays';
-import { ContentError, type PublishedMedia } from '../content.js';
-import type { ServerConfig } from '../configuration.js';
-import type { AppServices } from '../serviceTypes.js';
-import { nonSharedByteView, readLimitedBody } from '@violet-map/core/http';
-import { parseByteRange } from '../httpRange.js';
-import { createHash } from 'node:crypto';
-import fresh from 'fresh';
+import { resourceFailure } from '../resourceErrors.js';
+import { ResourceError } from '@violet-map/core/resources';
 import { WorkLimiter } from '@violet-map/core/async';
+import { readLimitedBody } from '@violet-map/core/http';
+import { ContentValidationError, revisionTag } from '@violet-map/core/overlays';
+import { mediaArtifact } from '@violet-map/core/resources';
+import { Hono, type Context, type MiddlewareHandler } from 'hono';
+import { createHash } from 'node:crypto';
+import type { ServerConfig } from '../configuration.js';
+import { ContentError, type PublishedMedia } from '../content.js';
+import { artifactResponse } from '../resourceHttp.js';
+import type { AppServices } from '../serviceTypes.js';
 
 function condition(c: Context): number | undefined {
   const value = c.req.header('if-match');
@@ -36,32 +38,7 @@ function documentResponse(c: Context, document: { revision: number }, created = 
 }
 
 async function bytesResponse(c: Context, { version, read }: PublishedMedia) {
-  const etag = `"${version.digest}"`;
-  const headers = {
-    etag,
-    'accept-ranges': 'bytes',
-    'cache-control': 'private, max-age=0, must-revalidate',
-    'content-type': version.mediaType,
-    'x-content-type-options': 'nosniff',
-    'content-security-policy': "default-src 'none'; style-src 'none'; sandbox",
-  };
-  if (
-    fresh({ 'if-none-match': c.req.header('if-none-match'), 'cache-control': c.req.header('cache-control') }, { etag })
-  )
-    return c.body(null, 304, headers);
-  const ifRange = c.req.header('if-range');
-  const header =
-    c.req.method === 'GET' && (ifRange === undefined || ifRange === etag) ? c.req.header('range') : undefined;
-  const range = header === undefined ? undefined : parseByteRange(header, version.bytes);
-  if (header !== undefined && !range)
-    return c.body(null, 416, { ...headers, 'content-range': `bytes */${version.bytes}` });
-  if (c.req.method === 'HEAD') return c.body(null, 200, { ...headers, 'content-length': String(version.bytes) });
-  const body = await read(range ?? undefined);
-  return c.body(nonSharedByteView(body), range ? 206 : 200, {
-    ...headers,
-    'content-length': String(body.byteLength),
-    ...(range ? { 'content-range': `bytes ${range.start}-${range.end}/${version.bytes}` } : {}),
-  });
+  return artifactResponse(c, mediaArtifact(version), read);
 }
 
 export function mountContent(app: Hono, config: ServerConfig, services: AppServices): void {
@@ -69,6 +46,7 @@ export function mountContent(app: Hono, config: ServerConfig, services: AppServi
   const content = services.content;
   const routes = new Hono();
   routes.onError((error, c) => {
+    if (error instanceof ResourceError) return resourceFailure(error, c);
     if (error instanceof ContentValidationError)
       return c.json({ code: error.code, error: error.message }, error.code === 'UNSUPPORTED_FORMAT' ? 415 : 400);
     if (error instanceof ContentError) {
@@ -81,10 +59,11 @@ export function mountContent(app: Hono, config: ServerConfig, services: AppServi
   routes.get('/api/maps/:id/overlays', async (c) => {
     const dimension = c.req.query('dimension');
     if (!dimension) throw new ContentValidationError('dimension is required');
-    const delivery = c.req.query('delivery') ?? 'proxy';
-    if (delivery !== 'proxy' && delivery !== 'public')
-      throw new ContentValidationError('delivery must be proxy or public');
-    const manifest = await content.manifest(c.req.param('id'), dimension, delivery);
+    if (c.req.query('delivery') !== undefined)
+      throw new ContentValidationError('delivery was removed; resource mode is selected by the server');
+    const viewId = c.req.query('viewId');
+    if (!viewId) throw new ContentValidationError('viewId is required');
+    const manifest = await services.resources.overlays(c.req.param('id'), dimension, viewId);
     const body = JSON.stringify(manifest);
     const etag = `"${createHash('sha256').update(body).digest('hex')}"`;
     c.header('etag', etag);

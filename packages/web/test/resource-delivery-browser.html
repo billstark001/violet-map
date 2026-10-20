@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="data:," />
+    <title>Resource delivery acceptance</title>
+  </head>
+  <body>
+    <script type="module">
+      import { initializeRuntime } from '../src/runtime.ts';
+      import { ResourceDownloader } from '../src/resources/download.ts';
+      import { resourceClient } from '../src/resources/client.ts';
+      import { decode } from '@msgpack/msgpack';
+      import { prepareTopMapTile } from '@violet-map/core/formats/top-map';
+      await initializeRuntime({ fallbackApi: new URLSearchParams(location.search).get('api') });
+      window.readPublication = async (mapId, assetId, versionId) => {
+        const batch = await resourceClient.resolve(
+          [
+            { kind: 'chunk', world: 'fixture', dimension: 'minecraft:overworld', cx: 0, cz: 0 },
+            { kind: 'atlas', textureSetId: 'default' },
+            { kind: 'top-map-tile', world: 'fixture', dimension: 'minecraft:overworld', rx: 0, rz: 0 },
+            { kind: 'overlay-media', mapId, dimension: 'minecraft:overworld', assetId, versionId },
+          ],
+          'fixture',
+        );
+        const downloader = new ResourceDownloader(0);
+        const formats = [];
+        for (const result of batch.resources) {
+          const refs = 'resource' in result ? [result.resource] : [result.manifest, result.image];
+          for (const ref of refs) {
+            const bytes = await downloader.download(ref);
+            if (ref.kind === 'chunk' && decode(bytes).schemaVersion !== 1) throw new Error('invalid chunk');
+            if (ref.kind === 'top-map-tile') prepareTopMapTile(decode(bytes));
+            if (ref.artifact.mediaType === 'image/png') {
+              const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+              bitmap.close();
+            }
+            formats.push(ref.artifact.format);
+          }
+        }
+        return { viewId: batch.head.viewId, formats };
+      };
+      window.readResource = async (reference) => Array.from(await new ResourceDownloader(0).download(reference));
+    </script>
+  </body>
+</html>
