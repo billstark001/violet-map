@@ -35,7 +35,9 @@
     "test:resources:roles": "TSX_DISABLE_CACHE=1 tsx --conditions=development --test packages/server/test/resourceRoles.test.ts",
     "test:resources:backends": "docker build -f scripts/acceptance/Dockerfile.minio -t violet-acceptance-minio:source-2025-10-15 . && node --test scripts/acceptance/resources-backends.test.mjs",
     "lint:fix": "oxlint --fix packages scripts/bench",
-    "format:raw": "oxfmt ."
+    "format:raw": "oxfmt .",
+    "bench:resources": "tsx --conditions=development scripts/bench/resources.ts",
+    "bench:resources:baseline": "tsx --conditions=development scripts/bench/resources-baseline.ts"
   },
   "devDependencies": {
     "@hono/node-server": "^2.1.5",

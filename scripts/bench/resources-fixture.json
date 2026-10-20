@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "fixture": "deterministic-shared-chunk-msgpack",
+  "objectBytes": 32768,
+  "hotObjects": 8,
+  "requests": 10000,
+  "runs": 3,
+  "capacities": [0, 1, 32767, 32768, 32769, 262143, 262144, 262145, 1048576],
+  "traces": ["scan", "hot", "edit", "resolve-get"],
+  "strategies": ["zero", "lru", "tiny-lfu"],
+  "loadFractions": [0.5, 0.8],
+  "lowBenefitMedianP95Ratio": 1.1,
+  "lowBenefitCpuPerRequestRatio": 1.1,
+  "warmupRequests": 200,
+  "loadRequests": 1000,
+  "maxLoadDrainMs": 1000,
+  "maxQueueGrowth": 16,
+  "maxCalibrationAttempts": 8,
+  "calibrationStep": 0.85,
+  "minAchievedRateFraction": 0.95
+}
