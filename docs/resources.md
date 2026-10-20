@@ -20,6 +20,8 @@ World identity, content metadata, retained media originals, publication manifest
 
 Chunks use deterministic `chunk-msgpack-v1`: coordinates, terrain NBT and optional entity NBT, with terrain/entity/content digests in the reference metadata. File validators and source paths are not encoded into output bytes. Overrides take precedence over MCA through the same source reader used by baking.
 
+Zero-byte terrain and entity MCA files are read as empty region placeholders without rewriting the archive. Nonempty files shorter than the complete 8 KiB header and invalid declared chunk records remain integrity errors. A declared region becoming empty while its header or chunk body is being read remains a source-change error; it is not silently omitted from an in-progress read.
+
 Atlas output is an immutable PNG plus `atlas-manifest-v1`; the manifest contains the PNG ArtifactRef and UV/animation/color metadata, without a URL. The retained explicit atlas POST uses the same generator and repository. Missing optional textures are explicit missing results; malformed PNG/JSON, I/O and integrity errors are errors.
 
 Top-map payloads remain v6. New manifests carry a complete environment dependency digest and per-region action/output references. Terrain (including overrides), pack models/textures/animation metadata/colormaps, biome and block data, lighting and sampling parameters participate. Old MCA SHA-1 records do not prove validity. Use the matching 0.4 CLI to rebake; the server reports `TOPMAP_REBAKE_REQUIRED` for absent/stale dependency records. Bake with the same selected packs, block data, biome data and Minecraft data version as the server.

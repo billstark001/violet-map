@@ -245,8 +245,16 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     const loc = view.getUint32(idx * 4);
     return loc >>> 8 !== 0 && (loc & 0xff) !== 0;
   }
-  async function readRegionFile(filePath: string): Promise<RegionCacheEntry | null> {
+  async function regionFileInfo(filePath: string): Promise<StoredFileInfo | null> {
     const info = await worldStorage.stat(filePath);
+    // Archives may retain zero-byte region placeholders without saved chunks.
+    // Nonempty regions still require both complete header sectors.
+    if (!info || info.size === 0) return null;
+    if (info.size < 8192) throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'source region header is truncated');
+    return info;
+  }
+  async function readRegionFile(filePath: string): Promise<RegionCacheEntry | null> {
+    const info = await regionFileInfo(filePath);
     if (!info) return null;
     const clean = cleanStoragePath(filePath);
     const v = validator(info);
@@ -258,6 +266,8 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     load = (async () => {
       const bytes = await readSource(clean);
       if (!bytes) throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'region disappeared during read', true);
+      if (bytes.byteLength !== info.size)
+        throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'region size changed during read', true);
       const hash = sourceHashForInfo(info);
       if (regionReadInflight.get(clean) === load && bytes.length >= REGION_LOCATION_BYTES) {
         regionHeaderCache.set(clean, {
@@ -278,9 +288,8 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     }
   }
   async function readRegionHeader(filePath: string): Promise<RegionHeaderCacheEntry | null> {
-    const info = await worldStorage.stat(filePath);
+    const info = await regionFileInfo(filePath);
     if (!info) return null;
-    if (info.size < 8192) throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'source region header is truncated');
     const clean = cleanStoragePath(filePath);
     const v = validator(info);
     const fullHit = regionCache.get(clean);

@@ -149,6 +149,8 @@ test('publisher and source-free public reader share a durable closure with zero 
   const writer = await createServices(config);
   t.after(() => writer.close());
   await writer.mounts.worlds!.write(`world/chunks/${encodeURIComponent(dim)}/c.0.0.nbt`, nbt);
+  await writer.mounts.worlds!.write('world/region/r.0.0.mca', new Uint8Array());
+  await writer.mounts.worlds!.write('world/entities/r.0.0.mca', new Uint8Array());
   const first = await writer.resources.publish(null);
   const before = { ...writer.resources.store!.metrics };
   const uploads = { ...writer.resources.target!.metrics };
@@ -173,6 +175,8 @@ test('publisher and source-free public reader share a durable closure with zero 
     ['world'],
   );
   assert.equal((await writerApp.request('/api/worlds/draft/minecraft%3Aoverworld/chunk/0/0')).status, 404);
+  assert.equal((await writer.mounts.worlds!.stat('world/region/r.0.0.mca'))?.size, 0);
+  assert.equal((await writer.mounts.worlds!.stat('world/entities/r.0.0.mca'))?.size, 0);
   await writer.close();
   const readerFile = path.join(root, 'reader.json');
   await fs.writeFile(readerFile, JSON.stringify({ ...yaml, resources: { ...yaml.resources, roles: ['serve'] } }));
