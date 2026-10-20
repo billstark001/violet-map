@@ -121,3 +121,19 @@ test('zero retention coalesces transfer users, cancellation releases the shared 
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(cancelled, true);
 });
+
+test('cached and coalesced downloads still enforce each reference byte length', async (t) => {
+  const previous = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = previous;
+  });
+  globalThis.fetch = async () => new Response(bytes, { headers: { 'content-type': 'image/png' } });
+  const invalid = { ...ref(), artifact: { ...ref().artifact, bytes: 4 } };
+  const cached = new ResourceDownloader();
+  await cached.download(ref());
+  await assert.rejects(cached.download(invalid), { code: 'RESOURCE_INTEGRITY_FAILED' });
+  const zero = new ResourceDownloader(0);
+  const results = await Promise.allSettled([zero.download(ref()), zero.download(invalid)]);
+  assert.equal(results[0].status, 'fulfilled');
+  assert.equal(results[1].status, 'rejected');
+});

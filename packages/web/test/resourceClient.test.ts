@@ -66,3 +66,38 @@ test('publication refresh rejects heads read on opposite sides of a commit', asy
   assert.equal(client.current()!.generation, 1);
   assert.equal(client.current('world')!.generation, 1);
 });
+
+test('initial world reads reject a mixed generation in both delivery modes', async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  for (const mode of ['server', 'public'] as const) {
+    let version = 1;
+    globalThis.fetch = async (input) => {
+      const world = new URL(String(input), 'http://fixture').searchParams.get('world') ?? '';
+      const value = head(version, world);
+      return Response.json(
+        mode === 'public'
+          ? value
+          : {
+              schemaVersion: 1,
+              mode,
+              viewId: value.viewId + world,
+              sourceScope: value.sourceScope,
+              generation: version,
+              renderRoot: value.renderRoot,
+            },
+      );
+    };
+    const client = new ResourceClient();
+    const root = await client.head();
+    version = 2;
+    await assert.rejects(client.head('world'), { code: 'RESOURCE_VIEW_EXPIRED' });
+    assert.equal(client.current('world'), undefined);
+    assert.equal(client.current(), root);
+    await client.refresh();
+    assert.equal((await client.head('world')).generation, 2);
+    client.assertCurrent(client.current('world')!, 'world');
+  }
+});

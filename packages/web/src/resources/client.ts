@@ -17,6 +17,15 @@ interface Current {
   receivedAt: number;
 }
 
+function sameGeneration(a: ResourceViewHead, b: ResourceViewHead) {
+  return (
+    a.mode === b.mode &&
+    a.renderRoot === b.renderRoot &&
+    a.generation === b.generation &&
+    (a.mode !== 'public' || (b.mode === 'public' && a.publicationId === b.publicationId && a.viewId === b.viewId))
+  );
+}
+
 export class ResourceClient {
   private context = '';
   private epoch = 0;
@@ -120,12 +129,7 @@ export class ResourceClient {
         throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'resource delivery context changed', true);
       const first = updates[0]?.[1].head;
       for (const [, { head }] of updates)
-        if (
-          head.mode !== first!.mode ||
-          head.renderRoot !== first!.renderRoot ||
-          head.generation !== first!.generation ||
-          (head.mode === 'public' && head.viewId !== first!.viewId)
-        )
+        if (!sameGeneration(head, first!))
           throw new ResourceError(
             'RESOURCE_VIEW_EXPIRED',
             'resource heads changed while refreshing; retry the complete view',
@@ -164,6 +168,13 @@ export class ResourceClient {
       this.ensureContext();
       if (epoch !== this.epoch)
         throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'resource delivery context changed', true);
+      for (const [otherWorld, other] of this.heads)
+        if (otherWorld !== world && !sameGeneration(current.head, other.head))
+          throw new ResourceError(
+            'RESOURCE_VIEW_EXPIRED',
+            'new world and existing resources belong to different generations; refresh the complete view',
+            true,
+          );
       this.heads.set(world, current);
       this.notify(known, current);
       return current.head;
@@ -179,8 +190,8 @@ export class ResourceClient {
     if (this.current(world)?.viewId !== head.viewId)
       throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'discarded bytes from an old resource view', true);
     const root = this.heads.get('')?.head;
-    if (head.mode === 'public' && root?.mode === 'public' && head.viewId !== root.viewId)
-      throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'world and render root belong to different publications', true);
+    if (root && !sameGeneration(head, root))
+      throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'world and render root belong to different generations', true);
   }
   private async error(response: Response) {
     let body: { code?: string; message?: string; retryable?: boolean };

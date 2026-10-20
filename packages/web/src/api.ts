@@ -32,11 +32,14 @@ async function selected(selector: ResourceSelector, signal?: AbortSignal, world 
 }
 
 async function resourceJson<T>(selector: ResourceSelector, signal?: AbortSignal): Promise<T> {
-  const result = await selected(selector, signal);
+  const { head, resources } = await resourceClient.resolve([selector], '', signal);
+  const result = resources[0];
   if (!('resource' in result)) throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'JSON resource is missing');
   if (!['asset-bundle-json-v1', 'game-data-json-v1'].includes(result.resource.artifact.format))
     throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'unknown JSON resource format');
-  return JSON.parse(new TextDecoder().decode(await downloadResource(result.resource, signal))) as T;
+  const bytes = await downloadResource(result.resource, signal);
+  resourceClient.assertCurrent(head);
+  return JSON.parse(new TextDecoder().decode(bytes)) as T;
 }
 
 export const fetchBundle = (signal?: AbortSignal) => resourceJson<AssetBundle>({ kind: 'asset-bundle' }, signal);
@@ -127,7 +130,8 @@ export async function fetchChunks(
 }
 
 export async function fetchTextureAtlas(ids: string[], signal?: AbortSignal): Promise<TextureAtlasManifest> {
-  const result = await selected({ kind: 'atlas', textureSetId: 'default' }, signal);
+  const { head, resources } = await resourceClient.resolve([{ kind: 'atlas', textureSetId: 'default' }], '', signal);
+  const result = resources[0];
   if (
     !('manifest' in result) ||
     result.manifest.artifact.format !== 'atlas-manifest-v1' ||
@@ -137,6 +141,7 @@ export async function fetchTextureAtlas(ids: string[], signal?: AbortSignal): Pr
   const document = JSON.parse(
     new TextDecoder().decode(await downloadResource(result.manifest, signal)),
   ) as AtlasDocument;
+  resourceClient.assertCurrent(head);
   if (
     document.schemaVersion !== 1 ||
     canonicalJson(document.image) !== canonicalJson(result.image.artifact) ||

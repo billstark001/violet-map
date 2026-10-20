@@ -34,7 +34,7 @@ export class ResourceDownloader {
   async download(reference: ResourceRef, signal?: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
     const ref = parseResourceRef(reference);
     signal?.throwIfAborted();
-    const key = `${ref.artifact.digest}:${ref.artifact.mediaType}:${ref.artifact.format}`;
+    const key = `${ref.artifact.digest}:${ref.artifact.bytes}:${ref.artifact.mediaType}:${ref.artifact.format}`;
     const hit = this.cache.get(key);
     if (hit) return hit;
     let pending = this.pending.get(key);
