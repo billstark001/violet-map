@@ -59,6 +59,16 @@ export interface ChunkHashPayload {
   missing?: boolean;
 }
 
+export interface AtlasDocument {
+  schemaVersion: 1;
+  image: import('./resourceTypes.js').ArtifactRef;
+  width: number;
+  height: number;
+  index: AtlasIndex;
+  avgColors: Record<string, [number, number, number]>;
+  hasAlpha: TextureAlphaMap;
+}
+
 export interface TextureAtlasManifest {
   cacheKey: string;
   image: string;

@@ -111,3 +111,7 @@ export interface OverlayManifest {
   layers: { binding: LayerBinding; document: LayerDocument }[];
   media: OverlayMediaReference[];
 }
+
+export interface OverlaySnapshot extends Omit<OverlayManifest, 'schemaVersion' | 'media'> {
+  media: MediaVersion[];
+}

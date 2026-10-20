@@ -10,6 +10,7 @@ export interface TopMapRegionManifestEntry {
   x: number;
   z: number;
   hash: string;
+  artifact?: import('../resourceTypes.js').ArtifactRef;
 }
 
 export interface TopMapRegionSourceEntry extends TopMapRegionManifestEntry {
@@ -26,6 +27,7 @@ export interface TopMapTileSetManifest {
   approach: TopMapApproach;
   lightMode: TopMapLightMode;
   format: 'msgpack';
+  dependency?: { schemaVersion: 1; environment: string; hasSkyLight: boolean };
   regions: TopMapRegionManifestEntry[];
   sources: TopMapRegionSourceEntry[];
 }

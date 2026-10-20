@@ -12,7 +12,7 @@ export interface StoredFileInfo {
  * Missing files return null; backend failures reject instead.
  */
 export interface ObjectReader {
-  readonly kind: 'local' | 's3' | 'server';
+  readonly kind: 'local' | 's3' | 'server' | 'http';
   read(filePath: string): Promise<Uint8Array | null>;
   /** Read at most length bytes from start; an offset at or beyond EOF returns an empty array. */
   readRange(filePath: string, start: number, length: number): Promise<Uint8Array | null>;

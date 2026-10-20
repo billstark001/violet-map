@@ -11,6 +11,7 @@ import type {
   MediaVersion,
   MediaDocument,
   OverlayManifest,
+  OverlaySnapshot,
 } from './overlayTypes.js';
 
 export type * from './overlayTypes.js';
@@ -365,4 +366,36 @@ export function parseOverlayManifest(value: unknown): OverlayManifest {
     layers,
     media,
   };
+}
+
+function overlayBase(d: Record<string, unknown>) {
+  contentId(d.mapId);
+  integer(d.mapRevision, 1);
+  oneOf(d.sourceStatus, ['verified', 'unverified', 'missing', 'mismatch', 'unbound']);
+  const dimension = normalizeContentDimension(d.dimension);
+  const layers = array(d.layers, 0, 10000).map((value) => {
+    const item = record(value, ['binding', 'document']);
+    const binding = parseBinding(item.binding),
+      document = parseLayerDocument(item.document);
+    if (binding.layerId !== document.layerId || binding.dimension !== dimension || !binding.enabled)
+      fail('manifest binding mismatch');
+    return { binding, document };
+  });
+  if (new Set(layers.map((item) => item.binding.bindingId)).size !== layers.length) fail('duplicate binding');
+  return {
+    mapId: d.mapId as string,
+    mapRevision: d.mapRevision as number,
+    dimension,
+    sourceStatus: d.sourceStatus as MapSourceStatus,
+    layers,
+  };
+}
+
+export function parseOverlaySnapshot(value: unknown): OverlaySnapshot {
+  const d = record(value, ['mapId', 'mapRevision', 'dimension', 'sourceStatus', 'layers', 'media']);
+  const base = overlayBase(d);
+  const media = array(d.media, 0, 10000).map(parseMediaVersion);
+  if (new Set(media.map((item) => item.assetId + '/' + item.versionId)).size !== media.length)
+    fail('duplicate media version');
+  return { ...base, media };
 }

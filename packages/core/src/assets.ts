@@ -169,3 +169,5 @@ export const DIR_VEC: Record<Direction, [number, number, number]> = {
   west: [-1, 0, 0],
   east: [1, 0, 0],
 };
+
+export { collectTextureIds } from './textureSet.js';
