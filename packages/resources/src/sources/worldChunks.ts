@@ -397,7 +397,7 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     for (const sub of dimensionRegionPaths(dim)) {
       for (const file of await worldStorage.list(`${world}/${sub}`)) {
         const item = parseRegionFileName(file.path.split('/').pop() ?? '');
-        if (!item) continue;
+        if (!item || file.size === 0) continue;
         out.set(`${item.x},${item.z}`, item);
       }
     }
@@ -414,7 +414,7 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
       const prefix = `${world}/${sub}`;
       for (const file of await worldStorage.list(prefix)) {
         const item = parseRegionFileName(file.path.split('/').pop() ?? '');
-        if (!item) continue;
+        if (!item || file.size === 0) continue;
         regionFiles.push({ path: file.path, ...item });
       }
     }

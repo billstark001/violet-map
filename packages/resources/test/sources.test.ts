@@ -145,6 +145,11 @@ test('zero-byte terrain and entity regions are empty, preserve saved neighbors a
       await storage.replace(entities, new Uint8Array());
 
       const coverage = await source.listChunkSourceCoverage('world', 'minecraft:overworld');
+      assert.deepEqual(await source.listRegions('world', 'minecraft:overworld'), [{ x: 1, z: 0 }]);
+      assert.deepEqual(
+        coverage.regions.map(({ x, z }) => ({ x, z })),
+        [{ x: 1, z: 0 }],
+      );
       const masks = coverage.regions.map((region) => Buffer.from(region.mask, 'base64'));
       assert.equal(
         masks.reduce((sum, mask) => sum + [...mask].filter((byte) => byte !== 0).length, 0),
