@@ -164,6 +164,64 @@ test('persistent cache has one explicit writer; read-only users never write, whi
   await writer.close();
 });
 
+test('failed cache body and action writes are reported and never become committed catalog entries', async (t) => {
+  for (const point of ['body', 'action'] as const)
+    await t.test(point, async (sub) => {
+      let cache: PersistentResourceCache | undefined;
+      sub.after(async () => cache?.close());
+      const storage = await fixture(sub);
+      cache = new PersistentResourceCache(storage, 4096, 32, 4096);
+      await cache.initialize();
+      const bytes = new Uint8Array([8, 9, 10]);
+      const ref = artifactRef(bytes, 'image/png', 'png');
+      const key = 'd'.repeat(64);
+      const method = point === 'body' ? 'create' : 'replace';
+      const original = storage[method].bind(storage) as (...args: any[]) => Promise<any>;
+      let fail = true;
+      (storage as any)[method] = async (...args: any[]) => {
+        if (fail) throw new Error(`failed ${point} write`);
+        return original(...args);
+      };
+      await assert.rejects(cache.retain(key, ref, bytes), new RegExp(`failed ${point}`));
+      assert.equal(await cache.action(key), undefined);
+      fail = false;
+      assert.equal(await cache.retain(key, ref, bytes), true);
+      assert.deepEqual(await cache.read(ref), bytes);
+      assert.deepEqual(await cache.action(key), ref);
+    });
+});
+
+test('cache readers cannot observe an action before its write completes', async (t) => {
+  let cache: PersistentResourceCache | undefined;
+  t.after(async () => cache?.close());
+  const storage = await fixture(t);
+  cache = new PersistentResourceCache(storage, 4096, 32, 4096);
+  await cache.initialize();
+  const bytes = new Uint8Array([1]);
+  const ref = artifactRef(bytes, 'image/png', 'png');
+  const key = 'e'.repeat(64);
+  let entered!: () => void;
+  const writing = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let finish!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const replace = storage.replace.bind(storage);
+  storage.replace = async (...args) => {
+    entered();
+    await blocked;
+    return replace(...args);
+  };
+  const retained = cache.retain(key, ref, bytes);
+  await writing;
+  assert.equal(await cache.action(key), undefined);
+  finish();
+  await retained;
+  assert.deepEqual(await cache.action(key), ref);
+});
+
 test('GC retains committed public closures and backup pins while never touching retained originals', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-gc-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

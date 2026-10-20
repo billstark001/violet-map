@@ -73,6 +73,13 @@ test('dynamic zero retention resolves and GETs deterministic chunks; source writ
   assert.equal(services.resources.repository!.lease(reference.artifact), undefined);
   assert.equal(services.resources.repository!.cache.bytes, 0);
   assert.equal(services.resources.repository!.work.bytes, 0);
+  // The same fixed action can be rebuilt after its delivery pin is consumed.
+  // Its producer lease must end with the transfer, even with every cache off.
+  const rebuilt = await app.request(reference.url);
+  assert.equal(rebuilt.status, 200);
+  assert.equal(sha256(new Uint8Array(await rebuilt.arrayBuffer())), reference.artifact.digest);
+  assert.equal(services.resources.repository!.handoff.budget.bytes, 0);
+  assert.equal(services.resources.repository!.work.bytes, 0);
   await services.mounts.worlds!.write(`world/chunks/${encodeURIComponent(dim)}/c.1.0.nbt`, nbt);
   const expired = await app.request('/api/resources/resolve', {
     method: 'POST',
@@ -151,6 +158,7 @@ test('publisher and source-free public reader share a durable closure with zero 
   assert.equal(writer.resources.store!.metrics.controlPut, before.controlPut);
   assert.equal(writer.resources.target!.metrics.put, uploads.put);
   assert.equal(writer.resources.repository!.metrics.generation, generated);
+  assert.equal(writer.resources.repository!.handoff.budget.bytes, 0);
   const writerApp = createApp(config, writer);
   await writer.mounts.worlds!.write(`draft/chunks/${encodeURIComponent(dim)}/c.0.0.nbt`, nbt);
   assert.deepEqual(

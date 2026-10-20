@@ -19,6 +19,7 @@ export class PersistentResourceCache {
   private readonly removals = new Set<string>();
   private readonly cas: ContentAddressedStorage;
   private writing = false;
+  private pendingKey?: string;
   private ownerToken?: string;
   private readonly owner = randomUUID();
   private readonly ownerKey = 'cache-owner.json';
@@ -68,6 +69,7 @@ export class PersistentResourceCache {
   }
   async read(ref: ArtifactRef): Promise<Uint8Array | null> {
     const key = contentObjectKey(ref.digest);
+    if (key === this.pendingKey) return null;
     if (!this.catalog.capacity) return null;
     if (this.catalog.get(key) === undefined) {
       if (this.writable) return null;
@@ -86,6 +88,7 @@ export class PersistentResourceCache {
   async action(key: string): Promise<ArtifactRef | undefined> {
     assertActionKey(key);
     const file = `actions/${key}.json`;
+    if (file === this.pendingKey) return undefined;
     if (!this.catalog.capacity) return undefined;
     let size = this.catalog.get(file);
     if (size === undefined) {
@@ -129,22 +132,35 @@ export class PersistentResourceCache {
           this.metrics.admissionReject++;
           return false;
         }
+        this.pendingKey = key;
         await this.flushRemovals();
         if (await this.cas.ensure(ref, bytes)) {
           this.metrics.put++;
           this.metrics.uploadedBytes += bytes.byteLength;
         }
+        this.pendingKey = undefined;
       }
       const file = `actions/${action}.json`;
       if (this.catalog.get(file) === undefined && this.catalog.set(file, json.byteLength, json.byteLength)) {
+        this.pendingKey = file;
         await this.flushRemovals();
         // The body precedes its optional action record; eviction may legitimately remove either later.
         await this.storage.replace(file, json, 'application/json');
         this.metrics.put++;
         this.metrics.uploadedBytes += json.byteLength;
+        this.pendingKey = undefined;
       }
       return true;
+    } catch (error) {
+      if (this.pendingKey) {
+        // Roll back admission, not the object: an uncertain write may have
+        // completed, and corruption must remain visible to the next verifier.
+        this.catalog.delete(this.pendingKey);
+        this.removals.delete(this.pendingKey);
+      }
+      throw error;
     } finally {
+      this.pendingKey = undefined;
       this.writing = false;
       release();
     }

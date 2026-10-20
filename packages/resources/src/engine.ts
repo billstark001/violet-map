@@ -407,18 +407,23 @@ export class ResourceEngine {
         { kind: 'texture', id: 'minecraft:colormap/foliage' },
       ];
       const entries: PublicationEntry[] = [];
-      for (const selector of selectors) {
-        const old = this.previousPublication?.entries.find((e) => selectorKey(e.selector) === selectorKey(selector));
-        if (old) await this.repo().rememberAction(old.actionKey, old.artifact);
-        const entry = await this.generate(selector, generation, token);
-        if (!entry && selector.kind === 'texture') continue;
-        if (!entry) throw new ResourceError('RESOURCE_BACKEND_UNAVAILABLE', 'render root resource is missing');
-        entries.push(entry);
+      try {
+        for (const selector of selectors) {
+          const old = this.previousPublication?.entries.find((e) => selectorKey(e.selector) === selectorKey(selector));
+          if (old) await this.repo().rememberAction(old.actionKey, old.artifact);
+          const entry = await this.generate(selector, generation, token);
+          if (!entry && selector.kind === 'texture') continue;
+          if (!entry) throw new ResourceError('RESOURCE_BACKEND_UNAVAILABLE', 'render root resource is missing');
+          entries.push(entry);
+        }
+        this.coordinator.assert(generation);
+        const root = { generation, digest: sha256(canonicalJson(entries)), entries };
+        this.root = root;
+        return root;
+      } catch (error) {
+        for (const entry of entries) this.discardPreparedBytes(entry);
+        throw error;
       }
-      this.coordinator.assert(generation);
-      const root = { generation, digest: sha256(canonicalJson(entries)), entries };
-      this.root = root;
-      return root;
     });
   }
   private async generate(
@@ -719,13 +724,16 @@ export class ResourceEngine {
           resources.push({ selector, missing: true });
           continue;
         }
-        if (view.head.mode === 'server' && selector.kind !== 'overlay-media')
-          for (const ref of [entry.artifact, ...(entry.image ? [entry.image] : [])]) {
-            validUntil = Math.min(validUntil, this.repo().promise(ref).validUntil);
-            issued.push(ref);
-          }
-        resources.push(this.resolved(view, entry));
-        this.releaseGeneration(entry);
+        try {
+          if (view.head.mode === 'server' && selector.kind !== 'overlay-media')
+            for (const ref of [entry.artifact, ...(entry.image ? [entry.image] : [])]) {
+              validUntil = Math.min(validUntil, this.repo().promise(ref).validUntil);
+              issued.push(ref);
+            }
+          resources.push(this.resolved(view, entry));
+        } finally {
+          this.releaseGeneration(entry);
+        }
       }
       // A batch can yield between members, including when every member is a
       // cache hit. Never issue a mixed-generation batch after a source write.
@@ -756,17 +764,29 @@ export class ResourceEngine {
       return {
         artifact,
         read: async (range?: { start: number; end: number }) => {
-          if (!this.repo().lease(artifact)) {
-            const replacement = await this.generate(entry.selector, view.head.generation);
-            if (!replacement || replacement.artifact.digest !== entry.artifact.digest)
-              throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'resource is no longer available from its fixed source');
+          let replacement: PublicationEntry | null | undefined;
+          try {
+            if (!this.repo().lease(artifact)) {
+              replacement = await this.generate(entry.selector, view.head.generation);
+              if (
+                !replacement ||
+                replacement.artifact.digest !== entry.artifact.digest ||
+                replacement.image?.digest !== entry.image?.digest
+              )
+                throw new ResourceError(
+                  'RESOURCE_VIEW_EXPIRED',
+                  'resource is no longer available from its fixed source',
+                );
+            }
+            const lease = await this.repo().acquire(artifact);
+            return {
+              bytes: range ? lease.bytes.subarray(range.start, range.end + 1) : lease.bytes,
+              release: lease.release,
+              transfer: lease.transfer,
+            };
+          } finally {
+            if (replacement) this.releaseGeneration(replacement);
           }
-          const lease = await this.repo().acquire(artifact);
-          return {
-            bytes: range ? lease.bytes.subarray(range.start, range.end + 1) : lease.bytes,
-            release: lease.release,
-            transfer: lease.transfer,
-          };
         },
       };
     }
@@ -929,37 +949,38 @@ export class ResourceEngine {
   }
   private async publishEntry(entry: PublicationEntry, token: SnapshotToken) {
     if (!this.target) throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'publication target is not configured');
-    if (
-      entry.selector.kind !== 'overlay-media' &&
-      (!this.repo().lease(entry.artifact) || (entry.image && !this.repo().lease(entry.image)))
-    ) {
-      const restored = await this.generate(entry.selector, this.coordinator.generation, token);
-      if (
-        !restored ||
-        restored.artifact.digest !== entry.artifact.digest ||
-        restored.image?.digest !== entry.image?.digest
-      )
-        throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'fixed publication action changed its output');
-    }
-    const refs = [entry.artifact, ...(entry.image ? [entry.image] : [])];
-    if (entry.selector.kind === 'overlay-media') {
-      const s = entry.selector;
-      const media = await this.content!.openPublicMedia(s.mapId, s.dimension, s.assetId, s.versionId);
-      const lease = await media.read();
-      try {
-        await this.target.ensure(entry.artifact, lease.bytes);
-        const release = this.repo().work.reserve(entry.artifact.bytes);
-        try {
-          await this.target.verify(entry.artifact);
-        } finally {
-          release();
-        }
-      } finally {
-        lease.release();
-      }
-      return;
-    }
+    let restored: PublicationEntry | null | undefined;
     try {
+      if (
+        entry.selector.kind !== 'overlay-media' &&
+        (!this.repo().lease(entry.artifact) || (entry.image && !this.repo().lease(entry.image)))
+      ) {
+        restored = await this.generate(entry.selector, this.coordinator.generation, token);
+        if (
+          !restored ||
+          restored.artifact.digest !== entry.artifact.digest ||
+          restored.image?.digest !== entry.image?.digest
+        )
+          throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'fixed publication action changed its output');
+      }
+      const refs = [entry.artifact, ...(entry.image ? [entry.image] : [])];
+      if (entry.selector.kind === 'overlay-media') {
+        const s = entry.selector;
+        const media = await this.content!.openPublicMedia(s.mapId, s.dimension, s.assetId, s.versionId);
+        const lease = await media.read();
+        try {
+          await this.target.ensure(entry.artifact, lease.bytes);
+          const release = this.repo().work.reserve(entry.artifact.bytes);
+          try {
+            await this.target.verify(entry.artifact);
+          } finally {
+            release();
+          }
+        } finally {
+          lease.release();
+        }
+        return;
+      }
       for (const ref of refs) {
         const lease = await this.repo().acquire(ref, false);
         try {
@@ -976,6 +997,7 @@ export class ResourceEngine {
       }
     } finally {
       this.releaseGeneration(entry);
+      if (restored) this.releaseGeneration(restored);
     }
   }
   async publish(expectedHead?: string | null): Promise<import('@violet-map/core/resources').PublicationHead> {
