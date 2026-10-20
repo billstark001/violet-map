@@ -12,11 +12,23 @@
     "implementationMatchesAuditedSnapshot": true,
     "fixCommits": [
       { "commit": "a893857021692627b15d014f5a3c43bafac48a2c", "responsibility": "cache admission and delivery leases" },
-      { "commit": "887c75af3ecf1edbe94d1541f3b86207fe7f68bd", "responsibility": "bounded sources and package boundaries" },
+      {
+        "commit": "887c75af3ecf1edbe94d1541f3b86207fe7f68bd",
+        "responsibility": "bounded sources and package boundaries"
+      },
       { "commit": "efc2b4cb32b412499c9b47ea0c0abdab642d7a1d", "responsibility": "optional persistence by capability" },
-      { "commit": "76521b2ad7829b94cb9eb1277c9a96c9feb499a6", "responsibility": "publication retention and verification work" },
-      { "commit": "3e8327e54424d01ef223448f714d967c651c3576", "responsibility": "browser view and byte-size consistency" },
-      { "commit": "0decf36ceacc920f84c87beb6ae8c55016051b7d", "responsibility": "reviewed prepared publications and offline writers" }
+      {
+        "commit": "76521b2ad7829b94cb9eb1277c9a96c9feb499a6",
+        "responsibility": "publication retention and verification work"
+      },
+      {
+        "commit": "3e8327e54424d01ef223448f714d967c651c3576",
+        "responsibility": "browser view and byte-size consistency"
+      },
+      {
+        "commit": "0decf36ceacc920f84c87beb6ae8c55016051b7d",
+        "responsibility": "reviewed prepared publications and offline writers"
+      }
     ],
     "postSplitValidation": {
       "versionBoundaryTypeLint": "passed",
