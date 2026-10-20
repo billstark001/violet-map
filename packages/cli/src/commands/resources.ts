@@ -8,6 +8,8 @@ export interface ResourceOptions {
   serverConfig?: string;
   expectedHead?: string;
   writersQuiesced?: boolean;
+  output?: string;
+  prepared?: string;
 }
 
 export async function resourceCommand(
@@ -15,6 +17,23 @@ export async function resourceCommand(
   options: ResourceOptions,
   context?: CliContext,
 ) {
+  if (options.output && operation !== 'prepare') throw new TypeError('--output is only valid for prepare');
+  if (options.prepared && operation !== 'publish') throw new TypeError('--prepared is only valid for publish');
+  let prepared: import('@violet-map/core/resources').PublicationManifest | undefined;
+  if (options.prepared) {
+    const { stat, readFile } = await import('node:fs/promises');
+    if ((await stat(options.prepared)).size > 8 * 1024 ** 2)
+      throw new RangeError('prepared publication exceeds input budget');
+    // The selected writer validates the current protocol. API-only CLI installs
+    // must not load the optional Node resource/generator package to send it.
+    prepared = JSON.parse(await readFile(options.prepared, 'utf8'));
+  }
+  const preparedResult = async (manifest: unknown) => {
+    if (!options.output) return manifest;
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(options.output, JSON.stringify(manifest, null, 2) + '\n');
+    return { prepared: options.output };
+  };
   if (operation === 'publish' && options.expectedHead !== 'none' && !/^[a-f0-9]{64}$/.test(options.expectedHead ?? ''))
     throw new TypeError('expected-head must be a SHA-256 or none');
   if ((options.via ?? 'api') === 'api') {
@@ -26,7 +45,7 @@ export async function resourceCommand(
     const capabilities = parseServiceCapabilities(await apiRequest(connection, 'api/capabilities'));
     if (!capabilities.adminApi) throw new Error('resource management API is disabled');
     const endpoint = operation === 'publish' ? 'publications' : operation;
-    return apiRequest(
+    const result = await apiRequest(
       connection,
       `api/admin/resources/${endpoint}`,
       operation === 'status'
@@ -34,10 +53,14 @@ export async function resourceCommand(
         : jsonRequest(
             'POST',
             operation === 'publish'
-              ? { expectedHead: options.expectedHead === 'none' ? null : options.expectedHead }
+              ? {
+                  expectedHead: options.expectedHead === 'none' ? null : options.expectedHead,
+                  ...(prepared !== undefined ? { prepared } : {}),
+                }
               : {},
           ),
     );
+    return operation === 'prepare' ? preparedResult(result) : result;
   }
   if (!options.serverConfig) throw new TypeError('--via local requires --server-config');
   if (['prepare', 'publish', 'gc', 'reindex', 'recover'].includes(operation) && !options.writersQuiesced)
@@ -52,20 +75,18 @@ export async function resourceCommand(
     for (const suffix of ['', '-wal', '-shm']) await rm(file + suffix, { force: true });
   }
   const { createServices } = await loadCapability('@violet-map/server/services');
-  const services = await createServices(config);
+  const services = await createServices(config, { resumePublications: false });
   try {
     switch (operation) {
       case 'prepare': {
         const manifest = await services.resources.prepare();
-        return {
-          renderRoot: manifest.renderRoot,
-          entries: manifest.entries.length,
-          regions: manifest.regions.length,
-          worlds: manifest.worlds.length,
-        };
+        return await preparedResult(manifest);
       }
       case 'publish':
-        return await services.resources.publish(options.expectedHead === 'none' ? null : options.expectedHead);
+        return await services.resources.publish(
+          options.expectedHead === 'none' ? null : options.expectedHead,
+          prepared,
+        );
       case 'status':
         return await services.resources.status();
       case 'verify':

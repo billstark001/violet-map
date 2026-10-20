@@ -314,10 +314,10 @@ export function createProgram(): Command {
       .option('--server-config <file>', 'explicit local role and storage configuration')
       .option('--writers-quiesced', 'confirm every other source/content/publication writer is stopped');
     if (operation === 'publish')
-      command.requiredOption(
-        '--expected-head <id>',
-        'current publication SHA-256, or none for the initial publication',
-      );
+      command
+        .option('--prepared <file>', 'publish only the reviewed prepared manifest')
+        .requiredOption('--expected-head <id>', 'current publication SHA-256, or none for the initial publication');
+    if (operation === 'prepare') command.option('--output <file>', 'save the complete prepared publication manifest');
     action<GlobalOptions & import('./commands/resources.js').ResourceOptions>(command, async (options) => {
       const { resourceCommand } = await import('./commands/resources.js');
       console.log(

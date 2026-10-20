@@ -33,7 +33,7 @@ import { ResourceDelivery } from './delivery.js';
 import { collectPublicationGarbage } from './gc.js';
 import type { InvalidationCoordinator } from './invalidation.js';
 import { actionKey } from './keys.js';
-import { regionPage, selectorKey, type PublicationStore } from './publication.js';
+import { parsePublicationManifest, regionPage, selectorKey, type PublicationStore } from './publication.js';
 import type { PublicTarget } from './publicTarget.js';
 import { Singleflight } from './singleflight.js';
 import { SnapshotGate, type SnapshotToken } from './snapshotGate.js';
@@ -997,8 +997,25 @@ export class ResourceEngine {
       if (restored) this.releaseGeneration(restored);
     }
   }
-  async publish(expectedHead?: string | null): Promise<import('@violet-map/core/resources').PublicationHead> {
-    return (await this.buildPublication(expectedHead, false)) as import('@violet-map/core/resources').PublicationHead;
+  async publish(
+    expectedHead?: string | null,
+    prepared?: PublicationManifest,
+  ): Promise<import('@violet-map/core/resources').PublicationHead> {
+    const expectedManifest =
+      prepared === undefined ? undefined : sha256(canonicalJson(parsePublicationManifest(prepared)));
+    if (expectedManifest && sha256(canonicalJson(await this.prepare())) !== expectedManifest) {
+      this.state.publication = 'failed';
+      this.state.error = 'SOURCE_SNAPSHOT_CHANGED';
+      throw new ResourceError(
+        'SOURCE_SNAPSHOT_CHANGED',
+        'current source differs from the reviewed prepared publication',
+      );
+    }
+    return (await this.buildPublication(
+      expectedHead,
+      false,
+      expectedManifest,
+    )) as import('@violet-map/core/resources').PublicationHead;
   }
   async prepare(): Promise<PublicationManifest> {
     return (await this.buildPublication(undefined, true)) as PublicationManifest;
@@ -1012,7 +1029,11 @@ export class ResourceEngine {
     for (const ref of [entry.artifact, ...(entry.image ? [entry.image] : [])])
       this.repo().handoff.releaseUnclaimed(ref.digest);
   }
-  private async buildPublication(expectedHead: string | null | undefined, prepareOnly: boolean) {
+  private async buildPublication(
+    expectedHead: string | null | undefined,
+    prepareOnly: boolean,
+    expectedManifest?: string,
+  ) {
     if (!this.config.resources.roles.includes('publish') || !this.store || !this.target || !this.dynamic)
       throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'publish role is disabled');
     if (this.config.resources.source.consistency !== 'snapshot')
@@ -1187,6 +1208,8 @@ export class ResourceEngine {
             this.state.publication = 'pending';
             return manifest;
           }
+          if (expectedManifest && sha256(canonicalJson(manifest)) !== expectedManifest)
+            throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'source changed after prepared publication validation');
           const verify = async () => {
             for (const entry of manifest.entries)
               for (const ref of [entry.artifact, ...(entry.image ? [entry.image] : [])])

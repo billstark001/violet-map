@@ -23,6 +23,8 @@ import { createStorageMounts } from './storage.js';
 
 export interface ServiceFactories {
   database?: (options: DatabaseOptions) => ReturnType<typeof createDatabaseService>;
+  /** Offline inspection/maintenance must not start an independent background publisher. */
+  resumePublications?: boolean;
 }
 
 export async function createServices(config: ServerConfig, factories: ServiceFactories = {}): Promise<AppServices> {
@@ -167,7 +169,7 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
       content,
     );
     activeEngine = resources;
-    await resources.resumePublications();
+    if (factories.resumePublications !== false) await resources.resumePublications();
     const base = { mounts, content, assets, gameData, topMap, worldStore, resources };
     let closing: Promise<void> | undefined;
     const closeResources = () =>

@@ -74,6 +74,7 @@ test('relocated CLI works without render/storage/server, TS sources, tsx, or nat
   );
   assert.equal(JSON.parse((await run(['overlay', 'layer', 'validate', overlayFixture])).stdout).ok, true);
   const remoteFiles = new Map();
+  const preparedManifest = { schemaVersion: 1, renderRoot: 'a'.repeat(64), entries: [] };
   const server = createServer((request, response) => {
     assert.equal(request.headers.authorization, 'Bearer artifact-token-value');
     const url = new URL(request.url, 'http://localhost');
@@ -112,6 +113,24 @@ test('relocated CLI works without render/storage/server, TS sources, tsx, or nat
     if (url.pathname === '/violet/api/admin/maps') {
       response.setHeader('content-type', 'application/json');
       response.end(JSON.stringify([{ mapId: 'artifact-map', revision: 1 }]));
+      return;
+    }
+    if (url.pathname === '/violet/api/admin/resources/prepare') {
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify(preparedManifest));
+      return;
+    }
+    if (url.pathname === '/violet/api/admin/resources/publications') {
+      const chunks = [];
+      request.on('data', (chunk) => chunks.push(chunk));
+      request.on('end', () => {
+        assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString()), {
+          expectedHead: null,
+          prepared: preparedManifest,
+        });
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ publicationId: 'b'.repeat(64) }));
+      });
       return;
     }
     const prefix = '/violet/api/admin/storage/';
@@ -174,6 +193,16 @@ test('relocated CLI works without render/storage/server, TS sources, tsx, or nat
     'artifact-map',
   );
   const archive = path.join(root, 'archive');
+  const preparedFile = path.join(root, 'prepared.json');
+  const remote = { VIOLET_SERVER_URL: url + '/violet/', VIOLET_SERVER_TOKEN: 'artifact-token-value' };
+  await run(['resources', 'prepare', '--output', preparedFile], remote);
+  assert.deepEqual(JSON.parse(await fs.readFile(preparedFile, 'utf8')), preparedManifest);
+  assert.equal(
+    JSON.parse(
+      (await run(['resources', 'publish', '--expected-head', 'none', '--prepared', preparedFile], remote)).stdout,
+    ).publicationId,
+    'b'.repeat(64),
+  );
   await fs.mkdir(archive);
   await fs.writeFile(path.join(archive, 'level.dat'), 'archive');
   for (const command of [

@@ -2,6 +2,7 @@ import { resourceFailure } from '../resourceErrors.js';
 import { readLimitedBody } from '@violet-map/core/http';
 import { parseResourceSelector, type ResourceKind } from '@violet-map/core/resources';
 import { sha256 } from '@violet-map/storage';
+import { parsePublicationManifest } from '@violet-map/resources';
 import { Hono } from 'hono';
 import type { ServerConfig } from '../configuration.js';
 import { artifactResponse } from '../resourceHttp.js';
@@ -56,19 +57,24 @@ export function mountResources(app: Hono, config: ServerConfig, services: AppSer
     routes.use('/api/admin/resources/*', services.authorization.requireRole('ci'));
     if (config.resources.roles.includes('publish'))
       routes.post('/api/admin/resources/publications', async (c) => {
-        const bytes = await readLimitedBody(c.req.raw, 4096);
+        const bytes = await readLimitedBody(c.req.raw, Math.floor(config.resources.cache.metadataBytes / 4) + 4096);
         if (!bytes) throw new RangeError('publication request exceeds limits');
         const body = JSON.parse(new TextDecoder().decode(bytes));
         if (
           !body ||
           typeof body !== 'object' ||
-          Object.keys(body).some((k) => k !== 'expectedHead') ||
+          Object.keys(body).some((k) => !['expectedHead', 'prepared'].includes(k)) ||
           !('expectedHead' in body) ||
           (body.expectedHead !== null &&
             (typeof body.expectedHead !== 'string' || !/^[a-f0-9]{64}$/.test(body.expectedHead)))
         )
           throw new TypeError('publication requires expectedHead');
-        return c.json(await resources.publish(body.expectedHead));
+        return c.json(
+          await resources.publish(
+            body.expectedHead,
+            body.prepared === undefined ? undefined : parsePublicationManifest(body.prepared),
+          ),
+        );
       });
     if (config.resources.roles.includes('publish')) {
       routes.post('/api/admin/resources/prepare', async (c) => c.json(await resources.prepare()));

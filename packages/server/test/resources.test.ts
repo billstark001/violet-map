@@ -159,8 +159,15 @@ test('publisher and source-free public reader share a durable closure with zero 
   assert.equal(writer.resources.target!.metrics.put, uploads.put);
   assert.equal(writer.resources.repository!.metrics.generation, generated);
   assert.equal(writer.resources.repository!.handoff.budget.bytes, 0);
+  const prepared = await writer.resources.prepare();
+  assert.deepEqual(await writer.resources.publish(second.publicationId, prepared), second);
+  assert.equal(writer.resources.repository!.handoff.budget.bytes, 0);
   const writerApp = createApp(config, writer);
   await writer.mounts.worlds!.write(`draft/chunks/${encodeURIComponent(dim)}/c.0.0.nbt`, nbt);
+  const beforeDrift = { ...writer.resources.target!.metrics };
+  await assert.rejects(writer.resources.publish(second.publicationId, prepared), { code: 'SOURCE_SNAPSHOT_CHANGED' });
+  assert.equal(writer.resources.target!.metrics.put, beforeDrift.put);
+  assert.deepEqual(await writer.resources.store!.head(), second);
   assert.deepEqual(
     (await (await writerApp.request('/api/worlds')).json()).map((world: { id: string }) => world.id),
     ['world'],

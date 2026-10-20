@@ -33,15 +33,19 @@ Top-map payloads remain v6. New manifests carry a complete environment dependenc
 - `GET /api/admin/resources/status` and explicit publisher prepare/publish/verify/GC operations require the configured management role. A publication requires an expected parent head.
 
 ```sh
-violet-map resources prepare --via local --server-config publisher.yaml --writers-quiesced
+violet-map resources prepare --via local --server-config publisher.yaml --writers-quiesced --output prepared.json
 violet-map resources status --via local --server-config publisher.yaml
-violet-map resources publish --via local --server-config publisher.yaml --expected-head none --writers-quiesced
+violet-map resources publish --via local --server-config publisher.yaml --expected-head none --writers-quiesced --prepared prepared.json
 violet-map resources verify --via local --server-config publisher.yaml
 violet-map resources reindex --via local --server-config content-reader.yaml --writers-quiesced
 violet-map resources gc --via local --server-config publisher.yaml --writers-quiesced
 # Only after stopping every other writer:
 violet-map resources recover --via local --server-config publisher.yaml --writers-quiesced
 ```
+
+`prepare` returns the complete current-protocol manifest; `--output` saves that same document for review. `publish --prepared` checks it against the current frozen source before uploading, then checks the final closure again before changing the head. Source drift fails explicitly. Direct publication with an expected parent remains the explicit operation used by an online writer reconciling business revisions. Offline CLI commands do not start the service's background reconciliation timer.
+
+Public verification reserves its own configured work memory even for a source-free reader. Configured publication retention applies to both old-head reads and garbage collection. A public service that enables only content reads initializes the original-media repository, while derived cache, SQLite and workspace implementations remain unloaded until dynamic source capabilities need them.
 
 For an online writer, use the same commands with `--server-url`/the selected CLI profile (the default `--via api`); only the running publisher commits and runs GC. Local changes require every other writer to be stopped and `--writers-quiesced`. Local `reindex` rebuilds only the explicitly selected disposable SQLite index, verifies retained originals and indexes the authoritative publication.
 
