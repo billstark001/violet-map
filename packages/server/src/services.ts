@@ -61,7 +61,7 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
   let activeEngine: ResourceEngine | undefined;
   try {
     if (needsRepository) {
-      if (config.resources.cache.local && config.resources.cache.local.bytes > 0) {
+      if (needsDynamic && config.resources.cache.local && config.resources.cache.local.bytes > 0) {
         const { LocalStorage } = await import('@violet-map/storage/local');
         const local = new LocalStorage(config.resources.cache.local.directory);
         await local.prepareDirectory();
@@ -74,7 +74,7 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
         layers.push(layer);
         await layer.initialize();
       }
-      if (mounts.sharedCache) {
+      if (needsDynamic && mounts.sharedCache) {
         const layer = new PersistentResourceCache(
           mounts.sharedCache as PublicationStorage,
           config.resources.cache.sharedBytes,
@@ -85,7 +85,7 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
         layers.push(layer);
         await layer.initialize();
       }
-      if (config.resources.work.workspace) {
+      if (needsDynamic && config.resources.work.workspace) {
         const { LocalStorage } = await import('@violet-map/storage/local');
         await new LocalStorage(config.resources.work.workspace.directory).prepareDirectory();
       }

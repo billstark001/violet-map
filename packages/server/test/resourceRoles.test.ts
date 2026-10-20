@@ -208,3 +208,55 @@ test('E07/E08 explicit local/workspace failures do not switch drivers and releas
   await assert.rejects(async () => createServices(loadServerConfig({ configFile: file, env: {}, cwd: root })));
   assert.equal(JSON.parse(await fs.readFile(path.join(cache, 'cache-owner.json'), 'utf8')).owner, null);
 });
+
+test('public content-only reads do not initialize derived caches, workspace or SQLite', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-content-reader-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const file = path.join(root, 'reader.json');
+  const settings = {
+    deployment: { profile: 'public' },
+    features: { contentReads: true },
+    data: { dir: root },
+    resources: {
+      cache: {
+        local: { directory: path.join(root, 'content/blobs'), bytes: 4096, storageClass: 'persistent' },
+        index: { driver: 'sqlite', path: path.join(root, 'unselected.sqlite') },
+      },
+      work: { workspace: { directory: path.join(root, 'workspace'), maxBytes: 4096, storageClass: 'temporary' } },
+      delivery: {
+        mode: 'public',
+        targetMount: { backend: 'auxiliary', prefix: 'public' },
+        publicBaseUrl: 'https://resources.example/',
+      },
+      publication: { storeMount: { backend: 'auxiliary', prefix: 'control' } },
+    },
+  };
+  await fs.writeFile(file, JSON.stringify(settings));
+  const config = loadServerConfig({ env: {}, configFile: file, cwd: root });
+  const guard = denyWrites();
+  const hook = registerHooks({
+    resolve(specifier, context, next) {
+      if (specifier === 'node:sqlite') throw new Error('unexpected SQLite load');
+      return next(specifier, context);
+    },
+  });
+  try {
+    const services = await createServices(config);
+    try {
+      assert.ok(services.content);
+      assert.equal(services.assets, undefined);
+      assert.deepEqual(await services.content.listMaps(), []);
+      assert.equal(services.resources.repository!.handoff.budget.bytes, 0);
+    } finally {
+      await services.close();
+    }
+    assert.equal(guard.writes, 0);
+  } finally {
+    hook.deregister();
+    guard.restore();
+  }
+  // Enabling dynamic world reads activates the selected cache and its overlap checks.
+  settings.features = { contentReads: true, worldReads: true } as typeof settings.features;
+  await fs.writeFile(file, JSON.stringify(settings));
+  assert.throws(() => loadServerConfig({ env: {}, configFile: file, cwd: root }), /overlapping storage mounts/);
+});

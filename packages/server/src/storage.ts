@@ -62,7 +62,7 @@ export async function createStorageMounts(config: ServerConfig, onWorldMutation?
     resourceTarget: httpTarget ?? (await resourceMount(config.resources.delivery.targetMount, 'public-copy')),
     publicationStore: await resourceMount(config.resources.publication.storeMount, 'publication'),
     sharedCache:
-      config.resources.cache.sharedBytes > 0
+      needsSources && config.resources.cache.sharedBytes > 0
         ? await resourceMount(config.resources.cache.sharedMount, 'derived-cache')
         : undefined,
     ...(config.features.contentReads ? { content: await mount('content'), blobs: await mount('blobs') } : {}),

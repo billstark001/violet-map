@@ -108,6 +108,11 @@ export function loadServerConfig(options: ConfigurationOptions = {}) {
       resources.roles.includes('publish') ||
       features.worldReads ||
       features.worldWrites ||
+      features.dataWrites,
+    resources.delivery.mode === 'server' ||
+      resources.roles.includes('publish') ||
+      features.worldReads ||
+      features.worldWrites ||
       features.dataWrites ||
       features.contentReads,
   );
@@ -207,6 +212,7 @@ function resolveStorage(
   enabled: boolean,
   dataDir: string,
   resources: import('./resourceConfiguration.js').ResourceConfiguration,
+  dynamic: boolean,
   worldsEnabled: boolean,
 ) {
   const { env, cwd, base, yamlValue } = setting;
@@ -458,7 +464,6 @@ function resolveStorage(
       prefix: backend.driver === 'local' ? effectivePath(path.resolve(backend.root, mount.prefix)) : mount.prefix,
     });
   }
-  const dynamic = resources.delivery.mode === 'server' || resources.roles.includes('publish');
   const directories: [string, string][] = [];
   if (dynamic && resources.cache.local && resources.cache.local.bytes > 0)
     directories.push(['resourceLocal', resources.cache.local.directory]);
