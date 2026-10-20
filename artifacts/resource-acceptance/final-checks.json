@@ -1,0 +1,179 @@
+{
+  "verifiedAt": "2026-10-20T17:33:03.772734+00:00",
+  "branch": "feature/unified-resource-cache-public-delivery",
+  "baseline": "da048f422e155861f153088e2a73ad4ac0d3fce2",
+  "noDeployment": true,
+  "checks": ["frozen install", "version", "boundaries", "typecheck", "lint", "build", "format", "git diff --check"],
+  "suites": {
+    "unit": {
+      "tests": 282,
+      "pass": 282,
+      "fail": 0,
+      "skipped": 0,
+      "outputSha256": "928091b792961e279224e88f05f46ee821d1577cdcc067ffdeb292745088f89e",
+      "postgres": "local PostgreSQL 17.11; random isolated test databases, all cleaned after the run"
+    },
+    "resources": {
+      "tests": 62,
+      "pass": 62,
+      "fail": 0,
+      "skipped": 0,
+      "outputSha256": "3545a3584e6de626bdda20e1efb4e40074820bb4f748c22080782dbb43856d2f"
+    },
+    "roles": {
+      "tests": 3,
+      "pass": 3,
+      "fail": 0,
+      "skipped": 0,
+      "outputSha256": "a107d7020fab12fc92bdc6d392111c264ae66301ff6b21b4311d6edff47cf48a"
+    },
+    "node24": {
+      "tests": 65,
+      "pass": 65,
+      "fail": 0,
+      "skipped": 0,
+      "outputSha256": "3881d8aef448fd2e56bed0077b8b2fc7ae39cbe9c5875717e8c98a8fa6c8ab0a"
+    },
+    "production": {
+      "tests": 2,
+      "pass": 2,
+      "fail": 0,
+      "skipped": 0,
+      "outputSha256": "ab89962b8805ce7ff6a7c77407519ea7bebce7bc8123f66cb22a4a8fa8fa5a4a"
+    },
+    "cliArtifact": {
+      "tests": 1,
+      "pass": 1,
+      "fail": 0,
+      "skipped": 0,
+      "outputSha256": "493b3132fdd6136556b84789fec06fa3335782912ce8855a6f7251169b1ad243"
+    },
+    "databaseArtifact": {
+      "tests": 1,
+      "pass": 1,
+      "fail": 0,
+      "skipped": 0,
+      "outputSha256": "d6f902271f37c4bfe341839579b62149c5f98d0c23ed18dde6ba9d4e3250c22d"
+    },
+    "resourcesArtifact": {
+      "tests": 1,
+      "pass": 1,
+      "fail": 0,
+      "skipped": 0,
+      "outputSha256": "0302fcc948f823b8541b1993c70571ae7409be86b7d102a578aa971d25767f9b"
+    },
+    "frontend": {
+      "tests": 4,
+      "pass": 4,
+      "fail": 0,
+      "skipped": 0,
+      "outputSha256": "9ecf6fe340dd4cf14d17ff35660e79a51a3e79f35a91ebde9f3d5120d621ede3"
+    },
+    "overlays": {
+      "tests": 1,
+      "pass": 1,
+      "fail": 0,
+      "skipped": 0,
+      "outputSha256": "70cc83179b96af35a00a545195760dd0da904fae44627bcadbc334eee8a0b4d4"
+    },
+    "transparency": {
+      "tests": 1,
+      "pass": 1,
+      "fail": 0,
+      "skipped": 0,
+      "outputSha256": "cf346a8c48c8a68672dd5c1f02324a1d1b99d3589b68d0eaa2ff41acaeda907a"
+    },
+    "release": {
+      "tests": 4,
+      "pass": 3,
+      "fail": 0,
+      "skipped": 1,
+      "outputSha256": "94ca63b4fa655e4d1eac3fb74a6ae2aa30914cc6c72bc66076868e5f5c05db63"
+    },
+    "containers": {
+      "tests": 2,
+      "pass": 2,
+      "fail": 0,
+      "skipped": 0,
+      "outputSha256": "eb931d552280c82daddab66f712e7faf8f660376c3699514be971f2bf1e206e5"
+    },
+    "minio": {
+      "tests": 1,
+      "pass": 1,
+      "fail": 0,
+      "skipped": 0,
+      "outputSha256": "51d28766a160e798778f0fd3e68e6a15f560de2deb066e0cc8e0fa61130de284"
+    },
+    "browser": {
+      "tests": 2,
+      "pass": 2,
+      "fail": 0,
+      "skipped": 0,
+      "outputSha256": "68ca67c7bb11a8ac582cac461e0a8632e0367029340368f50b05fea89023b6ba"
+    },
+    "unitBeforePostgres": {
+      "tests": 276,
+      "pass": 272,
+      "fail": 0,
+      "skipped": 4,
+      "outputSha256": "618fad9a0f44ae7c942a54e0a334d1f225d1bcc1aac01f5344c41818673c74ae"
+    },
+    "postgresNode24": {
+      "tests": 24,
+      "pass": 24,
+      "fail": 0,
+      "skipped": 0,
+      "outputSha256": "a8c613533a9e1946439ed5838a3c83fa85fff5175657aa459c53487bb8165ff3",
+      "environment": "Node 24.22.0; local PostgreSQL 17.11; CLI management, server management API, admin authorization and migrations"
+    }
+  },
+  "benchmark": {
+    "passed": true,
+    "implementationDigest": "c54a3d6471822162cdb3802ade826ec3b991231338c06c42c4759e15106aed93",
+    "capacityPoints": 76,
+    "loadPoints": 152,
+    "maxGatedP95Ratio": 1.0939151383271715,
+    "maxGatedCpuRatio": 1.0373330305607784
+  },
+  "notRun": ["AWS S3/R2 supplier test environment", "production deployment"],
+  "historyRestructure": {
+    "originalCommit": "cf71202285c2c752ed6c95e855e6836b79df49c4",
+    "implementationUnchanged": true,
+    "commitBoundaries": [
+      "shared contracts",
+      "storage adapters",
+      "cache repository",
+      "source generators and CLI bake",
+      "publication and GC",
+      "browser downloads",
+      "coordinated application protocol switch",
+      "CLI management",
+      "backend and operations acceptance",
+      "benchmark implementation",
+      "benchmark evidence",
+      "0.4 release documentation and final verification"
+    ],
+    "validatedCheckpoints": [
+      {
+        "commit": "70ee708",
+        "passed": true,
+        "checks": ["offline frozen install", "workspace typecheck", "package boundaries"]
+      },
+      {
+        "commit": "8f6e8d2",
+        "passed": true,
+        "checks": ["frozen install", "workspace typecheck", "package boundaries"]
+      },
+      {
+        "commit": "25dee90",
+        "passed": true,
+        "checks": ["frozen install", "workspace typecheck", "package boundaries"]
+      },
+      {
+        "commit": "3938923",
+        "passed": true,
+        "checks": ["offline frozen install", "workspace typecheck", "package boundaries"]
+      }
+    ]
+  }
+}

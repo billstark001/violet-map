@@ -1,5 +1,7 @@
 # Independent production deployment
 
+Resource delivery uses the coordinated 0.4 protocol. See [Unified resources](resources.md) for role, zero-retention, optional persistence, publication and migration contracts.
+
 [Back to README](../README.md)
 
 Builds use the workspace. Running services need only their own artifacts. Server does not serve or depend on either frontend; web/admin can point to an external API and start while it is unavailable.
@@ -30,7 +32,7 @@ API_BASE_URL=https://api.example.com/violet/ node /srv/violet-web/serve.mjs 3305
 API_BASE_URL=https://api.example.com/violet/ node /srv/violet-admin/serve.mjs 3310
 ```
 
-`API_BASE_URL` writes runtime config on startup, requiring a writable artifact directory. On read-only static hosting, replace `runtime-config.json` during deployment instead. Serve that file and `index.html` with `no-store`; hashed JS/CSS can use immutable caching. Runtime JSON has `apiBaseUrl`, optional `capabilityFallback` (`legacy` or `error`) and viewer `mediaDelivery` (`public` by default, or `proxy`), never credentials. Public delivery only applies when the server explicitly advertises a public object URL; otherwise the existing proxy is used. Only a runtime-config 404 permits the build fallback; capabilities fallback requires its own explicit 404. Connection errors show a Retry action. See [public media delivery](overlays.md#public-media-delivery) for R2/CDN setup.
+`API_BASE_URL` writes `{ "apiBaseUrl": "https://api.example/violet/" }` at startup. Read-only static hosts install that file before startup and serve it with no-store. Capabilities protocol 2 is required; incompatible or unavailable APIs show an error. Runtime configuration contains no transport choice or credentials. See [Unified resources](resources.md).
 
 Workspace `pnpm start` and `start:full` pass `http://localhost:3300/` as the default API for their static frontend processes. Set `API_BASE_URL` to override it. Direct static hosting retains the runtime file/origin behavior above.
 

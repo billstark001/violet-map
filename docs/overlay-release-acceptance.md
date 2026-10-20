@@ -1,5 +1,7 @@
 # Overlay release acceptance and recovery
 
+Resource delivery uses the coordinated 0.4 protocol. See [Unified resources](resources.md) for role, zero-retention, optional persistence, publication and migration contracts.
+
 Package versions, content document schemas, snapshot manifests and the HTTP capabilities protocol are versioned independently. Follow the [version policy](development.md#versions-and-changelog) and verify content-format support before changing binaries. Content operations do not require a user database.
 
 ## Reproduce the gate

@@ -1,5 +1,7 @@
 # Viewer, assets, and local worlds
 
+Resource delivery uses the coordinated 0.4 protocol. See [Unified resources](resources.md) for role, zero-retention, optional persistence, publication and migration contracts.
+
 [Back to README](../README.md)
 
 ## Assets and local worlds
@@ -86,8 +88,8 @@ Only registered entities are rendered. There are deliberately no built-in legacy
 
 ## Independent static hosting
 
-Build web/admin separately and deliver only their `dist` directory. Each loads `runtime-config.json` before mounting its UI (native Preact for web, React for admin); replace `{ "apiBaseUrl": "https://api.example.com/violet/", "capabilityFallback": "legacy" }` to change API without rebuilding JavaScript. Only a missing runtime file uses `VITE_API_BASE_URL` or the origin root fallback. Invalid config, network errors and API 5xx display a retryable startup error; only an explicit capabilities 404 can enable old-server behavior. API credentials are isolated by normalized API URL. The web build explicitly disables React aliases and does not use `preact/compat`.
+Build web/admin separately and serve their `dist` directories. Each loads runtime-config.json containing only `apiBaseUrl`. Only a missing runtime file uses the explicit build API base; capabilities protocol 2 is required. Resource failures do not switch URLs. Credentials are scoped to the normalized API URL.
 
-Build with `VITE_BASE_PATH=/map/` or `/console/` for static subpaths. Runtime config, workers and brand resources use the static base; API prefix is independent. Atlas, individual fallback textures and colormaps support CORS Canvas reads and WebGL uploads. Set the API CORS origins to the browser-visible frontend origins. See [deployment](deployment.md).
+Build with `VITE_BASE_PATH=/map/` or `/console/` for static subpaths. Runtime config, workers and brand resources use the static base; API prefix is independent. Atlas, individual textures and colormaps support CORS Canvas reads and WebGL uploads. Set the API CORS origins to the browser-visible frontend origins. See [deployment](deployment.md).
 
 Biome edits through `PUT /api/data/biomes` must be an object keyed by biome ID (or `default`). Each definition needs finite numeric `temperature` and `downfall` values and an `effects` object containing `sky_color`, `fog_color`, and `water_color` as integers from `0` to `0xffffff`. Optional grass/foliage colors use the same range; `grass_color_modifier` accepts `none`, `dark_forest`, or `swamp`. Extra fields are retained, and climate values outside 0–1 remain accepted because colormap sampling clamps them. Invalid JSON/schema returns 400, and bodies above the configured upload limit return 413. Successful edits publish a complete JSON file atomically; failed publication leaves the previous file usable.

@@ -1,5 +1,7 @@
 # World storage and safe synchronization
 
+Resource delivery uses the coordinated 0.4 protocol. See [Unified resources](resources.md) for role, zero-retention, optional persistence, publication and migration contracts.
+
 [Back to README](../README.md)
 
 World names are single directory segments containing ASCII letters, numbers, dot, dash or underscore; `.` and `..` are rejected. This is shared by server operations, CLI world synchronization and overlay registrations so a world cannot normalize to the mount root. Creation validates level names and every dimension before any write; malformed JSON/metadata returns HTTP 400 without leaving a partial world.

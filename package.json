@@ -1,6 +1,6 @@
 {
   "name": "@violet-map/workspace",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -24,6 +24,8 @@
     "typecheck": "pnpm -r run typecheck && tsc -p scripts/acceptance/tsconfig.json && tsc -p scripts/bench/tsconfig.json",
     "test": "TSX_DISABLE_CACHE=1 tsx --conditions=development --test --test-concurrency=4 scripts/test/*.test.mjs packages/cli/test/*.test.ts packages/core/test/*.test.ts packages/render/test/*.test.ts packages/storage/test/*.test.ts packages/resources/test/*.test.ts packages/server/test/*.test.ts packages/web/test/*.test.ts packages/admin/test/*.test.ts",
     "lint": "oxlint --deny-warnings packages scripts/bench",
+    "lint:fix": "oxlint --fix packages scripts/bench",
+    "format:raw": "oxfmt .",
     "format": "pnpm run lint:fix && pnpm run format:raw",
     "format:check": "oxfmt --check .",
     "violet-map": "tsx --conditions=development packages/cli/src/cli.ts",
@@ -33,10 +35,8 @@
     "test:resources": "TSX_DISABLE_CACHE=1 tsx --conditions=development --test packages/resources/test/*.test.ts packages/storage/test/*.test.ts",
     "test:resources:browser": "tsx --conditions=development --test scripts/acceptance/resource-delivery.test.ts",
     "test:resources:roles": "TSX_DISABLE_CACHE=1 tsx --conditions=development --test packages/server/test/resourceRoles.test.ts",
-    "test:resources:backends": "docker build -f scripts/acceptance/Dockerfile.minio -t violet-acceptance-minio:source-2025-10-15 . && node --test scripts/acceptance/resources-backends.test.mjs",
-    "lint:fix": "oxlint --fix packages scripts/bench",
-    "format:raw": "oxfmt .",
     "bench:resources": "tsx --conditions=development scripts/bench/resources.ts",
+    "test:resources:backends": "docker build -f scripts/acceptance/Dockerfile.minio -t violet-acceptance-minio:source-2025-10-15 . && node --test scripts/acceptance/resources-backends.test.mjs",
     "bench:resources:baseline": "tsx --conditions=development scripts/bench/resources-baseline.ts"
   },
   "devDependencies": {

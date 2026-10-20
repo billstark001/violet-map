@@ -1,0 +1,19 @@
+deployment:
+  profile: public
+features:
+  users: false
+resources:
+  roles: [serve]
+  source:
+    consistency: snapshot
+  cache:
+    memoryBytes: 0
+    sharedBytes: 0
+    local: null
+    index: { driver: memory }
+  work:
+    memoryBytes: 134217728
+    handoffBytes: 67108864
+    workspace: null
+  delivery:
+    mode: server

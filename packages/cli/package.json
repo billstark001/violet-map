@@ -1,6 +1,6 @@
 {
   "name": "@violet-map/cli",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "bin": {
     "violet-map": "./dist/cli.js"
   },

@@ -1,5 +1,7 @@
 # Server configuration
 
+Resource delivery uses the coordinated 0.4 protocol. See [Unified resources](resources.md) for role, zero-retention, optional persistence, publication and migration contracts.
+
 [Back to README](../README.md)
 
 CLI profiles and state are described in [CLI configuration and credentials](cli-configuration.md). Server deployment settings remain independent. Non-sensitive values can be set as environment variables or in `violet-map.yaml` / `violet-map.yml`; use `VIOLET_MAP_CONFIG` to select another file. The file supports standard nested YAML maps and lists. A malformed file stops startup with its path in the error; environment variables take precedence. Relative paths in YAML resolve from the YAML file's directory; paths in environment variables resolve from the process working directory.
@@ -92,7 +94,6 @@ These documented external settings remain supported; they are not ServerConfig c
 | cache.storageListMs      | STORAGE_LIST_CACHE_MS        | 2000         |
 | cache.manifestMs         | MANIFEST_CACHE_MS            | 5000         |
 | cache.worldListMs        | WORLD_LIST_CACHE_MS          | 15000        |
-| cache.prewarm            | CACHE_PREWARM                | true         |
 | limits.chunkReads        | CHUNK_READ_CONCURRENCY       | 8 (1–1024)   |
 | limits.chunkQueue        | CHUNK_READ_QUEUE             | 64 (0–65536) |
 | limits.atlasBuilds       | ATLAS_BUILD_CONCURRENCY      | 1 (1–1024)   |

@@ -1,0 +1,17 @@
+deployment:
+  profile: public
+storage:
+  backends:
+    control:
+      driver: local
+      root: /var/lib/violet/publication-control
+resources:
+  roles: [publish]
+  cache:
+    memoryBytes: 0
+  delivery:
+    mode: server
+    publicBaseUrl: https://resources.example/
+    httpPublisher: { url: https://resource-upload.example/, tokenEnv: RESOURCE_UPLOAD_TOKEN }
+  publication:
+    storeMount: { backend: control, prefix: '' }

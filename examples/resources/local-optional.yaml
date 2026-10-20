@@ -1,0 +1,10 @@
+# Explicit, exclusively owned optimization state; not required by either serving mode.
+deployment:
+  profile: public
+resources:
+  cache:
+    memoryBytes: 33554432
+    local: { directory: /var/cache/violet/derived, bytes: 268435456, storageClass: persistent }
+    index: { driver: sqlite, path: /var/cache/violet/index.sqlite }
+  work:
+    workspace: { directory: /run/violet/work, maxBytes: 67108864, storageClass: temporary }

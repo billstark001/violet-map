@@ -1,0 +1,27 @@
+deployment:
+  profile: public
+features:
+  users: false
+  worldReads: false
+storage:
+  backends:
+    resources:
+      driver: s3
+      bucket: violet-resources
+      region: us-east-1
+      accessKeyIdEnv: RESOURCE_READER_ACCESS_KEY
+      secretAccessKeyEnv: RESOURCE_READER_SECRET_KEY
+resources:
+  roles: [serve]
+  cache:
+    memoryBytes: 0
+    local: null
+    index: { driver: memory }
+  work:
+    workspace: null
+  delivery:
+    mode: public
+    targetMount: { backend: resources, prefix: public }
+    publicBaseUrl: https://resources.example/public/
+  publication:
+    storeMount: { backend: resources, prefix: control }

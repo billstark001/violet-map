@@ -24,6 +24,22 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ## [Unreleased]
 
+### Changed (coordinated 0.4.0 release candidate)
+
+- All packages use the 0.4 line, capabilities protocol 2 and overlay display manifest 2. Viewer, admin, CLI and server must be updated together; old resource protocols/configuration are rejected.
+- Chunks, atlases/textures/colormaps, top-map tiles and overlay media share deterministic action keys, SHA-256 objects, bounded caching, publication and integrity downloads. Every optional cache permits zero bytes; local files, workspaces and SQLite require explicit selection.
+- Delivery is explicitly `server` or `public`, with one resource URL. Remove old media delivery configuration, `url`/`publicUrl` dual references, public-to-proxy fallback, temporary atlas image URLs and atlas-to-individual-texture fallback.
+- Baking includes effective override terrain and complete pack/data/light dependencies. Existing v6 payloads remain supported; old freshness records require an explicit rebake.
+
+### Added
+
+- The resources package, source-free public reader, separate publisher, durable prepared/retained/backup roots and conditional head commits. Source synchronization requires an explicit completed snapshot/publication; content commits report publication pending/failed separately.
+- Resources CLI management uses the online writer by default. Offline operations require `--via local`, explicit configuration and quiescence. See [resource operations](docs/resources.md) and [implementation acceptance](docs/resource-implementation-acceptance.md).
+
+### Preserved business contracts
+
+- World/archive identity, override precedence, entity sidecars, asset pack precedence, fixed media versions, retained originals/tombstones, authorization, If-Match and protected world management remain intact. A standalone static runtime configuration may still use the documented 404 behavior. No deployment has been performed for this change.
+
 ## @violet-map/web [0.3.1] - 2026-10-18
 
 ### Changed
