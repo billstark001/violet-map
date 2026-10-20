@@ -24,6 +24,7 @@ function files(dir) {
     );
 }
 const violations = [];
+const generatorDependency = /^(?:pngjs|minecraft-data|@msgpack\/msgpack)(?:\/|$)/;
 for (const [owner, dependencies] of Object.entries(allowed)) {
   for (const file of files(`packages/${owner}/src`)) {
     const source = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
@@ -78,6 +79,9 @@ for (const [owner, dependencies] of Object.entries(allowed)) {
         if (target && target !== owner && name.startsWith('.')) fail(`cross-package relative import ${name}`);
         if (owner === 'core' && /^(?:node:)?(?:fs|path)(?:\/|$)|^@aws-sdk\//.test(name))
           fail(`platform implementation ${name}`);
+        if (owner === 'storage' && generatorDependency.test(name)) fail(`resource generator dependency ${name}`);
+        if (owner === 'resources' && /^(?:node:)?sqlite$/.test(name) && !file.endsWith('/catalog/sqlite.ts'))
+          fail('SQLite must remain in its explicit catalog sub-entry');
         if (owner === 'render' && /^(node:|(?:fs|path|buffer)(?:\/|$)|three(?:\/|$)|@aws-sdk\/)/.test(name))
           fail(`platform implementation ${name}`);
         if (
@@ -131,6 +135,8 @@ for (const [owner, dependencies] of Object.entries(allowed)) {
   for (const name of Object.keys(metadata.dependencies ?? {})) {
     const target = name.match(/^@violet-map\/([^/]+)/)?.[1];
     if (target && !dependencies.includes(target)) violations.push(`${owner}: forbidden manifest dependency ${name}`);
+    if (owner === 'storage' && generatorDependency.test(name))
+      violations.push(`storage: resource generator manifest dependency ${name}`);
     if (owner === 'web' && /^(?:react(?:-dom|-i18next)?$|@radix-ui\/)/.test(name))
       violations.push(`web: React runtime manifest dependency ${name}`);
   }

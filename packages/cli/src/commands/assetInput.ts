@@ -6,15 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { loadCapability } from '../capabilities.js';
 
 import { type AssetBundle, type BlockInfo, type BlockInfoMap } from '@violet-map/core/assets';
-import { forEachConcurrent } from '@violet-map/core/async';
 import { PNG } from 'pngjs';
 import { isMissingPath, resolvePath } from './paths.js';
-
-export const MAX_PARALLEL_ASSET_READS = 16;
-
-export function textureIdForPath(namespace: string, rel: string): string {
-  return `${namespace}:${rel.slice(0, -4)}`;
-}
 
 export function averagePngColor(bytes: Uint8Array): Rgb | null {
   try {
@@ -51,41 +44,6 @@ export async function readTextureAverageColors(assetDirs: string[]): Promise<Map
     if (color) colors.set(id, color);
   }
   return colors;
-}
-
-export interface AssetFile {
-  rel: string;
-  file: string;
-}
-
-export async function collectMatchingFiles(dir: string, suffix: string, out: AssetFile[], rel = ''): Promise<void> {
-  let entries;
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true });
-  } catch (error) {
-    if (isMissingPath(error)) return;
-    throw error;
-  }
-  for (const entry of entries) {
-    const childRel = rel ? `${rel}/${entry.name}` : entry.name;
-    const file = path.join(dir, entry.name);
-    if (entry.isDirectory()) await collectMatchingFiles(file, suffix, out, childRel);
-    else if (entry.isFile() && entry.name.endsWith(suffix)) out.push({ rel: childRel, file });
-  }
-}
-
-export async function visitMatchingFiles(
-  dir: string,
-  suffix: string,
-  onFile: (rel: string, file: string) => Promise<void>,
-): Promise<void> {
-  const files: AssetFile[] = [];
-  await collectMatchingFiles(dir, suffix, files);
-  await forEachConcurrent(files, MAX_PARALLEL_ASSET_READS, (item) => onFile(item.rel, item.file));
-}
-
-export async function readPngTree(dir: string, onFile: (rel: string, file: string) => Promise<void>): Promise<void> {
-  await visitMatchingFiles(dir, '.png', onFile);
 }
 
 export function dataFileCandidates(name: string, explicit?: string): string[] {

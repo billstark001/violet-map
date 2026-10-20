@@ -43,7 +43,10 @@ export function createAssetPack(config: AssetPackOptions) {
     for (const e of dirents) {
       const r = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) await walkJson(path.join(dir, e.name), entries, r);
-      else if (e.name.endsWith('.json')) entries.push({ rel: r, file: path.join(dir, e.name) });
+      else if (e.name.endsWith('.json')) {
+        if (entries.length >= 32768) throw new ResourceError('RESOURCE_BUSY', 'asset JSON inventory exceeds budget');
+        entries.push({ rel: r, file: path.join(dir, e.name) });
+      }
     }
     return entries;
   }
@@ -59,7 +62,10 @@ export function createAssetPack(config: AssetPackOptions) {
     for (const e of dirents) {
       const r = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) await walkAnimationMeta(path.join(dir, e.name), entries, r);
-      else if (e.isFile() && e.name.endsWith('.png.mcmeta')) entries.push({ rel: r, file: path.join(dir, e.name) });
+      else if (e.isFile() && e.name.endsWith('.png.mcmeta')) {
+        if (entries.length >= 32768) throw new ResourceError('RESOURCE_BUSY', 'animation inventory exceeds budget');
+        entries.push({ rel: r, file: path.join(dir, e.name) });
+      }
     }
     return entries;
   }
@@ -106,6 +112,24 @@ export function createAssetPack(config: AssetPackOptions) {
     }
     if (bundlePromise) return bundlePromise;
     const pending = (async () => {
+      let inputBytes = 0;
+      let inputFiles = 0;
+      const readJson = async (file: string): Promise<any> => {
+        const handle = await fs.open(file, 'r');
+        try {
+          const { size } = await handle.stat();
+          if (++inputFiles > 32768 || size > 8 * 1024 ** 2 - inputBytes)
+            throw new ResourceError('RESOURCE_BUSY', 'asset JSON inputs exceed the bundle work budget');
+          inputBytes += size;
+          const bytes = new Uint8Array(size);
+          const result = await handle.read(bytes, 0, size, 0);
+          if (result.bytesRead !== size || (await handle.stat()).size !== size)
+            throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'asset JSON changed during read', true);
+          return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+        } finally {
+          await handle.close();
+        }
+      };
       const bundle: AssetBundle = { blockstates: {}, models: {}, renderers: {}, textureAnimations: {} };
       // Keep renderer registrations available even for deployments that set
       // ASSETS_DIRS explicitly (which otherwise replaces config defaults).
@@ -134,15 +158,16 @@ export function createAssetPack(config: AssetPackOptions) {
           ];
           await mapWithConcurrency(reads, 32, async ({ id, file, target }) => {
             try {
-              target[id] = JSON.parse(await fs.readFile(file, 'utf8'));
+              target[id] = await readJson(file);
             } catch (error) {
+              if (error instanceof ResourceError) throw error;
               throw new Error(`invalid asset JSON: ${file}`, { cause: error });
             }
           });
           try {
-            const renderers = JSON.parse(
-              await fs.readFile(path.join(dir, ns, 'violet_map', 'renderers.json'), 'utf8'),
-            ) as AssetBundle['renderers'];
+            const renderers = (await readJson(
+              path.join(dir, ns, 'violet_map', 'renderers.json'),
+            )) as AssetBundle['renderers'];
             if (renderers?.blockEntities)
               bundle.renderers!.blockEntities = { ...bundle.renderers!.blockEntities, ...renderers.blockEntities };
             if (renderers?.entities)
@@ -153,9 +178,10 @@ export function createAssetPack(config: AssetPackOptions) {
           const animationFiles = await walkAnimationMeta(path.join(dir, ns, 'textures'));
           await mapWithConcurrency(animationFiles, 32, async ({ rel, file }) => {
             try {
-              const definition = parseAnimationDef(JSON.parse(await fs.readFile(file, 'utf8')));
+              const definition = parseAnimationDef(await readJson(file));
               if (definition) bundle.textureAnimations![`${ns}:${rel.slice(0, -'.png.mcmeta'.length)}`] = definition;
             } catch (error) {
+              if (error instanceof ResourceError) throw error;
               throw new Error(`invalid animation metadata: ${file}`, { cause: error });
             }
           });

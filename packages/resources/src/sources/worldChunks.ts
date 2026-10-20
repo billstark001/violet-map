@@ -257,7 +257,7 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     let load!: Promise<RegionCacheEntry | null>;
     load = (async () => {
       const bytes = await readSource(clean);
-      if (!bytes) return null;
+      if (!bytes) throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'region disappeared during read', true);
       const hash = sourceHashForInfo(info);
       if (regionReadInflight.get(clean) === load && bytes.length >= REGION_LOCATION_BYTES) {
         regionHeaderCache.set(clean, {
@@ -280,6 +280,7 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
   async function readRegionHeader(filePath: string): Promise<RegionHeaderCacheEntry | null> {
     const info = await worldStorage.stat(filePath);
     if (!info) return null;
+    if (info.size < 8192) throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'source region header is truncated');
     const clean = cleanStoragePath(filePath);
     const v = validator(info);
     const fullHit = regionCache.get(clean);
@@ -293,7 +294,8 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     let load!: Promise<RegionHeaderCacheEntry | null>;
     load = (async () => {
       const header = await worldStorage.readRange(clean, 0, REGION_LOCATION_BYTES);
-      if (!header || header.length < REGION_LOCATION_BYTES) return null;
+      if (!header || header.length < REGION_LOCATION_BYTES)
+        throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'region header changed during read', true);
       const value: RegionHeaderCacheEntry = { validator: v, hash: sourceHashForInfo(info), header };
       if (regionHeaderInflight.get(clean) === load) regionHeaderCache.set(clean, value);
       return value;
@@ -559,8 +561,8 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
 
       if (meta.source === 'chunk') {
         const bytes = await readSource(meta.sourcePath);
-        const data = bytes ? await decompressNbt(bytes) : null;
-        if (!data) return;
+        if (!bytes) throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'chunk disappeared during read', true);
+        const data = await decompressNbt(bytes);
         out[index] = { ...meta, data, nbtHash: chunkPayloadHash(data) } as ChunkReadResult;
         return;
       }
@@ -572,11 +574,12 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
 
     await mapWithConcurrency([...byRegion.entries()], MAX_PARALLEL_STORAGE_READS, async ([filePath, items]) => {
       const region = await readRegionFile(filePath);
-      if (!region) return;
+      if (!region) throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'region disappeared during read', true);
       for (const { meta, index } of items) {
         if (!meta.fileHash || !meta.sourcePath) continue;
         const data = await decodeRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31);
-        if (!data) continue;
+        if (!data)
+          throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'declared source chunk is truncated or invalid');
         out[index] = { ...meta, data, nbtHash: chunkPayloadHash(data) } as ChunkReadResult;
       }
     });
@@ -591,11 +594,13 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     }
     await mapWithConcurrency([...byEntityRegion.entries()], MAX_PARALLEL_STORAGE_READS, async ([filePath, items]) => {
       const region = await readRegionFile(filePath);
-      if (!region) return;
+      if (!region) throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'entity region disappeared during read', true);
       for (const { meta, index } of items) {
         const result = out[index];
         if (!result) continue;
-        const entities = (await decodeRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31)) ?? undefined;
+        const entities = await decodeRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31);
+        if (!entities)
+          throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'declared entity chunk is truncated or invalid');
         result.entities = entities;
         result.nbtHash = chunkPayloadHash(result.data, entities);
       }

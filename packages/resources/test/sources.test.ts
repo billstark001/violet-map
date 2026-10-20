@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { sha256 } from '@violet-map/storage';
 import { BoundedSource, InvalidationCoordinator, SnapshotGate, sourceSnapshot } from '../src/index.js';
+import { createWorldSource } from '../src/sources/worldChunks.js';
+import { LocalStorage } from '@violet-map/storage/local';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 const deferred = () => {
   let release!: () => void;
@@ -77,4 +82,28 @@ test('snapshot barrier excludes source commits, bounds waiting work and rejects 
     gate.read(async () => {}, token as never),
     { code: 'SOURCE_SNAPSHOT_CHANGED' },
   );
+});
+
+test('declared but corrupt source regions and chunks never become logical missing resources', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-corrupt-source-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const storage = new LocalStorage(root);
+  const source = createWorldSource(storage, {
+    cache: { regionBytes: 0, chunkNbtBytes: 0, worldListMs: 0, metadataEntries: 0 },
+  });
+  const key = 'world/region/r.0.0.mca';
+  await storage.replace(key, new Uint8Array(100));
+  await assert.rejects(source.listChunkSourceCoverage('world', 'minecraft:overworld'), {
+    code: 'RESOURCE_INTEGRITY_FAILED',
+  });
+  const region = new Uint8Array(12288);
+  const view = new DataView(region.buffer);
+  view.setUint32(0, (2 << 8) | 1);
+  view.setUint32(8192, 5000);
+  region[8196] = 3;
+  await storage.replace(key, region);
+  await assert.rejects(source.getChunkNbtWithMeta('world', 'minecraft:overworld', 0, 0), {
+    code: 'RESOURCE_INTEGRITY_FAILED',
+  });
+  assert.equal(await source.getChunkNbtWithMeta('world', 'minecraft:overworld', 1, 0), null);
 });

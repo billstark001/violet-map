@@ -1,9 +1,24 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, truncate, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { PNG } from 'pngjs';
+import { createAssetPack } from '../src/assetPack.js';
+
+test('asset JSON size is checked before allocation and a failed build does not retain a rejected result', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'violet-asset-budget-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const directory = path.join(root, 'test/models');
+  await mkdir(directory, { recursive: true });
+  const file = path.join(directory, 'large.json');
+  await writeFile(file, '{}');
+  await truncate(file, 8 * 1024 ** 2 + 1);
+  const pack = createAssetPack({ assets: { dirs: [root] }, cache: { textureBytes: 0 } });
+  await assert.rejects(pack.buildAssetBundle(), { code: 'RESOURCE_BUSY' });
+  await writeFile(file, '{}');
+  assert.deepEqual((await pack.buildAssetBundle()).models['test:large'], {});
+});
 
 test('atlas keeps animation frames when interpolation would exceed the pixel budget', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'violet-atlas-'));

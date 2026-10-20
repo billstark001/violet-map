@@ -23,6 +23,7 @@ export function createWorldStore(worldStorage: ObjectStorage, config: ServerConf
     getChunksNbtWithMetaBatch,
     getChunkNbtWithMeta,
     invalidateWorldList,
+    invalidateStoredFile,
     invalidatePath,
     clearChunkCacheFor,
     clearWorldDirectoryCaches,
@@ -45,9 +46,6 @@ export function createWorldStore(worldStorage: ObjectStorage, config: ServerConf
   const MAX_PARALLEL_HASH_READS = 4;
   const levelDatPath = (world: string) => world + '/level.dat';
   const worldMetaPath = (world: string) => world + '/.violet-map/world.json';
-  function invalidateStoredFile(filePath: string) {
-    source.invalidateStoredFile(filePath);
-  }
   function clearRegionChunkEntries(region: Uint8Array, locals: { localX: number; localZ: number }[]): Uint8Array {
     const out = region.slice();
     for (const { localX, localZ } of locals) {

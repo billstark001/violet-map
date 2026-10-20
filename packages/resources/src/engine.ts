@@ -148,30 +148,37 @@ export class ResourceEngine {
       this.bounded = new BoundedSource(
         coordinator,
         async () => {
-          const hash = createHash('sha256');
-          hash.update(await dynamic.assets.sourceDigest());
-          hash.update(bytesJson(await dynamic.gameData.buildBlockInfo()));
-          hash.update(bytesJson(await dynamic.gameData.readBiomes()));
-          hash.update(bytesJson(await dynamic.gameData.readDimensions()));
-          const files = await mounts.worlds!.list();
-          if (files.length > Math.floor(budget / 1024))
-            throw new ResourceError('RESOURCE_BUSY', 'source inventory exceeds metadata budget');
-          for (const file of files.sort((a, b) => a.path.localeCompare(b.path))) {
-            if (
-              !/\.(mca|nbt|msgpack)$|\/(level.dat|identity.json|world.json)$|\/top-map\/manifest.json$/.test(file.path)
-            )
-              continue;
-            hash.update(canonicalJson({ key: file.path, bytes: file.size }));
-            for (let offset = 0; offset < file.size; offset += 1024 ** 2) {
-              const length = Math.min(1024 ** 2, file.size - offset);
-              const bytes = await mounts.worlds!.readRange(file.path, offset, length);
-              if (!bytes || bytes.byteLength !== length)
-                throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'source changed during observation', true);
-              hash.update(bytes);
+          const release = this.repo().work.reserve(128 * 1024 ** 2);
+          try {
+            const hash = createHash('sha256');
+            hash.update(await dynamic.assets.sourceDigest());
+            hash.update(bytesJson(await dynamic.gameData.buildBlockInfo()));
+            hash.update(bytesJson(await dynamic.gameData.readBiomes()));
+            hash.update(bytesJson(await dynamic.gameData.readDimensions()));
+            const files = await mounts.worlds!.list();
+            if (files.length > Math.floor(budget / 1024))
+              throw new ResourceError('RESOURCE_BUSY', 'source inventory exceeds metadata budget');
+            for (const file of files.sort((a, b) => a.path.localeCompare(b.path))) {
+              if (
+                !/\.(mca|nbt|msgpack)$|\/(level.dat|identity.json|world.json)$|\/top-map\/manifest.json$/.test(
+                  file.path,
+                )
+              )
+                continue;
+              hash.update(canonicalJson({ key: file.path, bytes: file.size }));
+              for (let offset = 0; offset < file.size; offset += 1024 ** 2) {
+                const length = Math.min(1024 ** 2, file.size - offset);
+                const bytes = await mounts.worlds!.readRange(file.path, offset, length);
+                if (!bytes || bytes.byteLength !== length)
+                  throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'source changed during observation', true);
+                hash.update(bytes);
+              }
             }
+            const result = hash.digest('hex');
+            return result;
+          } finally {
+            release();
           }
-          const result = hash.digest('hex');
-          return result;
         },
         config.resources.source.revalidateMs,
       );
