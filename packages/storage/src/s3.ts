@@ -1,3 +1,4 @@
+import { ResourceError } from '@violet-map/core/resources';
 import {
   DeleteObjectCommand,
   DeleteObjectsCommand,
@@ -8,11 +9,12 @@ import {
   S3Client,
   type GetObjectCommandOutput,
 } from '@aws-sdk/client-s3';
+import { forEachConcurrent } from '@violet-map/core/async';
+import type { ObjectStorage, StoredFileInfo } from '@violet-map/core/storage';
+import type { S3StorageOptions } from '@violet-map/storage/types';
+import type { ObjectHttpMetadata } from './capabilities.js';
 import { cleanStoragePath } from './paths.js';
 import { validateReadRange } from './range.js';
-import { forEachConcurrent } from '@violet-map/core/async';
-import type { S3StorageOptions } from '@violet-map/storage/types';
-import type { StoredFileInfo, ObjectStorage } from '@violet-map/core/storage';
 
 const DELETE_BATCH_SIZE = 1000;
 const DELETE_BATCH_CONCURRENCY = 4;
@@ -44,6 +46,12 @@ export class S3Storage implements ObjectStorage {
       region: options.region ?? 'auto',
       forcePathStyle: options.forcePathStyle ?? true,
       credentials: options.credentials,
+      requestHandler: {
+        connectionTimeout: 10000,
+        requestTimeout: 30000,
+        socketTimeout: 30000,
+        throwOnRequestTimeout: true,
+      },
     });
   }
 
@@ -72,6 +80,9 @@ export class S3Storage implements ObjectStorage {
     }
   }
 
+  close() {
+    this.client.destroy();
+  }
   async readRange(filePath: string, start: number, length: number): Promise<Uint8Array | null> {
     validateReadRange(start, length);
     if (length === 0) return (await this.stat(filePath)) ? new Uint8Array() : null;
@@ -83,9 +94,25 @@ export class S3Storage implements ObjectStorage {
           Range: `bytes=${start}-${start + length - 1}`,
         }),
       );
-      const bytes = await bodyToBytes(result.Body);
-      if (result.$metadata.httpStatusCode === 200) return bytes.slice(start, start + length);
-      return bytes.length > length ? bytes.slice(0, length) : bytes;
+      if (!result.Body) return new Uint8Array();
+      const stream = result.Body as AsyncIterable<Uint8Array>;
+      if (typeof stream[Symbol.asyncIterator] !== 'function')
+        throw new Error('S3 Node body is not a readable byte stream');
+      const skip = result.$metadata.httpStatusCode === 200 ? start : 0;
+      const output = new Uint8Array(length);
+      let offset = 0,
+        written = 0;
+      for await (const piece of stream) {
+        const from = Math.min(piece.length, Math.max(0, skip - offset));
+        offset += piece.length;
+        const take = Math.min(piece.length - from, length - written);
+        if (take > 0) {
+          output.set(piece.subarray(from, from + take), written);
+          written += take;
+        }
+        if (written === length) break;
+      }
+      return written === length ? output : output.slice(0, written);
     } catch (error) {
       const failure = error as { name?: string; $metadata?: { httpStatusCode?: number } };
       if (failure.name === 'InvalidRange' || failure.$metadata?.httpStatusCode === 416)
@@ -102,6 +129,74 @@ export class S3Storage implements ObjectStorage {
   }
   replace(filePath: string, bytes: Uint8Array, contentType?: string): Promise<void> {
     return this.write(filePath, bytes, contentType);
+  }
+  /** Requires explicitly configured backend support for conditional PUT. */
+  async create(filePath: string, bytes: Uint8Array, metadata: ObjectHttpMetadata): Promise<boolean> {
+    try {
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: this.key(filePath),
+          Body: bytes,
+          ContentType: metadata.contentType,
+          CacheControl: metadata.cacheControl,
+          Metadata: metadata.digest ? { sha256: metadata.digest } : undefined,
+          IfNoneMatch: '*',
+        }),
+      );
+      return true;
+    } catch (error) {
+      if ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 412) return false;
+      throw error;
+    }
+  }
+  async readDocument(filePath: string, maxBytes?: number): Promise<{ bytes: Uint8Array; token: string } | null> {
+    try {
+      const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: this.key(filePath) }));
+      if (!result.ETag) throw new Error('conditional document backend did not return an ETag');
+      const limit = maxBytes ?? 8 * 1024 ** 2;
+      if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError('invalid conditional document limit');
+      if ((result.ContentLength ?? 0) > limit) {
+        (result.Body as { destroy?(): void } | undefined)?.destroy?.();
+        throw new ResourceError('RESOURCE_BUSY', 'conditional document exceeds read budget');
+      }
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      if (result.Body)
+        for await (const chunk of result.Body as AsyncIterable<Uint8Array>) {
+          size += chunk.length;
+          if (size > limit) throw new ResourceError('RESOURCE_BUSY', 'conditional document exceeds read budget');
+          chunks.push(chunk);
+        }
+      const bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.length;
+      }
+      return { bytes, token: result.ETag };
+    } catch (error) {
+      if (!isMissingObject(error)) throw error;
+      return null;
+    }
+  }
+  async compareExchange(filePath: string, expectedToken: string | null, bytes: Uint8Array): Promise<boolean> {
+    try {
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: this.key(filePath),
+          Body: bytes,
+          ContentType: 'application/json',
+          CacheControl: 'no-cache',
+          ...(expectedToken === null ? { IfNoneMatch: '*' } : { IfMatch: expectedToken }),
+        }),
+      );
+      return true;
+    } catch (error) {
+      if ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 412) return false;
+      throw error;
+    }
   }
   async delete(filePath: string): Promise<void> {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: this.key(filePath) }));
@@ -179,6 +274,25 @@ export class S3Storage implements ObjectStorage {
       ContinuationToken = result.NextContinuationToken;
     } while (ContinuationToken);
     return [...dirs].sort();
+  }
+
+  async *scan(prefix = ''): AsyncIterable<StoredFileInfo> {
+    const { absolute: Prefix } = this.listingPrefix(prefix);
+    let ContinuationToken: string | undefined;
+    do {
+      const page = await this.client.send(
+        new ListObjectsV2Command({ Bucket: this.bucket, Prefix, ContinuationToken, MaxKeys: 1000 }),
+      );
+      for (const item of page.Contents ?? [])
+        if (item.Key && !item.Key.endsWith('/'))
+          yield {
+            path: this.relative(item.Key),
+            size: item.Size ?? 0,
+            modifiedAt: item.LastModified?.getTime(),
+            etag: item.ETag,
+          };
+      ContinuationToken = page.NextContinuationToken;
+    } while (ContinuationToken);
   }
 }
 

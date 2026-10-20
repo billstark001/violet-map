@@ -35,6 +35,16 @@
       "development": "./src/types.ts",
       "types": "./dist/types.d.ts",
       "default": "./dist/types.js"
+    },
+    "./http-publisher": {
+      "development": "./src/staticHttpPublisher.ts",
+      "types": "./dist/staticHttpPublisher.d.ts",
+      "default": "./dist/staticHttpPublisher.js"
+    },
+    "./http-cas": {
+      "development": "./src/httpCas.ts",
+      "types": "./dist/httpCas.d.ts",
+      "default": "./dist/httpCas.js"
     }
   },
   "scripts": {

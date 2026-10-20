@@ -1,8 +1,11 @@
-import type { StoredFileInfo, ObjectStorage } from '@violet-map/core/storage';
 import { LruCache } from '@violet-map/core/cache';
+import type { ObjectStorage, StoredFileInfo } from '@violet-map/core/storage';
+import type { ConditionalDocumentStore, ConditionalObjectWriter, ObjectHttpMetadata } from './capabilities.js';
 import { cleanStoragePath } from './paths.js';
 
 export interface StorageCacheOptions {
+  onMutation?: () => void;
+  metadataBytes?: number;
   /** Cache metadata probes; defaults are intentionally short to tolerate external writers. */
   statTtlMs?: number;
   listTtlMs?: number;
@@ -14,6 +17,7 @@ export interface StorageCacheOptions {
 
 interface CacheEntry<T> {
   expiresAt: number;
+  keyBytes: number;
   value: T;
 }
 
@@ -24,6 +28,17 @@ interface CacheEntry<T> {
  */
 export class CachedStorage implements ObjectStorage {
   readonly kind: ObjectStorage['kind'];
+  readonly metrics = {
+    get: 0,
+    head: 0,
+    list: 0,
+    put: 0,
+    delete: 0,
+    readBytes: 0,
+    uploadedBytes: 0,
+    conditionalCreateAttempts: 0,
+    conditionalDocumentAttempts: 0,
+  };
   private readonly statTtlMs: number;
   private readonly listTtlMs: number;
   private readonly stats: LruCache<string, CacheEntry<StoredFileInfo | null>>;
@@ -31,24 +46,80 @@ export class CachedStorage implements ObjectStorage {
   private readonly directories: LruCache<string, CacheEntry<string[]>>;
   private readonly inflight = new Map<string, Promise<unknown>>();
   private generation = 0;
+  private readonly onMutation?: () => void;
+  async *scan(prefix = ''): AsyncIterable<StoredFileInfo> {
+    const backend = this.storage as ObjectStorage & Partial<import('./capabilities.js').ObjectScanner>;
+    if (!backend.scan) throw new Error('storage does not support bounded inventory');
+    this.metrics.list++;
+    yield* backend.scan(prefix);
+  }
+
+  create(filePath: string, bytes: Uint8Array, metadata: ObjectHttpMetadata): Promise<boolean> {
+    const backend = this.storage as ObjectStorage & Partial<ConditionalObjectWriter>;
+    if (!backend.create) throw new Error('storage does not support conditional creation');
+    return this.mutate(async () => {
+      this.metrics.conditionalCreateAttempts++;
+      const created = await backend.create!(filePath, bytes, metadata);
+      if (created) {
+        this.metrics.put++;
+        this.metrics.uploadedBytes += bytes.length;
+      }
+      return created;
+    });
+  }
+  readDocument(filePath: string, maxBytes?: number) {
+    const backend = this.storage as ObjectStorage & Partial<ConditionalDocumentStore>;
+    if (!backend.readDocument) throw new Error('storage does not support conditional documents');
+    this.metrics.get++;
+    return backend.readDocument(filePath, maxBytes).then((document) => {
+      this.metrics.readBytes += document?.bytes.length ?? 0;
+      return document;
+    });
+  }
+  compareExchange(filePath: string, expectedToken: string | null, bytes: Uint8Array) {
+    const backend = this.storage as ObjectStorage & Partial<ConditionalDocumentStore>;
+    if (!backend.compareExchange) throw new Error('storage does not support conditional documents');
+    return this.mutate(async () => {
+      this.metrics.conditionalDocumentAttempts++;
+      const committed = await backend.compareExchange!(filePath, expectedToken, bytes);
+      if (committed) {
+        this.metrics.put++;
+        this.metrics.uploadedBytes += bytes.length;
+      }
+      return committed;
+    });
+  }
 
   constructor(
     private readonly storage: ObjectStorage,
     options: StorageCacheOptions = {},
   ) {
     this.kind = storage.kind;
+    this.onMutation = options.onMutation;
     this.statTtlMs = Math.max(0, options.statTtlMs ?? 1_000);
     this.listTtlMs = Math.max(0, options.listTtlMs ?? 2_000);
     const maxEntries = options.maxEntries ?? 4096;
     const maxWeight = options.maxListItems ?? 65536;
-    this.stats = new LruCache({ maxEntries });
-    this.lists = new LruCache({ maxEntries, maxWeight, weightOf: (entry) => Math.max(1, entry.value.length) });
-    this.directories = new LruCache({ maxEntries, maxWeight, weightOf: (entry) => Math.max(1, entry.value.length) });
+    if (options.metadataBytes !== undefined) {
+      if (!Number.isSafeInteger(options.metadataBytes) || options.metadataBytes < 0)
+        throw new RangeError('invalid storage metadata budget');
+      const bytes = Math.floor(options.metadataBytes / 3);
+      const weightOf = (entry: CacheEntry<unknown>) =>
+        256 + entry.keyBytes + new TextEncoder().encode(JSON.stringify(entry.value)).byteLength * 4;
+      this.stats = new LruCache<string, CacheEntry<StoredFileInfo | null>>({ maxEntries, maxWeight: bytes, weightOf });
+      this.lists = new LruCache<string, CacheEntry<StoredFileInfo[]>>({ maxEntries, maxWeight: bytes, weightOf });
+      this.directories = new LruCache<string, CacheEntry<string[]>>({ maxEntries, maxWeight: bytes, weightOf });
+    } else {
+      this.stats = new LruCache({ maxEntries });
+      this.lists = new LruCache({ maxEntries, maxWeight, weightOf: (entry) => Math.max(1, entry.value.length) });
+      this.directories = new LruCache({ maxEntries, maxWeight, weightOf: (entry) => Math.max(1, entry.value.length) });
+    }
   }
 
   private clearMetadata(): void {
     // A request started before a write must not repopulate the cache afterward.
     this.generation++;
+    this.onMutation?.();
     this.stats.clear();
     this.lists.clear();
     this.directories.clear();
@@ -83,7 +154,7 @@ export class CachedStorage implements ObjectStorage {
     try {
       const value = await request;
       if (generation === this.generation && ttlMs > 0) {
-        cache.set(key, { value, expiresAt: Date.now() + ttlMs });
+        cache.set(key, { value, expiresAt: Date.now() + ttlMs, keyBytes: key.length * 2 });
       }
       return value;
     } finally {
@@ -92,35 +163,63 @@ export class CachedStorage implements ObjectStorage {
   }
 
   read(filePath: string) {
-    return this.storage.read(filePath);
+    this.metrics.get++;
+    return this.storage.read(filePath).then((bytes) => {
+      this.metrics.readBytes += bytes?.length ?? 0;
+      return bytes;
+    });
   }
   readRange(filePath: string, start: number, length: number) {
-    return this.storage.readRange(filePath, start, length);
+    this.metrics.get++;
+    return this.storage.readRange(filePath, start, length).then((bytes) => {
+      this.metrics.readBytes += bytes?.length ?? 0;
+      return bytes;
+    });
   }
   write(filePath: string, bytes: Uint8Array, contentType?: string): Promise<void> {
-    return this.mutate(() => this.storage.write(filePath, bytes, contentType));
+    return this.mutate(async () => {
+      await this.storage.write(filePath, bytes, contentType);
+      this.metrics.put++;
+      this.metrics.uploadedBytes += bytes.length;
+    });
   }
   async replace(filePath: string, bytes: Uint8Array, contentType?: string): Promise<void> {
     const backend = this.storage as Partial<import('@violet-map/core/storage').AtomicObjectStorage>;
     if (!backend.replace) throw new Error('storage does not support atomic replacement');
-    return this.mutate(() => backend.replace!(filePath, bytes, contentType));
+    return this.mutate(async () => {
+      await backend.replace!(filePath, bytes, contentType);
+      this.metrics.put++;
+      this.metrics.uploadedBytes += bytes.length;
+    });
   }
   delete(filePath: string): Promise<void> {
-    return this.mutate(() => this.storage.delete(filePath));
+    return this.mutate(async () => {
+      await this.storage.delete(filePath);
+      this.metrics.delete++;
+    });
   }
   deletePrefix(prefix: string): Promise<number> {
     return this.mutate(() => this.storage.deletePrefix(prefix));
   }
   stat(filePath: string) {
     const key = cleanStoragePath(filePath);
-    return this.cached('stat', this.stats, key, this.statTtlMs, () => this.storage.stat(key));
+    return this.cached('stat', this.stats, key, this.statTtlMs, () => {
+      this.metrics.head++;
+      return this.storage.stat(key);
+    });
   }
   list(prefix = '') {
     const key = cleanStoragePath(prefix);
-    return this.cached('list', this.lists, key, this.listTtlMs, () => this.storage.list(key));
+    return this.cached('list', this.lists, key, this.listTtlMs, () => {
+      this.metrics.list++;
+      return this.storage.list(key);
+    });
   }
   listDirectories(prefix = '') {
     const key = cleanStoragePath(prefix);
-    return this.cached('directories', this.directories, key, this.listTtlMs, () => this.storage.listDirectories(key));
+    return this.cached('directories', this.directories, key, this.listTtlMs, () => {
+      this.metrics.list++;
+      return this.storage.listDirectories(key);
+    });
   }
 }

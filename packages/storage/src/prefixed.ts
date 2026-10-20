@@ -1,5 +1,6 @@
+import type { ObjectStorage, StoredFileInfo } from '@violet-map/core/storage';
+import type { ConditionalDocumentStore, ConditionalObjectWriter, ObjectHttpMetadata } from './capabilities.js';
 import { cleanStoragePath, joinStoragePath } from './paths.js';
-import type { StoredFileInfo, ObjectStorage } from '@violet-map/core/storage';
 
 /** Presents a directory inside another storage as its own storage root. */
 export class ScopedStorage implements ObjectStorage {
@@ -32,6 +33,21 @@ export class ScopedStorage implements ObjectStorage {
     if (!backend.replace) throw new Error('storage does not support atomic replacement');
     await backend.replace(this.path(filePath), bytes, contentType);
   }
+  create(filePath: string, bytes: Uint8Array, metadata: ObjectHttpMetadata): Promise<boolean> {
+    const backend = this.storage as ObjectStorage & Partial<ConditionalObjectWriter>;
+    if (!backend.create) throw new Error('storage does not support conditional creation');
+    return backend.create(this.path(filePath), bytes, metadata);
+  }
+  readDocument(filePath: string, maxBytes?: number) {
+    const backend = this.storage as ObjectStorage & Partial<ConditionalDocumentStore>;
+    if (!backend.readDocument) throw new Error('storage does not support conditional documents');
+    return backend.readDocument(this.path(filePath), maxBytes);
+  }
+  compareExchange(filePath: string, expectedToken: string | null, bytes: Uint8Array) {
+    const backend = this.storage as ObjectStorage & Partial<ConditionalDocumentStore>;
+    if (!backend.compareExchange) throw new Error('storage does not support conditional documents');
+    return backend.compareExchange(this.path(filePath), expectedToken, bytes);
+  }
   delete(filePath: string) {
     return this.storage.delete(this.path(filePath));
   }
@@ -47,5 +63,10 @@ export class ScopedStorage implements ObjectStorage {
   }
   listDirectories(prefix = '') {
     return this.storage.listDirectories(this.path(prefix));
+  }
+  async *scan(prefix = ''): AsyncIterable<StoredFileInfo> {
+    const backend = this.storage as ObjectStorage & Partial<import('./capabilities.js').ObjectScanner>;
+    if (!backend.scan) throw new Error('storage does not support bounded object inventory');
+    for await (const info of backend.scan(this.path(prefix))) yield { ...info, path: this.unprefix(info.path) };
   }
 }

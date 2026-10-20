@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
 import { createServer } from 'node:http';
+import { test } from 'node:test';
 import { S3Storage } from '../src/s3.js';
 
 test('S3 SDK streams preserve full, partial, ignored and empty range reads', async (t) => {
@@ -122,4 +122,60 @@ test('S3 wire deletion paginates inventory and uses two SDK bulk requests for 10
   assert.equal(new Set(deleted.flat()).size, 1001);
   partialFailure = true;
   await assert.rejects(storage.deletePrefix('a'), AggregateError);
+});
+
+test('conditional S3 writes use opaque ETags; only 412 is a completed condition miss', async (t) => {
+  const seen: { none?: string; match?: string; cache?: string }[] = [];
+  let status = 200;
+  const token = '"opaque-multipart-etag-17"';
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request) {
+      /* consume the complete upload */
+    }
+    if (request.method === 'GET') {
+      response.writeHead(200, { etag: token });
+      response.end('{"revision":1}');
+      return;
+    }
+    seen.push({
+      none: request.headers['if-none-match'] as string | undefined,
+      match: request.headers['if-match'] as string | undefined,
+      cache: request.headers['cache-control'] as string | undefined,
+    });
+    response.writeHead(status, { 'content-type': 'application/xml' });
+    response.end(
+      status === 200
+        ? ''
+        : `<Error><Code>${status === 412 ? 'PreconditionFailed' : 'NotImplemented'}</Code><Message>injected</Message></Error>`,
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(
+    () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      }),
+  );
+  const storage = new S3Storage({
+    bucket: 'test',
+    endpoint: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+    region: 'auto',
+    credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
+  });
+  const body = new Uint8Array([1, 2]);
+  assert.equal(await storage.create('object', body, { contentType: 'image/png', cacheControl: 'immutable' }), true);
+  const document = (await storage.readDocument('head'))!;
+  assert.equal(document.token, token);
+  assert.equal(await storage.compareExchange('head', document.token, body), true);
+  assert.deepEqual(seen.slice(0, 2), [
+    { none: '*', match: undefined, cache: 'immutable' },
+    { none: undefined, match: token, cache: 'no-cache' },
+  ]);
+  status = 412;
+  assert.equal(await storage.create('object', body, { contentType: 'image/png' }), false);
+  assert.equal(await storage.compareExchange('head', null, body), false);
+  status = 501;
+  await assert.rejects(storage.create('object', body, { contentType: 'image/png' }));
+  await assert.rejects(storage.compareExchange('head', null, body));
 });
