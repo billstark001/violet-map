@@ -1,0 +1,3037 @@
+{
+  "schemaVersion": 1,
+  "fixture": {
+    "schemaVersion": 1,
+    "fixture": "deterministic-shared-chunk-msgpack",
+    "seed": 10919,
+    "objectBytes": 32768,
+    "hotObjects": 8,
+    "requests": 10000,
+    "runs": 3,
+    "capacities": [0, 1, 32767, 32768, 32769, 262143, 262144, 262145, 1048576],
+    "traces": ["scan", "hot", "edit", "resolve-get"],
+    "strategies": ["zero", "lru", "tiny-lfu"],
+    "loadFractions": [0.5, 0.8],
+    "lowBenefitMedianP95Ratio": 1.1,
+    "lowBenefitCpuPerRequestRatio": 1.1,
+    "warmupRequests": 200
+  },
+  "node": "v26.8.1",
+  "platform": "darwin",
+  "arch": "arm64",
+  "createdAt": "2026-10-20T15:06:04.174Z",
+  "comparisons": [
+    {
+      "capacity": 0,
+      "p95Ratio": 0.9623655913975472,
+      "cpuRatio": 0.9473720334046887
+    },
+    {
+      "capacity": 1,
+      "p95Ratio": 0.9767096774243886,
+      "cpuRatio": 0.9680329298108279
+    },
+    {
+      "capacity": 32767,
+      "p95Ratio": 1.000881720422991,
+      "cpuRatio": 1.0299877941552924
+    },
+    {
+      "capacity": 32768,
+      "p95Ratio": 0.9623655914171062,
+      "cpuRatio": 0.9952623514615478
+    },
+    {
+      "capacity": 32769,
+      "p95Ratio": 0.9767096774048296,
+      "cpuRatio": 0.9896064820826362
+    },
+    {
+      "capacity": 262143,
+      "p95Ratio": 1.2105806451844439,
+      "cpuRatio": 1.1374270524554524
+    },
+    {
+      "capacity": 262144,
+      "p95Ratio": 1.000881720422991,
+      "cpuRatio": 1.0221319047424715
+    },
+    {
+      "capacity": 262145,
+      "p95Ratio": 0.9919354838864454,
+      "cpuRatio": 1.0157971084390987
+    },
+    {
+      "capacity": 1048576,
+      "p95Ratio": 2.5197204301127316,
+      "cpuRatio": 1.3925292068426929
+    }
+  ],
+  "passed": false,
+  "reports": [
+    {
+      "trace": "scan",
+      "strategy": "zero",
+      "capacity": 0,
+      "p95": 0.04650000000003729,
+      "cpu": 53.9086,
+      "runs": [
+        {
+          "p50": 0.03912499999995589,
+          "p95": 0.05174999999999841,
+          "cpu": 59.4238,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22850.65107857404,
+          "retainedBytes": 0,
+          "rss": 188284928
+        },
+        {
+          "p50": 0.038000000000010914,
+          "p95": 0.04650000000003729,
+          "cpu": 53.9086,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23792.217803478663,
+          "retainedBytes": 0,
+          "rss": 197476352
+        },
+        {
+          "p50": 0.03804200000013225,
+          "p95": 0.04574999999999818,
+          "cpu": 53.6887,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 24064.874068261313,
+          "retainedBytes": 0,
+          "rss": 200130560
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "lru",
+      "capacity": 0,
+      "p95": 0.04545900000016445,
+      "cpu": 54.2524,
+      "runs": [
+        {
+          "p50": 0.03833299999996598,
+          "p95": 0.04545900000016445,
+          "cpu": 51.2133,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 24263.31274894538,
+          "retainedBytes": 0,
+          "rss": 194953216
+        },
+        {
+          "p50": 0.03833299999996598,
+          "p95": 0.04545800000005329,
+          "cpu": 54.2524,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23797.233275118255,
+          "retainedBytes": 0,
+          "rss": 195182592
+        },
+        {
+          "p50": 0.038250000000061846,
+          "p95": 0.04658400000016627,
+          "cpu": 55.9276,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23748.369383524303,
+          "retainedBytes": 0,
+          "rss": 195870720
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "tiny-lfu",
+      "capacity": 0,
+      "p95": 0.04475000000002183,
+      "cpu": 51.0715,
+      "runs": [
+        {
+          "p50": 0.037959000000228116,
+          "p95": 0.044584000000213564,
+          "cpu": 51.0715,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 24410.677961884445,
+          "retainedBytes": 0,
+          "rss": 196165632
+        },
+        {
+          "p50": 0.0382499999996071,
+          "p95": 0.04541700000027049,
+          "cpu": 55.661,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23846.86260242599,
+          "retainedBytes": 0,
+          "rss": 196722688
+        },
+        {
+          "p50": 0.03804200000013225,
+          "p95": 0.04475000000002183,
+          "cpu": 50.6938,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 24434.892231483886,
+          "retainedBytes": 0,
+          "rss": 197017600
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "lru",
+      "capacity": 1,
+      "p95": 0.04533300000002782,
+      "cpu": 52.7282,
+      "runs": [
+        {
+          "p50": 0.03829199999972843,
+          "p95": 0.04533300000002782,
+          "cpu": 52.1174,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 24128.673370044828,
+          "retainedBytes": 0,
+          "rss": 193331200
+        },
+        {
+          "p50": 0.03849999999965803,
+          "p95": 0.045166999999310065,
+          "cpu": 52.7282,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23946.470022597176,
+          "retainedBytes": 0,
+          "rss": 193347584
+        },
+        {
+          "p50": 0.03837500000008731,
+          "p95": 0.04570799999964947,
+          "cpu": 52.7946,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23984.90388230854,
+          "retainedBytes": 0,
+          "rss": 193593344
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "tiny-lfu",
+      "capacity": 1,
+      "p95": 0.04541700000027049,
+      "cpu": 52.1853,
+      "runs": [
+        {
+          "p50": 0.03841700000066339,
+          "p95": 0.04541700000027049,
+          "cpu": 51.0439,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 24081.465188586462,
+          "retainedBytes": 0,
+          "rss": 193658880
+        },
+        {
+          "p50": 0.03837500000008731,
+          "p95": 0.044666000000688655,
+          "cpu": 54.3794,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 24195.241117385016,
+          "retainedBytes": 0,
+          "rss": 197836800
+        },
+        {
+          "p50": 0.038832999999613094,
+          "p95": 0.045540999999502674,
+          "cpu": 52.1853,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23807.261212765276,
+          "retainedBytes": 0,
+          "rss": 206241792
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "lru",
+      "capacity": 32767,
+      "p95": 0.04758399999991525,
+      "cpu": 54.9385,
+      "runs": [
+        {
+          "p50": 0.03854200000023411,
+          "p95": 0.04508400000031543,
+          "cpu": 52.3877,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23965.14271908718,
+          "retainedBytes": 0,
+          "rss": 206258176
+        },
+        {
+          "p50": 0.04254199999923003,
+          "p95": 0.04845800000020972,
+          "cpu": 54.9906,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21942.53212656048,
+          "retainedBytes": 0,
+          "rss": 209289216
+        },
+        {
+          "p50": 0.040917000000263215,
+          "p95": 0.04758399999991525,
+          "cpu": 54.9385,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22558.62139752916,
+          "retainedBytes": 0,
+          "rss": 207077376
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "tiny-lfu",
+      "capacity": 32767,
+      "p95": 0.0465409999997064,
+      "cpu": 55.5252,
+      "runs": [
+        {
+          "p50": 0.042374999999992724,
+          "p95": 0.0465409999997064,
+          "cpu": 55.5252,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21499.14811023058,
+          "retainedBytes": 0,
+          "rss": 208633856
+        },
+        {
+          "p50": 0.04220799999893643,
+          "p95": 0.04591700000128185,
+          "cpu": 56.5718,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22166.80113085182,
+          "retainedBytes": 0,
+          "rss": 208994304
+        },
+        {
+          "p50": 0.042625000000043656,
+          "p95": 0.046999999998661224,
+          "cpu": 55.2472,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21851.324301803656,
+          "retainedBytes": 0,
+          "rss": 209108992
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "lru",
+      "capacity": 32768,
+      "p95": 0.05275000000074215,
+      "cpu": 61.4606,
+      "runs": [
+        {
+          "p50": 0.042792000000190455,
+          "p95": 0.046875,
+          "cpu": 56.727,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21651.742870899463,
+          "retainedBytes": 0,
+          "rss": 209174528
+        },
+        {
+          "p50": 0.04345900000043912,
+          "p95": 0.0540419999997539,
+          "cpu": 61.4606,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20252.268986246014,
+          "retainedBytes": 0,
+          "rss": 208715776
+        },
+        {
+          "p50": 0.042959000000337255,
+          "p95": 0.05275000000074215,
+          "cpu": 63.248,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20775.813891106787,
+          "retainedBytes": 0,
+          "rss": 212107264
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "tiny-lfu",
+      "capacity": 32768,
+      "p95": 0.04475000000093132,
+      "cpu": 53.6532,
+      "runs": [
+        {
+          "p50": 0.04041700000016135,
+          "p95": 0.04475000000093132,
+          "cpu": 54.3412,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23266.076295099247,
+          "retainedBytes": 0,
+          "rss": 212140032
+        },
+        {
+          "p50": 0.04050000000097498,
+          "p95": 0.04545900000084657,
+          "cpu": 53.6532,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23221.991339121538,
+          "retainedBytes": 0,
+          "rss": 212172800
+        },
+        {
+          "p50": 0.040375000000494765,
+          "p95": 0.044667000000117696,
+          "cpu": 51.3893,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23549.73612897457,
+          "retainedBytes": 0,
+          "rss": 212205568
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "lru",
+      "capacity": 32769,
+      "p95": 0.04583400000046822,
+      "cpu": 54.9618,
+      "runs": [
+        {
+          "p50": 0.04066599999896425,
+          "p95": 0.04533400000036636,
+          "cpu": 54.9618,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23194.945184974902,
+          "retainedBytes": 0,
+          "rss": 212041728
+        },
+        {
+          "p50": 0.04045899999982794,
+          "p95": 0.045958999999129446,
+          "cpu": 55.3955,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23144.703659056417,
+          "retainedBytes": 0,
+          "rss": 212336640
+        },
+        {
+          "p50": 0.04050000000097498,
+          "p95": 0.04583400000046822,
+          "cpu": 52.7029,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23389.84089673545,
+          "retainedBytes": 0,
+          "rss": 212336640
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "tiny-lfu",
+      "capacity": 32769,
+      "p95": 0.045416999999360996,
+      "cpu": 53.3483,
+      "runs": [
+        {
+          "p50": 0.0404579999994894,
+          "p95": 0.04570799999964947,
+          "cpu": 55.6215,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23097.553171791544,
+          "retainedBytes": 0,
+          "rss": 212762624
+        },
+        {
+          "p50": 0.040374999998675776,
+          "p95": 0.04529200000069977,
+          "cpu": 53.3483,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23354.74116099187,
+          "retainedBytes": 0,
+          "rss": 213008384
+        },
+        {
+          "p50": 0.04029199999968114,
+          "p95": 0.045416999999360996,
+          "cpu": 51.9822,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23464.770903398705,
+          "retainedBytes": 0,
+          "rss": 213188608
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "lru",
+      "capacity": 262143,
+      "p95": 0.04900000000088767,
+      "cpu": 58.1405,
+      "runs": [
+        {
+          "p50": 0.041124999999738066,
+          "p95": 0.04820800000015879,
+          "cpu": 58.1405,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22402.845161335452,
+          "retainedBytes": 229600,
+          "rss": 213975040
+        },
+        {
+          "p50": 0.041166000000885106,
+          "p95": 0.04900000000088767,
+          "cpu": 55.5418,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21971.159008848044,
+          "retainedBytes": 229600,
+          "rss": 216645632
+        },
+        {
+          "p50": 0.04266699999971024,
+          "p95": 0.07950000000164437,
+          "cpu": 65.6031,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 13899.295658335246,
+          "retainedBytes": 229600,
+          "rss": 219447296
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "tiny-lfu",
+      "capacity": 262143,
+      "p95": 0.05629200000112178,
+      "cpu": 61.3171,
+      "runs": [
+        {
+          "p50": 0.04345800000010058,
+          "p95": 0.05629200000112178,
+          "cpu": 63.2002,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20313.70111423274,
+          "retainedBytes": 229600,
+          "rss": 220430336
+        },
+        {
+          "p50": 0.04212499999994179,
+          "p95": 0.05649999999877764,
+          "cpu": 61.3171,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20661.432752467255,
+          "retainedBytes": 229600,
+          "rss": 220790784
+        },
+        {
+          "p50": 0.04175000000032014,
+          "p95": 0.046875,
+          "cpu": 55.3148,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21965.220985158416,
+          "retainedBytes": 229600,
+          "rss": 220856320
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "lru",
+      "capacity": 262144,
+      "p95": 0.046833000000333413,
+      "cpu": 58.9989,
+      "runs": [
+        {
+          "p50": 0.041291999998065876,
+          "p95": 0.046833000000333413,
+          "cpu": 58.9989,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22373.54194423841,
+          "retainedBytes": 229600,
+          "rss": 221167616
+        },
+        {
+          "p50": 0.04104200000074343,
+          "p95": 0.04624999999941792,
+          "cpu": 58.0353,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22641.58846592203,
+          "retainedBytes": 229600,
+          "rss": 221184000
+        },
+        {
+          "p50": 0.04162499999802094,
+          "p95": 0.049833000000944594,
+          "cpu": 61.145,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21595.936045656847,
+          "retainedBytes": 229600,
+          "rss": 221396992
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "tiny-lfu",
+      "capacity": 262144,
+      "p95": 0.0465409999997064,
+      "cpu": 55.1017,
+      "runs": [
+        {
+          "p50": 0.04145799999969313,
+          "p95": 0.047207999999955064,
+          "cpu": 56.8536,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22346.9533812966,
+          "retainedBytes": 229600,
+          "rss": 221429760
+        },
+        {
+          "p50": 0.04100000000107684,
+          "p95": 0.04470900000160327,
+          "cpu": 54.3798,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22975.39392748848,
+          "retainedBytes": 229600,
+          "rss": 221462528
+        },
+        {
+          "p50": 0.04100000000107684,
+          "p95": 0.0465409999997064,
+          "cpu": 55.1017,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22787.532336733304,
+          "retainedBytes": 229600,
+          "rss": 221478912
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "lru",
+      "capacity": 262145,
+      "p95": 0.04491700000289711,
+      "cpu": 55.3693,
+      "runs": [
+        {
+          "p50": 0.04070800000044983,
+          "p95": 0.0453750000015134,
+          "cpu": 56.7453,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22947.216161684017,
+          "retainedBytes": 229600,
+          "rss": 221577216
+        },
+        {
+          "p50": 0.04049999999915599,
+          "p95": 0.04416700000001583,
+          "cpu": 52.7093,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23433.360240611026,
+          "retainedBytes": 229600,
+          "rss": 221577216
+        },
+        {
+          "p50": 0.040542000002460554,
+          "p95": 0.04491700000289711,
+          "cpu": 55.3693,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23193.09367931288,
+          "retainedBytes": 229600,
+          "rss": 221626368
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "tiny-lfu",
+      "capacity": 262145,
+      "p95": 0.0461250000007567,
+      "cpu": 54.7602,
+      "runs": [
+        {
+          "p50": 0.04099999999743886,
+          "p95": 0.04554199999984121,
+          "cpu": 54.2244,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22967.085217909076,
+          "retainedBytes": 229600,
+          "rss": 221626368
+        },
+        {
+          "p50": 0.04154200000266428,
+          "p95": 0.0461250000007567,
+          "cpu": 54.7602,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22459.954602816826,
+          "retainedBytes": 229600,
+          "rss": 221904896
+        },
+        {
+          "p50": 0.04237499999726424,
+          "p95": 0.04804199999853154,
+          "cpu": 59.4919,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20692.141797040145,
+          "retainedBytes": 229600,
+          "rss": 227917824
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "lru",
+      "capacity": 1048576,
+      "p95": 0.09904099999766913,
+      "cpu": 69.657,
+      "runs": [
+        {
+          "p50": 0.04083299999911105,
+          "p95": 0.04604100000142353,
+          "cpu": 56.8903,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22753.57508438014,
+          "retainedBytes": 1016800,
+          "rss": 228065280
+        },
+        {
+          "p50": 0.04416700000001583,
+          "p95": 0.09904099999766913,
+          "cpu": 69.657,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 14619.076213264556,
+          "retainedBytes": 1016800,
+          "rss": 237289472
+        },
+        {
+          "p50": 0.05020900000090478,
+          "p95": 0.21229200000016135,
+          "cpu": 93.7589,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 11006.329327258736,
+          "retainedBytes": 1016800,
+          "rss": 250576896
+        }
+      ]
+    },
+    {
+      "trace": "scan",
+      "strategy": "tiny-lfu",
+      "capacity": 1048576,
+      "p95": 0.11716700000033597,
+      "cpu": 75.0693,
+      "runs": [
+        {
+          "p50": 0.045958999999129446,
+          "p95": 0.12620800000149757,
+          "cpu": 77.6155,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 15630.906357776908,
+          "retainedBytes": 1016800,
+          "rss": 250953728
+        },
+        {
+          "p50": 0.0452499999992142,
+          "p95": 0.11716700000033597,
+          "cpu": 75.0693,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 15966.593619873385,
+          "retainedBytes": 1016800,
+          "rss": 247447552
+        },
+        {
+          "p50": 0.04441699999733828,
+          "p95": 0.08687499999723514,
+          "cpu": 64.4479,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 18649.595230024424,
+          "retainedBytes": 1016800,
+          "rss": 244989952
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "zero",
+      "capacity": 0,
+      "p95": 0.04520799999954761,
+      "cpu": 54.2524,
+      "runs": [
+        {
+          "p50": 0.04124999999839929,
+          "p95": 0.046542000000044936,
+          "cpu": 54.3581,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22559.41443087442,
+          "retainedBytes": 0,
+          "rss": 245579776
+        },
+        {
+          "p50": 0.04049999999915599,
+          "p95": 0.04512500000055297,
+          "cpu": 51.9562,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23185.090477010308,
+          "retainedBytes": 0,
+          "rss": 245940224
+        },
+        {
+          "p50": 0.040541999998822575,
+          "p95": 0.04520799999954761,
+          "cpu": 54.2524,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23041.310976125045,
+          "retainedBytes": 0,
+          "rss": 245989376
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "lru",
+      "capacity": 0,
+      "p95": 0.0442910000019765,
+      "cpu": 51.2755,
+      "runs": [
+        {
+          "p50": 0.04025000000183354,
+          "p95": 0.0442910000019765,
+          "cpu": 51.2755,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23408.349290024747,
+          "retainedBytes": 0,
+          "rss": 246120448
+        },
+        {
+          "p50": 0.040334000001166714,
+          "p95": 0.044292000002315035,
+          "cpu": 52.8758,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23298.656824046604,
+          "retainedBytes": 0,
+          "rss": 246480896
+        },
+        {
+          "p50": 0.04029199999786215,
+          "p95": 0.04400000000168802,
+          "cpu": 50.4582,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23569.96597086167,
+          "retainedBytes": 0,
+          "rss": 246497280
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "tiny-lfu",
+      "capacity": 0,
+      "p95": 0.04650000000037835,
+      "cpu": 56.0252,
+      "runs": [
+        {
+          "p50": 0.040541999998822575,
+          "p95": 0.04650000000037835,
+          "cpu": 56.0252,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22727.883952388227,
+          "retainedBytes": 0,
+          "rss": 246546432
+        },
+        {
+          "p50": 0.04070799999681185,
+          "p95": 0.0459999999984575,
+          "cpu": 52.6798,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22969.11400662318,
+          "retainedBytes": 0,
+          "rss": 246579200
+        },
+        {
+          "p50": 0.041165999999066116,
+          "p95": 0.046875,
+          "cpu": 61.0182,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22486.600128172315,
+          "retainedBytes": 0,
+          "rss": 247382016
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "lru",
+      "capacity": 1,
+      "p95": 0.04475000000093132,
+      "cpu": 53.8264,
+      "runs": [
+        {
+          "p50": 0.04087500000241562,
+          "p95": 0.04583300000012969,
+          "cpu": 56.5054,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22517.723559478,
+          "retainedBytes": 0,
+          "rss": 247398400
+        },
+        {
+          "p50": 0.040375000000494765,
+          "p95": 0.04475000000093132,
+          "cpu": 53.8264,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23221.66546834349,
+          "retainedBytes": 0,
+          "rss": 247398400
+        },
+        {
+          "p50": 0.04020899999886751,
+          "p95": 0.04387499999938882,
+          "cpu": 48.9168,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23686.25422619621,
+          "retainedBytes": 0,
+          "rss": 247398400
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "tiny-lfu",
+      "capacity": 1,
+      "p95": 0.04416700000001583,
+      "cpu": 50.3288,
+      "runs": [
+        {
+          "p50": 0.040334000001166714,
+          "p95": 0.046832999996695435,
+          "cpu": 50.3288,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21834.613388998896,
+          "retainedBytes": 0,
+          "rss": 247529472
+        },
+        {
+          "p50": 0.03995800000120653,
+          "p95": 0.043249999995168764,
+          "cpu": 49.5704,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23825.67943547084,
+          "retainedBytes": 0,
+          "rss": 247562240
+        },
+        {
+          "p50": 0.04024999999819556,
+          "p95": 0.04416700000001583,
+          "cpu": 52.4142,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23379.776628351574,
+          "retainedBytes": 0,
+          "rss": 247562240
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "lru",
+      "capacity": 32767,
+      "p95": 0.051333000003069174,
+      "cpu": 54.6135,
+      "runs": [
+        {
+          "p50": 0.04245799999625888,
+          "p95": 0.051333000003069174,
+          "cpu": 54.6135,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21602.19519952267,
+          "retainedBytes": 0,
+          "rss": 247906304
+        },
+        {
+          "p50": 0.04275000000052387,
+          "p95": 0.048540999996475875,
+          "cpu": 53.343,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21859.020461750424,
+          "retainedBytes": 0,
+          "rss": 247562240
+        },
+        {
+          "p50": 0.043791999996756203,
+          "p95": 0.08483300000079907,
+          "cpu": 68.5243,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 18751.303801592476,
+          "retainedBytes": 0,
+          "rss": 246693888
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "tiny-lfu",
+      "capacity": 32767,
+      "p95": 0.13308300000062445,
+      "cpu": 75.0757,
+      "runs": [
+        {
+          "p50": 0.04499999999825377,
+          "p95": 0.10904200000368292,
+          "cpu": 75.0274,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 15465.721195577458,
+          "retainedBytes": 0,
+          "rss": 246775808
+        },
+        {
+          "p50": 0.04691599999932805,
+          "p95": 0.16629200000170385,
+          "cpu": 77.1135,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 12390.637783769573,
+          "retainedBytes": 0,
+          "rss": 245776384
+        },
+        {
+          "p50": 0.04583299999649171,
+          "p95": 0.13308300000062445,
+          "cpu": 75.0757,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 13283.237074717683,
+          "retainedBytes": 0,
+          "rss": 245760000
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "lru",
+      "capacity": 32768,
+      "p95": 0.055625000000873115,
+      "cpu": 65.6112,
+      "runs": [
+        {
+          "p50": 0.044667000001936685,
+          "p95": 0.10354199999710545,
+          "cpu": 73.2279,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 16784.60298014827,
+          "retainedBytes": 0,
+          "rss": 245776384
+        },
+        {
+          "p50": 0.04291699999885168,
+          "p95": 0.055625000000873115,
+          "cpu": 59.5683,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20972.448741562846,
+          "retainedBytes": 0,
+          "rss": 245809152
+        },
+        {
+          "p50": 0.043000000005122274,
+          "p95": 0.05533299999660812,
+          "cpu": 65.6112,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20683.587392422844,
+          "retainedBytes": 0,
+          "rss": 245858304
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "tiny-lfu",
+      "capacity": 32768,
+      "p95": 0.04829099999915343,
+      "cpu": 63.3632,
+      "runs": [
+        {
+          "p50": 0.04270800000085728,
+          "p95": 0.047207999996317085,
+          "cpu": 63.3632,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21505.28384824149,
+          "retainedBytes": 0,
+          "rss": 245874688
+        },
+        {
+          "p50": 0.04329200000211131,
+          "p95": 0.0766250000015134,
+          "cpu": 68.7234,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 19456.04622532453,
+          "retainedBytes": 0,
+          "rss": 245891072
+        },
+        {
+          "p50": 0.04216699999960838,
+          "p95": 0.04829099999915343,
+          "cpu": 59.9516,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21752.443923510335,
+          "retainedBytes": 0,
+          "rss": 245891072
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "lru",
+      "capacity": 32769,
+      "p95": 0.07979100000375183,
+      "cpu": 69.0448,
+      "runs": [
+        {
+          "p50": 0.043541999999433756,
+          "p95": 0.07979100000375183,
+          "cpu": 69.0448,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 18710.888384429538,
+          "retainedBytes": 0,
+          "rss": 250904576
+        },
+        {
+          "p50": 0.0430419999975129,
+          "p95": 0.05012499999429565,
+          "cpu": 65.8063,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20991.790387871108,
+          "retainedBytes": 0,
+          "rss": 250920960
+        },
+        {
+          "p50": 0.04325000000244472,
+          "p95": 0.08079100000031758,
+          "cpu": 69.4119,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 18543.741440904294,
+          "retainedBytes": 0,
+          "rss": 260440064
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "tiny-lfu",
+      "capacity": 32769,
+      "p95": 0.04916699999739649,
+      "cpu": 63.6285,
+      "runs": [
+        {
+          "p50": 0.04245799999625888,
+          "p95": 0.047374999994644895,
+          "cpu": 59.0378,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21837.855725048343,
+          "retainedBytes": 0,
+          "rss": 260440064
+        },
+        {
+          "p50": 0.042958999998518266,
+          "p95": 0.04916699999739649,
+          "cpu": 63.6285,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20868.917402642688,
+          "retainedBytes": 0,
+          "rss": 260456448
+        },
+        {
+          "p50": 0.043041000004450325,
+          "p95": 0.07133299999986775,
+          "cpu": 66.5177,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20118.74922733938,
+          "retainedBytes": 0,
+          "rss": 261783552
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "lru",
+      "capacity": 262143,
+      "p95": 0.06187499999941792,
+      "cpu": 66.1974,
+      "runs": [
+        {
+          "p50": 0.04312499999650754,
+          "p95": 0.04899999999906868,
+          "cpu": 64.8146,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21257.83873237211,
+          "retainedBytes": 229600,
+          "rss": 262193152
+        },
+        {
+          "p50": 0.04374999999708962,
+          "p95": 0.06187499999941792,
+          "cpu": 66.1974,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 19914.021213411004,
+          "retainedBytes": 229600,
+          "rss": 262897664
+        },
+        {
+          "p50": 0.044125000000349246,
+          "p95": 0.08162499999889405,
+          "cpu": 70.5435,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 18889.209067278967,
+          "retainedBytes": 229600,
+          "rss": 262914048
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "tiny-lfu",
+      "capacity": 262143,
+      "p95": 0.04725000000325963,
+      "cpu": 16.8536,
+      "runs": [
+        {
+          "p50": 0.0008339999985764734,
+          "p95": 0.04725000000325963,
+          "cpu": 16.3375,
+          "generated": 2022,
+          "hitBytes": 261678400,
+          "requestsPerSecond": 83455.7350781142,
+          "retainedBytes": 229600,
+          "rss": 263389184
+        },
+        {
+          "p50": 0.0007079999995767139,
+          "p95": 0.045458000000508036,
+          "cpu": 18.8945,
+          "generated": 2022,
+          "hitBytes": 261678400,
+          "requestsPerSecond": 94161.40441734895,
+          "retainedBytes": 229600,
+          "rss": 265895936
+        },
+        {
+          "p50": 0.0007919999989098869,
+          "p95": 0.0586669999975129,
+          "cpu": 16.8536,
+          "generated": 2022,
+          "hitBytes": 261678400,
+          "requestsPerSecond": 73613.91891979009,
+          "retainedBytes": 229600,
+          "rss": 265961472
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "lru",
+      "capacity": 262144,
+      "p95": 0.04783300000417512,
+      "cpu": 61.2205,
+      "runs": [
+        {
+          "p50": 0.04387499999575084,
+          "p95": 0.09729100000549806,
+          "cpu": 76.9644,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 15260.703380072273,
+          "retainedBytes": 229600,
+          "rss": 266174464
+        },
+        {
+          "p50": 0.04083299999911105,
+          "p95": 0.04666700000234414,
+          "cpu": 59.7095,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22641.44749037955,
+          "retainedBytes": 229600,
+          "rss": 266305536
+        },
+        {
+          "p50": 0.04137500000069849,
+          "p95": 0.04783300000417512,
+          "cpu": 61.2205,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22171.26526422343,
+          "retainedBytes": 229600,
+          "rss": 266338304
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "tiny-lfu",
+      "capacity": 262144,
+      "p95": 0.04345800000010058,
+      "cpu": 12.7671,
+      "runs": [
+        {
+          "p50": 0.0007079999995767139,
+          "p95": 0.04583299999649171,
+          "cpu": 14.443,
+          "generated": 2022,
+          "hitBytes": 261678400,
+          "requestsPerSecond": 94674.10805156431,
+          "retainedBytes": 229600,
+          "rss": 266354688
+        },
+        {
+          "p50": 0.0006670000002486631,
+          "p95": 0.04345800000010058,
+          "cpu": 12.7671,
+          "generated": 2022,
+          "hitBytes": 261678400,
+          "requestsPerSecond": 102090.8199934688,
+          "retainedBytes": 229600,
+          "rss": 266354688
+        },
+        {
+          "p50": 0.0006250000005820766,
+          "p95": 0.041833999996015336,
+          "cpu": 11.6382,
+          "generated": 2022,
+          "hitBytes": 261678400,
+          "requestsPerSecond": 105919.72079561742,
+          "retainedBytes": 229600,
+          "rss": 266354688
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "lru",
+      "capacity": 262145,
+      "p95": 0.048458999997819774,
+      "cpu": 56.1966,
+      "runs": [
+        {
+          "p50": 0.04237499999726424,
+          "p95": 0.0488340000010794,
+          "cpu": 64.3458,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21326.904915094892,
+          "retainedBytes": 229600,
+          "rss": 266420224
+        },
+        {
+          "p50": 0.04099999999743886,
+          "p95": 0.04566699999850243,
+          "cpu": 56.1966,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22798.786613922388,
+          "retainedBytes": 229600,
+          "rss": 266485760
+        },
+        {
+          "p50": 0.040791999999783,
+          "p95": 0.048458999997819774,
+          "cpu": 55.8585,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22029.19143229682,
+          "retainedBytes": 229600,
+          "rss": 265764864
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "tiny-lfu",
+      "capacity": 262145,
+      "p95": 0.04499999999825377,
+      "cpu": 13.9477,
+      "runs": [
+        {
+          "p50": 0.0006670000002486631,
+          "p95": 0.042625000001862645,
+          "cpu": 13.2125,
+          "generated": 2022,
+          "hitBytes": 261678400,
+          "requestsPerSecond": 103633.9235285312,
+          "retainedBytes": 229600,
+          "rss": 266027008
+        },
+        {
+          "p50": 0.0006670000002486631,
+          "p95": 0.045332999994570855,
+          "cpu": 15.242,
+          "generated": 2022,
+          "hitBytes": 261678400,
+          "requestsPerSecond": 97306.35667689644,
+          "retainedBytes": 229600,
+          "rss": 266059776
+        },
+        {
+          "p50": 0.0006670000002486631,
+          "p95": 0.04499999999825377,
+          "cpu": 13.9477,
+          "generated": 2022,
+          "hitBytes": 261678400,
+          "requestsPerSecond": 95314.34671546993,
+          "retainedBytes": 229600,
+          "rss": 266289152
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "lru",
+      "capacity": 1048576,
+      "p95": 0.04212499999994179,
+      "cpu": 7.1592,
+      "runs": [
+        {
+          "p50": 0.00045900000259280205,
+          "p95": 0.04212499999994179,
+          "cpu": 7.1592,
+          "generated": 1008,
+          "hitBytes": 294937600,
+          "requestsPerSecond": 189163.00647284824,
+          "retainedBytes": 1016800,
+          "rss": 266862592
+        },
+        {
+          "p50": 0.0004580000022542663,
+          "p95": 0.04124999999476131,
+          "cpu": 7.1985,
+          "generated": 1008,
+          "hitBytes": 294937600,
+          "requestsPerSecond": 190457.44583574854,
+          "retainedBytes": 1016800,
+          "rss": 266960896
+        },
+        {
+          "p50": 0.00045899999531684443,
+          "p95": 0.04245799999625888,
+          "cpu": 6.0151,
+          "generated": 1008,
+          "hitBytes": 294937600,
+          "requestsPerSecond": 191274.07662438528,
+          "retainedBytes": 1016800,
+          "rss": 266960896
+        }
+      ]
+    },
+    {
+      "trace": "hot",
+      "strategy": "tiny-lfu",
+      "capacity": 1048576,
+      "p95": 0.04279099999985192,
+      "cpu": 6.9893,
+      "runs": [
+        {
+          "p50": 0.0005830000009154901,
+          "p95": 0.04266700000152923,
+          "cpu": 7.1389,
+          "generated": 1008,
+          "hitBytes": 294937600,
+          "requestsPerSecond": 186097.0019084564,
+          "retainedBytes": 1016800,
+          "rss": 266977280
+        },
+        {
+          "p50": 0.0005830000009154901,
+          "p95": 0.042958999998518266,
+          "cpu": 6.5913,
+          "generated": 1008,
+          "hitBytes": 294937600,
+          "requestsPerSecond": 186861.89698684233,
+          "retainedBytes": 1016800,
+          "rss": 266993664
+        },
+        {
+          "p50": 0.0005830000009154901,
+          "p95": 0.04279099999985192,
+          "cpu": 6.9893,
+          "generated": 1008,
+          "hitBytes": 294937600,
+          "requestsPerSecond": 182516.4466026393,
+          "retainedBytes": 1016800,
+          "rss": 266993664
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "zero",
+      "capacity": 0,
+      "p95": 0.04679100000066683,
+      "cpu": 54.4519,
+      "runs": [
+        {
+          "p50": 0.04024999999819556,
+          "p95": 0.04441699999733828,
+          "cpu": 50.0482,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23571.986932869066,
+          "retainedBytes": 0,
+          "rss": 266993664
+        },
+        {
+          "p50": 0.04070800000044983,
+          "p95": 0.04679100000066683,
+          "cpu": 54.4519,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22907.96801964287,
+          "retainedBytes": 0,
+          "rss": 266993664
+        },
+        {
+          "p50": 0.04279099999985192,
+          "p95": 0.07545799999934388,
+          "cpu": 63.1758,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20157.410915058364,
+          "retainedBytes": 0,
+          "rss": 253755392
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "lru",
+      "capacity": 0,
+      "p95": 0.04866600000241306,
+      "cpu": 57.4336,
+      "runs": [
+        {
+          "p50": 0.042417000004206784,
+          "p95": 0.06970800000271993,
+          "cpu": 58.1012,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 19977.678260838202,
+          "retainedBytes": 0,
+          "rss": 253116416
+        },
+        {
+          "p50": 0.04100000000471482,
+          "p95": 0.04866600000241306,
+          "cpu": 57.4336,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21432.85227339276,
+          "retainedBytes": 0,
+          "rss": 253132800
+        },
+        {
+          "p50": 0.04070800000044983,
+          "p95": 0.044874999999592546,
+          "cpu": 54.7478,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23066.48994383047,
+          "retainedBytes": 0,
+          "rss": 253132800
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "tiny-lfu",
+      "capacity": 0,
+      "p95": 0.04508299999724841,
+      "cpu": 53.4606,
+      "runs": [
+        {
+          "p50": 0.04041699999652337,
+          "p95": 0.04508299999724841,
+          "cpu": 53.4667,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23199.84212229042,
+          "retainedBytes": 0,
+          "rss": 253132800
+        },
+        {
+          "p50": 0.04066700000112178,
+          "p95": 0.04458399999566609,
+          "cpu": 52.1472,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23220.429798545563,
+          "retainedBytes": 0,
+          "rss": 253132800
+        },
+        {
+          "p50": 0.04045899999618996,
+          "p95": 0.045583999999507796,
+          "cpu": 53.4606,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23106.018922452564,
+          "retainedBytes": 0,
+          "rss": 253132800
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "lru",
+      "capacity": 1,
+      "p95": 0.05212500000197906,
+      "cpu": 57.741,
+      "runs": [
+        {
+          "p50": 0.0415419999990263,
+          "p95": 0.0565000000060536,
+          "cpu": 57.741,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 19436.906331645558,
+          "retainedBytes": 0,
+          "rss": 253181952
+        },
+        {
+          "p50": 0.04195800000161398,
+          "p95": 0.05212500000197906,
+          "cpu": 59.9568,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21313.29315422345,
+          "retainedBytes": 0,
+          "rss": 253181952
+        },
+        {
+          "p50": 0.04087499999877764,
+          "p95": 0.045540999999502674,
+          "cpu": 55.0387,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22944.9433216877,
+          "retainedBytes": 0,
+          "rss": 253181952
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "tiny-lfu",
+      "capacity": 1,
+      "p95": 0.04795800000283634,
+      "cpu": 55.4135,
+      "runs": [
+        {
+          "p50": 0.040750000000116415,
+          "p95": 0.04608400000142865,
+          "cpu": 55.4135,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22806.88300325604,
+          "retainedBytes": 0,
+          "rss": 253198336
+        },
+        {
+          "p50": 0.04137500000069849,
+          "p95": 0.04820800000015879,
+          "cpu": 54.324,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22293.851574661247,
+          "retainedBytes": 0,
+          "rss": 253214720
+        },
+        {
+          "p50": 0.040958000005048234,
+          "p95": 0.04795800000283634,
+          "cpu": 55.6607,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22529.844315982307,
+          "retainedBytes": 0,
+          "rss": 253214720
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "lru",
+      "capacity": 32767,
+      "p95": 0.046875,
+      "cpu": 54.7241,
+      "runs": [
+        {
+          "p50": 0.0408750000060536,
+          "p95": 0.04633299999841256,
+          "cpu": 53.3662,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22853.577699021607,
+          "retainedBytes": 0,
+          "rss": 253214720
+        },
+        {
+          "p50": 0.04087499999877764,
+          "p95": 0.046875,
+          "cpu": 54.7241,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22681.456597336335,
+          "retainedBytes": 0,
+          "rss": 253214720
+        },
+        {
+          "p50": 0.0415419999990263,
+          "p95": 0.06337499999790452,
+          "cpu": 58.2369,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20921.760461534253,
+          "retainedBytes": 0,
+          "rss": 253296640
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "tiny-lfu",
+      "capacity": 32767,
+      "p95": 0.04845799999748124,
+      "cpu": 53.771,
+      "runs": [
+        {
+          "p50": 0.04112499999610009,
+          "p95": 0.04845799999748124,
+          "cpu": 56.2572,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22373.291659348855,
+          "retainedBytes": 0,
+          "rss": 253313024
+        },
+        {
+          "p50": 0.04062500000145519,
+          "p95": 0.04954200000065612,
+          "cpu": 53.6128,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20499.84602360658,
+          "retainedBytes": 0,
+          "rss": 253345792
+        },
+        {
+          "p50": 0.04062500000145519,
+          "p95": 0.044874999999592546,
+          "cpu": 53.771,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23116.111518492868,
+          "retainedBytes": 0,
+          "rss": 253345792
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "lru",
+      "capacity": 32768,
+      "p95": 0.04895899999974063,
+      "cpu": 57.2447,
+      "runs": [
+        {
+          "p50": 0.041499999999359716,
+          "p95": 0.04895899999974063,
+          "cpu": 57.2447,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22002.92435586911,
+          "retainedBytes": 0,
+          "rss": 253329408
+        },
+        {
+          "p50": 0.041540999998687766,
+          "p95": 0.045792000004439615,
+          "cpu": 54.4245,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22642.750530113102,
+          "retainedBytes": 0,
+          "rss": 253165568
+        },
+        {
+          "p50": 0.043375000001105946,
+          "p95": 0.054666999996697996,
+          "cpu": 62.0178,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20458.216295543123,
+          "retainedBytes": 0,
+          "rss": 240861184
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "tiny-lfu",
+      "capacity": 32768,
+      "p95": 0.04983399999764515,
+      "cpu": 61.8838,
+      "runs": [
+        {
+          "p50": 0.04254199999559205,
+          "p95": 0.0483749999984866,
+          "cpu": 61.6973,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21362.384307494878,
+          "retainedBytes": 0,
+          "rss": 240041984
+        },
+        {
+          "p50": 0.042832999999518506,
+          "p95": 0.04983399999764515,
+          "cpu": 63.6726,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21091.361979972713,
+          "retainedBytes": 0,
+          "rss": 240058368
+        },
+        {
+          "p50": 0.0423750000045402,
+          "p95": 0.050374999998894054,
+          "cpu": 61.8838,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21301.218684471423,
+          "retainedBytes": 0,
+          "rss": 240041984
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "lru",
+      "capacity": 32769,
+      "p95": 0.05345800000213785,
+      "cpu": 62.1347,
+      "runs": [
+        {
+          "p50": 0.0429160000057891,
+          "p95": 0.05345800000213785,
+          "cpu": 62.1347,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20669.331531888176,
+          "retainedBytes": 0,
+          "rss": 239419392
+        },
+        {
+          "p50": 0.04379099999641767,
+          "p95": 0.05741700000362471,
+          "cpu": 63.5905,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20399.157120699037,
+          "retainedBytes": 0,
+          "rss": 238682112
+        },
+        {
+          "p50": 0.042208999999274965,
+          "p95": 0.0483749999984866,
+          "cpu": 59.0957,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21665.78271717543,
+          "retainedBytes": 0,
+          "rss": 238141440
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "tiny-lfu",
+      "capacity": 32769,
+      "p95": 0.04770900000585243,
+      "cpu": 59.2177,
+      "runs": [
+        {
+          "p50": 0.042042000000947155,
+          "p95": 0.047582999999576714,
+          "cpu": 58.1938,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22055.61654546211,
+          "retainedBytes": 0,
+          "rss": 238141440
+        },
+        {
+          "p50": 0.04287499999918509,
+          "p95": 0.05108299999847077,
+          "cpu": 63.8537,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20671.161610758983,
+          "retainedBytes": 0,
+          "rss": 236421120
+        },
+        {
+          "p50": 0.04216699999960838,
+          "p95": 0.04770900000585243,
+          "cpu": 59.2177,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21670.362366381818,
+          "retainedBytes": 0,
+          "rss": 236371968
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "lru",
+      "capacity": 262143,
+      "p95": 0.04979200000525452,
+      "cpu": 68.9145,
+      "runs": [
+        {
+          "p50": 0.042208999999274965,
+          "p95": 0.04770799999823794,
+          "cpu": 63.5732,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21659.304925224544,
+          "retainedBytes": 229600,
+          "rss": 236388352
+        },
+        {
+          "p50": 0.043375000001105946,
+          "p95": 0.07749999999941792,
+          "cpu": 70.7467,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 18244.524047046325,
+          "retainedBytes": 229600,
+          "rss": 233177088
+        },
+        {
+          "p50": 0.043000000005122274,
+          "p95": 0.04979200000525452,
+          "cpu": 68.9145,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20976.582282637803,
+          "retainedBytes": 229600,
+          "rss": 232849408
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "tiny-lfu",
+      "capacity": 262143,
+      "p95": 0.04841600000509061,
+      "cpu": 58.7752,
+      "runs": [
+        {
+          "p50": 0.042666000008466654,
+          "p95": 0.048042000009445474,
+          "cpu": 58.7752,
+          "generated": 9977,
+          "hitBytes": 754400,
+          "requestsPerSecond": 21707.075125052474,
+          "retainedBytes": 229600,
+          "rss": 230391808
+        },
+        {
+          "p50": 0.04287499999918509,
+          "p95": 0.04916699999012053,
+          "cpu": 61.8139,
+          "generated": 9977,
+          "hitBytes": 754400,
+          "requestsPerSecond": 21275.69039615317,
+          "retainedBytes": 229600,
+          "rss": 230588416
+        },
+        {
+          "p50": 0.04266700000152923,
+          "p95": 0.04841600000509061,
+          "cpu": 58.5155,
+          "generated": 9977,
+          "hitBytes": 754400,
+          "requestsPerSecond": 21785.38094059857,
+          "retainedBytes": 229600,
+          "rss": 230719488
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "lru",
+      "capacity": 262144,
+      "p95": 0.05662500001199078,
+      "cpu": 65.2352,
+      "runs": [
+        {
+          "p50": 0.04320900001039263,
+          "p95": 0.05920799999148585,
+          "cpu": 66.9866,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20219.473978737744,
+          "retainedBytes": 229600,
+          "rss": 230096896
+        },
+        {
+          "p50": 0.04354100000637118,
+          "p95": 0.05662500001199078,
+          "cpu": 65.2352,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20338.426329516617,
+          "retainedBytes": 229600,
+          "rss": 225329152
+        },
+        {
+          "p50": 0.04312499999650754,
+          "p95": 0.05229200000758283,
+          "cpu": 61.7451,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20653.614614910828,
+          "retainedBytes": 229600,
+          "rss": 225361920
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "tiny-lfu",
+      "capacity": 262144,
+      "p95": 0.06974999999511056,
+      "cpu": 67.6952,
+      "runs": [
+        {
+          "p50": 0.04408300000068266,
+          "p95": 0.06974999999511056,
+          "cpu": 67.9076,
+          "generated": 9977,
+          "hitBytes": 754400,
+          "requestsPerSecond": 19343.120509998447,
+          "retainedBytes": 229600,
+          "rss": 228147200
+        },
+        {
+          "p50": 0.043999999994412065,
+          "p95": 0.06324999999196734,
+          "cpu": 64.7615,
+          "generated": 9977,
+          "hitBytes": 754400,
+          "requestsPerSecond": 18813.722654801713,
+          "retainedBytes": 229600,
+          "rss": 228114432
+        },
+        {
+          "p50": 0.04383300000336021,
+          "p95": 0.08058300000266172,
+          "cpu": 67.6952,
+          "generated": 9977,
+          "hitBytes": 754400,
+          "requestsPerSecond": 15912.015060098714,
+          "retainedBytes": 229600,
+          "rss": 225083392
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "lru",
+      "capacity": 262145,
+      "p95": 0.04929199999605771,
+      "cpu": 66.0275,
+      "runs": [
+        {
+          "p50": 0.0429160000057891,
+          "p95": 0.04966600000625476,
+          "cpu": 66.5373,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21104.55246575625,
+          "retainedBytes": 229600,
+          "rss": 224985088
+        },
+        {
+          "p50": 0.04275000000779983,
+          "p95": 0.04929199999605771,
+          "cpu": 65.7627,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20993.747784792577,
+          "retainedBytes": 229600,
+          "rss": 224542720
+        },
+        {
+          "p50": 0.042332999990321696,
+          "p95": 0.04816700000083074,
+          "cpu": 66.0275,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21480.765853745055,
+          "retainedBytes": 229600,
+          "rss": 223870976
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "tiny-lfu",
+      "capacity": 262145,
+      "p95": 0.048415999990538694,
+      "cpu": 61.2424,
+      "runs": [
+        {
+          "p50": 0.04270900000119582,
+          "p95": 0.048415999990538694,
+          "cpu": 62.833,
+          "generated": 9977,
+          "hitBytes": 754400,
+          "requestsPerSecond": 21475.030371222845,
+          "retainedBytes": 229600,
+          "rss": 224215040
+        },
+        {
+          "p50": 0.04270900000119582,
+          "p95": 0.048666999995475635,
+          "cpu": 59.4717,
+          "generated": 9977,
+          "hitBytes": 754400,
+          "requestsPerSecond": 21337.179715596605,
+          "retainedBytes": 229600,
+          "rss": 224772096
+        },
+        {
+          "p50": 0.042625000001862645,
+          "p95": 0.04799999999522697,
+          "cpu": 61.2424,
+          "generated": 9977,
+          "hitBytes": 754400,
+          "requestsPerSecond": 21598.326530558228,
+          "retainedBytes": 229600,
+          "rss": 225132544
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "lru",
+      "capacity": 1048576,
+      "p95": 0.04929200001060963,
+      "cpu": 64.1488,
+      "runs": [
+        {
+          "p50": 0.042458999989321455,
+          "p95": 0.04929200001060963,
+          "cpu": 61.8872,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21395.43907819569,
+          "retainedBytes": 1016800,
+          "rss": 228573184
+        },
+        {
+          "p50": 0.042707999993581325,
+          "p95": 0.048332999998820014,
+          "cpu": 64.1488,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21418.787647655838,
+          "retainedBytes": 1016800,
+          "rss": 228802560
+        },
+        {
+          "p50": 0.04274999999324791,
+          "p95": 0.05262500001117587,
+          "cpu": 68.7452,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 19287.143957658944,
+          "retainedBytes": 1016800,
+          "rss": 230031360
+        }
+      ]
+    },
+    {
+      "trace": "edit",
+      "strategy": "tiny-lfu",
+      "capacity": 1048576,
+      "p95": 0.04870800000207964,
+      "cpu": 61.3987,
+      "runs": [
+        {
+          "p50": 0.04312499999650754,
+          "p95": 0.049375000002328306,
+          "cpu": 62.9246,
+          "generated": 9905,
+          "hitBytes": 3116000,
+          "requestsPerSecond": 21196.730298367736,
+          "retainedBytes": 1016800,
+          "rss": 230653952
+        },
+        {
+          "p50": 0.043041999990236945,
+          "p95": 0.04870800000207964,
+          "cpu": 61.3987,
+          "generated": 9905,
+          "hitBytes": 3116000,
+          "requestsPerSecond": 21370.255435991567,
+          "retainedBytes": 1016800,
+          "rss": 231014400
+        },
+        {
+          "p50": 0.04270800000813324,
+          "p95": 0.04858299999614246,
+          "cpu": 60.0306,
+          "generated": 9905,
+          "hitBytes": 3116000,
+          "requestsPerSecond": 21714.939095708356,
+          "retainedBytes": 1016800,
+          "rss": 231129088
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "zero",
+      "capacity": 0,
+      "p95": 0.047249999988707714,
+      "cpu": 59.3004,
+      "runs": [
+        {
+          "p50": 0.041916999995009974,
+          "p95": 0.047249999988707714,
+          "cpu": 59.3004,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21982.712412459674,
+          "retainedBytes": 0,
+          "rss": 231161856
+        },
+        {
+          "p50": 0.04208400000061374,
+          "p95": 0.04762500000651926,
+          "cpu": 60.1992,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21615.707517308663,
+          "retainedBytes": 0,
+          "rss": 231178240
+        },
+        {
+          "p50": 0.042124999992665835,
+          "p95": 0.04704200000560377,
+          "cpu": 54.7264,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22155.354114053804,
+          "retainedBytes": 0,
+          "rss": 231178240
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "lru",
+      "capacity": 0,
+      "p95": 0.047582999992300756,
+      "cpu": 58.5185,
+      "runs": [
+        {
+          "p50": 0.04200000000128057,
+          "p95": 0.047333000009530224,
+          "cpu": 58.5185,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22089.112835579555,
+          "retainedBytes": 0,
+          "rss": 231211008
+        },
+        {
+          "p50": 0.04200000000128057,
+          "p95": 0.047582999992300756,
+          "cpu": 55.8117,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21993.64916665144,
+          "retainedBytes": 0,
+          "rss": 231358464
+        },
+        {
+          "p50": 0.04204099999333266,
+          "p95": 0.04824999999254942,
+          "cpu": 63.4016,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21552.889294558026,
+          "retainedBytes": 0,
+          "rss": 231358464
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "tiny-lfu",
+      "capacity": 0,
+      "p95": 0.05420800000138115,
+      "cpu": 61.9426,
+      "runs": [
+        {
+          "p50": 0.04175000000395812,
+          "p95": 0.046916999999666587,
+          "cpu": 60.0195,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22156.630422835486,
+          "retainedBytes": 0,
+          "rss": 231407616
+        },
+        {
+          "p50": 0.04200000000128057,
+          "p95": 0.05420800000138115,
+          "cpu": 63.7831,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 19777.729607579175,
+          "retainedBytes": 0,
+          "rss": 232046592
+        },
+        {
+          "p50": 0.04308400000445545,
+          "p95": 0.07608299999265,
+          "cpu": 61.9426,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 16597.941975032227,
+          "retainedBytes": 0,
+          "rss": 222838784
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "lru",
+      "capacity": 1,
+      "p95": 0.04649999999674037,
+      "cpu": 56.0645,
+      "runs": [
+        {
+          "p50": 0.04291699999885168,
+          "p95": 0.04812500000116415,
+          "cpu": 59.6881,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21325.028878033794,
+          "retainedBytes": 0,
+          "rss": 223232000
+        },
+        {
+          "p50": 0.041125000003376044,
+          "p95": 0.04649999999674037,
+          "cpu": 56.0645,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22312.480370315945,
+          "retainedBytes": 0,
+          "rss": 223313920
+        },
+        {
+          "p50": 0.040542000002460554,
+          "p95": 0.04404100000101607,
+          "cpu": 49.8558,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23536.74509452988,
+          "retainedBytes": 0,
+          "rss": 223346688
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "tiny-lfu",
+      "capacity": 1,
+      "p95": 0.0453750000015134,
+      "cpu": 51.1544,
+      "runs": [
+        {
+          "p50": 0.039958000008482486,
+          "p95": 0.0433750000083819,
+          "cpu": 49.7197,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23859.370465452233,
+          "retainedBytes": 0,
+          "rss": 223379456
+        },
+        {
+          "p50": 0.0403329999971902,
+          "p95": 0.0453750000015134,
+          "cpu": 51.1544,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23351.37129468421,
+          "retainedBytes": 0,
+          "rss": 223395840
+        },
+        {
+          "p50": 0.040750000000116415,
+          "p95": 0.046999999991385266,
+          "cpu": 56.6699,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22568.837742365948,
+          "retainedBytes": 0,
+          "rss": 223395840
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "lru",
+      "capacity": 32767,
+      "p95": 0.046292000013636425,
+      "cpu": 56.0019,
+      "runs": [
+        {
+          "p50": 0.040750000000116415,
+          "p95": 0.046292000013636425,
+          "cpu": 56.0019,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22739.240958270122,
+          "retainedBytes": 0,
+          "rss": 223412224
+        },
+        {
+          "p50": 0.042124999992665835,
+          "p95": 0.06600000000617001,
+          "cpu": 64.9235,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 19900.24172007721,
+          "retainedBytes": 0,
+          "rss": 223412224
+        },
+        {
+          "p50": 0.04091700000572018,
+          "p95": 0.04604200000176206,
+          "cpu": 54.4924,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22843.597726290784,
+          "retainedBytes": 0,
+          "rss": 223444992
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "tiny-lfu",
+      "capacity": 32767,
+      "p95": 0.10616599999775644,
+      "cpu": 66.2012,
+      "runs": [
+        {
+          "p50": 0.04179100001056213,
+          "p95": 0.06229200000234414,
+          "cpu": 58.6143,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20139.061914198704,
+          "retainedBytes": 0,
+          "rss": 222724096
+        },
+        {
+          "p50": 0.04329199998755939,
+          "p95": 0.12912499999220017,
+          "cpu": 66.2012,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 10447.25116858363,
+          "retainedBytes": 0,
+          "rss": 213876736
+        },
+        {
+          "p50": 0.044207999992067926,
+          "p95": 0.10616599999775644,
+          "cpu": 70.7052,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 15444.217184848065,
+          "retainedBytes": 0,
+          "rss": 218808320
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "lru",
+      "capacity": 32768,
+      "p95": 0.04712499999732245,
+      "cpu": 56.9353,
+      "runs": [
+        {
+          "p50": 0.04295800000545569,
+          "p95": 0.05295900000783149,
+          "cpu": 58.4088,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20963.844182035766,
+          "retainedBytes": 0,
+          "rss": 219283456
+        },
+        {
+          "p50": 0.042042000000947155,
+          "p95": 0.04712499999732245,
+          "cpu": 56.9353,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21888.537547460193,
+          "retainedBytes": 0,
+          "rss": 220102656
+        },
+        {
+          "p50": 0.04083399999944959,
+          "p95": 0.04654200001095887,
+          "cpu": 54.0919,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22848.45391652485,
+          "retainedBytes": 0,
+          "rss": 220299264
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "tiny-lfu",
+      "capacity": 32768,
+      "p95": 0.047875000003841706,
+      "cpu": 55.0584,
+      "runs": [
+        {
+          "p50": 0.0408750000060536,
+          "p95": 0.04629199999908451,
+          "cpu": 51.0757,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23073.954488433264,
+          "retainedBytes": 0,
+          "rss": 220332032
+        },
+        {
+          "p50": 0.042249999998603016,
+          "p95": 0.0730829999956768,
+          "cpu": 66.3923,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 20050.872391702458,
+          "retainedBytes": 0,
+          "rss": 221315072
+        },
+        {
+          "p50": 0.04129200000897981,
+          "p95": 0.047875000003841706,
+          "cpu": 55.0584,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22043.30407084735,
+          "retainedBytes": 0,
+          "rss": 220790784
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "lru",
+      "capacity": 32769,
+      "p95": 0.04554200000711717,
+      "cpu": 53.2533,
+      "runs": [
+        {
+          "p50": 0.040957999997772276,
+          "p95": 0.04679100000066683,
+          "cpu": 56.0119,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22687.569480681326,
+          "retainedBytes": 0,
+          "rss": 220872704
+        },
+        {
+          "p50": 0.04070800000044983,
+          "p95": 0.04545799999323208,
+          "cpu": 53.2012,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23095.777190270444,
+          "retainedBytes": 0,
+          "rss": 220938240
+        },
+        {
+          "p50": 0.04062500000873115,
+          "p95": 0.04554200000711717,
+          "cpu": 53.2533,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23119.854904599637,
+          "retainedBytes": 0,
+          "rss": 220938240
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "tiny-lfu",
+      "capacity": 32769,
+      "p95": 0.04562499999883585,
+      "cpu": 52.3879,
+      "runs": [
+        {
+          "p50": 0.04050000000279397,
+          "p95": 0.0453750000015134,
+          "cpu": 50.6117,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 22960.50448820419,
+          "retainedBytes": 0,
+          "rss": 220971008
+        },
+        {
+          "p50": 0.041584000005968846,
+          "p95": 0.04879099999379832,
+          "cpu": 57.6201,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 21851.26466466822,
+          "retainedBytes": 0,
+          "rss": 221036544
+        },
+        {
+          "p50": 0.04070800000044983,
+          "p95": 0.04562499999883585,
+          "cpu": 52.3879,
+          "generated": 10000,
+          "hitBytes": 0,
+          "requestsPerSecond": 23071.17746638078,
+          "retainedBytes": 0,
+          "rss": 221036544
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "lru",
+      "capacity": 262143,
+      "p95": 0.04483300000720192,
+      "cpu": 29.9179,
+      "runs": [
+        {
+          "p50": 0.03916699999535922,
+          "p95": 0.04524999999557622,
+          "cpu": 29.9179,
+          "generated": 5000,
+          "hitBytes": 164000000,
+          "requestsPerSecond": 43165.793636331735,
+          "retainedBytes": 229600,
+          "rss": 223821824
+        },
+        {
+          "p50": 0.03908400000364054,
+          "p95": 0.04483300000720192,
+          "cpu": 30.5257,
+          "generated": 5000,
+          "hitBytes": 164000000,
+          "requestsPerSecond": 44307.09245782336,
+          "retainedBytes": 229600,
+          "rss": 223854592
+        },
+        {
+          "p50": 0.038792000006651506,
+          "p95": 0.04449999998905696,
+          "cpu": 28.5014,
+          "generated": 5000,
+          "hitBytes": 164000000,
+          "requestsPerSecond": 44757.29795716344,
+          "retainedBytes": 229600,
+          "rss": 223952896
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "tiny-lfu",
+      "capacity": 262143,
+      "p95": 0.041708000004291534,
+      "cpu": 8.8176,
+      "runs": [
+        {
+          "p50": 0.0006250000005820766,
+          "p95": 0.04162499999802094,
+          "cpu": 8.8176,
+          "generated": 1271,
+          "hitBytes": 286311200,
+          "requestsPerSecond": 157888.7121412513,
+          "retainedBytes": 229600,
+          "rss": 224526336
+        },
+        {
+          "p50": 0.0006250000005820766,
+          "p95": 0.0418329999956768,
+          "cpu": 9.9232,
+          "generated": 1271,
+          "hitBytes": 286311200,
+          "requestsPerSecond": 156400.7996960774,
+          "retainedBytes": 229600,
+          "rss": 224690176
+        },
+        {
+          "p50": 0.0006250000005820766,
+          "p95": 0.041708000004291534,
+          "cpu": 8.669,
+          "generated": 1271,
+          "hitBytes": 286311200,
+          "requestsPerSecond": 158021.88208013296,
+          "retainedBytes": 229600,
+          "rss": 225181696
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "lru",
+      "capacity": 262144,
+      "p95": 0.04454099999566097,
+      "cpu": 28.1474,
+      "runs": [
+        {
+          "p50": 0.0388750000129221,
+          "p95": 0.04454099999566097,
+          "cpu": 28.1474,
+          "generated": 5000,
+          "hitBytes": 164000000,
+          "requestsPerSecond": 44659.66273344245,
+          "retainedBytes": 229600,
+          "rss": 225198080
+        },
+        {
+          "p50": 0.03920800000196323,
+          "p95": 0.04416599999240134,
+          "cpu": 26.5935,
+          "generated": 5000,
+          "hitBytes": 164000000,
+          "requestsPerSecond": 44863.670521205335,
+          "retainedBytes": 229600,
+          "rss": 228409344
+        },
+        {
+          "p50": 0.0388329999987036,
+          "p95": 0.044708000001264736,
+          "cpu": 30.2948,
+          "generated": 5000,
+          "hitBytes": 164000000,
+          "requestsPerSecond": 44367.212761097304,
+          "retainedBytes": 229600,
+          "rss": 228491264
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "tiny-lfu",
+      "capacity": 262144,
+      "p95": 0.04158299999835435,
+      "cpu": 8.5629,
+      "runs": [
+        {
+          "p50": 0.0006249999860301614,
+          "p95": 0.0414160000073025,
+          "cpu": 7.7772,
+          "generated": 1271,
+          "hitBytes": 286311200,
+          "requestsPerSecond": 161877.23460393454,
+          "retainedBytes": 229600,
+          "rss": 228720640
+        },
+        {
+          "p50": 0.0006250000005820766,
+          "p95": 0.04175000000395812,
+          "cpu": 9.5951,
+          "generated": 1271,
+          "hitBytes": 286311200,
+          "requestsPerSecond": 155738.77772845418,
+          "retainedBytes": 229600,
+          "rss": 228720640
+        },
+        {
+          "p50": 0.0006250000005820766,
+          "p95": 0.04158299999835435,
+          "cpu": 8.5629,
+          "generated": 1271,
+          "hitBytes": 286311200,
+          "requestsPerSecond": 158306.0192127865,
+          "retainedBytes": 229600,
+          "rss": 229326848
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "lru",
+      "capacity": 262145,
+      "p95": 0.043208000002778135,
+      "cpu": 26.5269,
+      "runs": [
+        {
+          "p50": 0.03891599999042228,
+          "p95": 0.043208000002778135,
+          "cpu": 26.969,
+          "generated": 5000,
+          "hitBytes": 164000000,
+          "requestsPerSecond": 44976.34813039167,
+          "retainedBytes": 229600,
+          "rss": 229621760
+        },
+        {
+          "p50": 0.038333000004058704,
+          "p95": 0.043208000002778135,
+          "cpu": 25.873,
+          "generated": 5000,
+          "hitBytes": 164000000,
+          "requestsPerSecond": 45426.59261375002,
+          "retainedBytes": 229600,
+          "rss": 229867520
+        },
+        {
+          "p50": 0.038874999998370185,
+          "p95": 0.0422919999982696,
+          "cpu": 26.5269,
+          "generated": 5000,
+          "hitBytes": 164000000,
+          "requestsPerSecond": 45252.73368935804,
+          "retainedBytes": 229600,
+          "rss": 230146048
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "tiny-lfu",
+      "capacity": 262145,
+      "p95": 0.041708000004291534,
+      "cpu": 8.9602,
+      "runs": [
+        {
+          "p50": 0.0006250000005820766,
+          "p95": 0.041625000012572855,
+          "cpu": 8.0762,
+          "generated": 1271,
+          "hitBytes": 286311200,
+          "requestsPerSecond": 159169.1371043199,
+          "retainedBytes": 229600,
+          "rss": 230211584
+        },
+        {
+          "p50": 0.0006250000005820766,
+          "p95": 0.041916000001947396,
+          "cpu": 9.3945,
+          "generated": 1271,
+          "hitBytes": 286311200,
+          "requestsPerSecond": 156023.58296456002,
+          "retainedBytes": 229600,
+          "rss": 230211584
+        },
+        {
+          "p50": 0.0006250000005820766,
+          "p95": 0.041708000004291534,
+          "cpu": 8.9602,
+          "generated": 1271,
+          "hitBytes": 286311200,
+          "requestsPerSecond": 157047.30216057738,
+          "retainedBytes": 229600,
+          "rss": 230227968
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "lru",
+      "capacity": 1048576,
+      "p95": 0.0005420000088633969,
+      "cpu": 0.5231,
+      "runs": [
+        {
+          "p50": 0.00041700000292621553,
+          "p95": 0.0005000000091968104,
+          "cpu": 0.5145,
+          "generated": 8,
+          "hitBytes": 327737600,
+          "requestsPerSecond": 1945572.6063401706,
+          "retainedBytes": 262400,
+          "rss": 233947136
+        },
+        {
+          "p50": 0.00041700000292621553,
+          "p95": 0.0005420000088633969,
+          "cpu": 0.5378,
+          "generated": 8,
+          "hitBytes": 327737600,
+          "requestsPerSecond": 1860623.6587211816,
+          "retainedBytes": 262400,
+          "rss": 243253248
+        },
+        {
+          "p50": 0.00041700000292621553,
+          "p95": 0.0005420000088633969,
+          "cpu": 0.5231,
+          "generated": 8,
+          "hitBytes": 327737600,
+          "requestsPerSecond": 1969327.720748291,
+          "retainedBytes": 262400,
+          "rss": 243974144
+        }
+      ]
+    },
+    {
+      "trace": "resolve-get",
+      "strategy": "tiny-lfu",
+      "capacity": 1048576,
+      "p95": 0.0006670000002486631,
+      "cpu": 0.6377,
+      "runs": [
+        {
+          "p50": 0.0005000000091968104,
+          "p95": 0.0006250000005820766,
+          "cpu": 0.6175,
+          "generated": 8,
+          "hitBytes": 327737600,
+          "requestsPerSecond": 1620012.4676165883,
+          "retainedBytes": 262400,
+          "rss": 248135680
+        },
+        {
+          "p50": 0.0005000000091968104,
+          "p95": 0.0006670000002486631,
+          "cpu": 0.6377,
+          "generated": 8,
+          "hitBytes": 327737600,
+          "requestsPerSecond": 1568473.6790509303,
+          "retainedBytes": 262400,
+          "rss": 257605632
+        },
+        {
+          "p50": 0.0005000000091968104,
+          "p95": 0.0007089999999152496,
+          "cpu": 0.6392,
+          "generated": 8,
+          "hitBytes": 327737600,
+          "requestsPerSecond": 1565445.238455741,
+          "retainedBytes": 262400,
+          "rss": 267845632
+        }
+      ]
+    }
+  ]
+}

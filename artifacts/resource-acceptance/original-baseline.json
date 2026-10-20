@@ -1,0 +1,201 @@
+{
+  "schemaVersion": 1,
+  "baselineRevision": "da048f422e155861f153088e2a73ad4ac0d3fce2",
+  "node": "v26.8.1",
+  "independentProcesses": true,
+  "scope": "in-process HTTP handlers; original single chunk endpoint versus resource resolve+GET; frozen identical override/MCA fixture; original has its original source cache; zero/current use the new protocol",
+  "reports": [
+    {
+      "mode": "original",
+      "p95": 0.07437500000003183,
+      "cpuPerRequest": 92.326,
+      "runs": [
+        {
+          "mode": "original",
+          "requests": 500,
+          "p50": 0.04770899999999756,
+          "p95": 0.07437500000003183,
+          "cpuPerRequest": 93.418,
+          "startupRootMs": 0.0004590000000348482,
+          "digest": "b801b9dcfe527b8fca6eabc1542e5f398215f82938726f13d8c6d1395c0eb84f",
+          "apiBodyBytes": 141500,
+          "apiMetadataBytes": 0,
+          "source": {
+            "get": 0,
+            "head": 0,
+            "list": 0,
+            "readBytes": 0
+          },
+          "generated": null,
+          "rss": 165281792
+        },
+        {
+          "mode": "original",
+          "requests": 500,
+          "p50": 0.04995800000000372,
+          "p95": 0.07712499999999523,
+          "cpuPerRequest": 92.326,
+          "startupRootMs": 0.00045800000000895125,
+          "digest": "b801b9dcfe527b8fca6eabc1542e5f398215f82938726f13d8c6d1395c0eb84f",
+          "apiBodyBytes": 141500,
+          "apiMetadataBytes": 0,
+          "source": {
+            "get": 0,
+            "head": 0,
+            "list": 0,
+            "readBytes": 0
+          },
+          "generated": null,
+          "rss": 144670720
+        },
+        {
+          "mode": "original",
+          "requests": 500,
+          "p50": 0.04974999999998886,
+          "p95": 0.07287500000001046,
+          "cpuPerRequest": 91.792,
+          "startupRootMs": 0.0004590000000064265,
+          "digest": "b801b9dcfe527b8fca6eabc1542e5f398215f82938726f13d8c6d1395c0eb84f",
+          "apiBodyBytes": 141500,
+          "apiMetadataBytes": 0,
+          "source": {
+            "get": 0,
+            "head": 0,
+            "list": 0,
+            "readBytes": 0
+          },
+          "generated": null,
+          "rss": 145162240
+        }
+      ]
+    },
+    {
+      "mode": "zero",
+      "p95": 0.5381660000000466,
+      "cpuPerRequest": 616.992,
+      "runs": [
+        {
+          "mode": "zero",
+          "requests": 500,
+          "p50": 0.3845420000000104,
+          "p95": 0.5228749999999991,
+          "cpuPerRequest": 616.992,
+          "startupRootMs": 49.39429200000001,
+          "digest": "b801b9dcfe527b8fca6eabc1542e5f398215f82938726f13d8c6d1395c0eb84f",
+          "apiBodyBytes": 67500,
+          "apiMetadataBytes": 370000,
+          "source": {
+            "get": 500,
+            "head": 1500,
+            "list": 2000,
+            "readBytes": 52000
+          },
+          "generated": 500,
+          "rss": 203866112
+        },
+        {
+          "mode": "zero",
+          "requests": 500,
+          "p50": 0.384584000000018,
+          "p95": 0.5381660000000466,
+          "cpuPerRequest": 618.858,
+          "startupRootMs": 46.020332999999994,
+          "digest": "b801b9dcfe527b8fca6eabc1542e5f398215f82938726f13d8c6d1395c0eb84f",
+          "apiBodyBytes": 67500,
+          "apiMetadataBytes": 370000,
+          "source": {
+            "get": 500,
+            "head": 1500,
+            "list": 2000,
+            "readBytes": 52000
+          },
+          "generated": 500,
+          "rss": 189267968
+        },
+        {
+          "mode": "zero",
+          "requests": 500,
+          "p50": 0.3831250000000068,
+          "p95": 0.5488750000000095,
+          "cpuPerRequest": 614.988,
+          "startupRootMs": 48.26183400000002,
+          "digest": "b801b9dcfe527b8fca6eabc1542e5f398215f82938726f13d8c6d1395c0eb84f",
+          "apiBodyBytes": 67500,
+          "apiMetadataBytes": 370000,
+          "source": {
+            "get": 500,
+            "head": 1500,
+            "list": 2000,
+            "readBytes": 52000
+          },
+          "generated": 500,
+          "rss": 189104128
+        }
+      ]
+    },
+    {
+      "mode": "current",
+      "p95": 0.13462499999999977,
+      "cpuPerRequest": 167.008,
+      "runs": [
+        {
+          "mode": "current",
+          "requests": 500,
+          "p50": 0.07804199999998218,
+          "p95": 0.13404199999999378,
+          "cpuPerRequest": 165.522,
+          "startupRootMs": 46.062625,
+          "digest": "b801b9dcfe527b8fca6eabc1542e5f398215f82938726f13d8c6d1395c0eb84f",
+          "apiBodyBytes": 67500,
+          "apiMetadataBytes": 370000,
+          "source": {
+            "get": 0,
+            "head": 0,
+            "list": 0,
+            "readBytes": 0
+          },
+          "generated": 0,
+          "rss": 197492736
+        },
+        {
+          "mode": "current",
+          "requests": 500,
+          "p50": 0.07904200000001538,
+          "p95": 0.13462499999999977,
+          "cpuPerRequest": 167.008,
+          "startupRootMs": 45.89616699999999,
+          "digest": "b801b9dcfe527b8fca6eabc1542e5f398215f82938726f13d8c6d1395c0eb84f",
+          "apiBodyBytes": 67500,
+          "apiMetadataBytes": 370000,
+          "source": {
+            "get": 0,
+            "head": 0,
+            "list": 0,
+            "readBytes": 0
+          },
+          "generated": 0,
+          "rss": 197017600
+        },
+        {
+          "mode": "current",
+          "requests": 500,
+          "p50": 0.08295800000001918,
+          "p95": 0.14870900000002507,
+          "cpuPerRequest": 169.232,
+          "startupRootMs": 49.250208000000015,
+          "digest": "b801b9dcfe527b8fca6eabc1542e5f398215f82938726f13d8c6d1395c0eb84f",
+          "apiBodyBytes": 67500,
+          "apiMetadataBytes": 370000,
+          "source": {
+            "get": 0,
+            "head": 0,
+            "list": 0,
+            "readBytes": 0
+          },
+          "generated": 0,
+          "rss": 197263360
+        }
+      ]
+    }
+  ]
+}
