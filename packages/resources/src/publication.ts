@@ -169,6 +169,7 @@ export class PublicationStore {
     private readonly writer?: PublicationStorage,
     readonly maxDocumentBytes = 8 * 1024 ** 2,
     readWork = new ByteBudget(128 * 1024 ** 2),
+    private readonly retainedMs = 604800000,
   ) {
     this.cas = new ContentAddressedStorage(reader, writer);
     this.readBudget = readWork;
@@ -411,7 +412,7 @@ export class PublicationStore {
     if (!/^[a-f0-9]{64}$/.test(id)) throw new TypeError('invalid publication ID');
     const current = await this.head();
     if (current?.publicationId === id) return current;
-    const raw = await this.reader.read(`retained/${id}.json`);
+    const raw = await this.reader.readRange(`retained/${id}.json`, 0, 4097);
     if (!raw) return null;
     if (raw.byteLength > 4096) throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'invalid retained head');
     const record = JSON.parse(new TextDecoder().decode(raw));
@@ -421,7 +422,7 @@ export class PublicationStore {
       parseArtifactRef(record.head.manifest).digest !== id
     )
       throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'invalid retained head');
-    if (record.retiredAt !== undefined && Date.now() - record.retiredAt > 604800000) return null;
+    if (record.retiredAt !== undefined && Date.now() - record.retiredAt > this.retainedMs) return null;
     return record.head;
   }
   async pin(name: string, id: string): Promise<void> {

@@ -3,6 +3,7 @@ import { ResourceError, type ArtifactRef } from '@violet-map/core/resources';
 import type { ObjectReader } from '@violet-map/core/storage';
 import { ContentAddressedStorage, createPublicObjectUrl, publicObjectKey, verifyArtifact } from '@violet-map/storage';
 import type { PublicationStore } from './publication.js';
+import { ByteBudget } from './budget.js';
 
 export class PublicTarget {
   private readonly cas: ContentAddressedStorage;
@@ -18,6 +19,7 @@ export class PublicTarget {
     baseUrl: string,
     private readonly authority: PublicationStore,
     private readonly origins: readonly string[],
+    private readonly work = new ByteBudget(128 * 1024 ** 2),
   ) {
     this.cas = new ContentAddressedStorage(reader, writer);
     this.url = createPublicObjectUrl(baseUrl);
@@ -44,28 +46,33 @@ export class PublicTarget {
     }
   }
   async verify(ref: ArtifactRef): Promise<void> {
-    // Verify the real public channel before commit; no authenticated source credentials are used.
-    for (const origin of this.origins.length ? this.origins : ['*']) {
-      const response = await fetch(this.url(publicObjectKey(ref)), {
-        headers: { origin: origin === '*' ? 'https://violet-resource-verification.invalid' : origin },
-        credentials: 'omit',
-        redirect: 'error',
-        signal: AbortSignal.timeout(30000),
-      });
-      this.metrics.verifyGet++;
-      const cors = response.headers.get('access-control-allow-origin');
-      if (
-        !response.ok ||
-        response.headers.get('content-type')?.split(';')[0] !== ref.mediaType ||
-        !response.headers.get('cache-control')?.includes('immutable') ||
-        (cors !== '*' && cors !== (origin === '*' ? 'https://violet-resource-verification.invalid' : origin))
-      ) {
-        await response.body?.cancel();
-        throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'public resource HTTP/CORS contract failed');
+    const release = this.work.reserve(ref.bytes * 2);
+    try {
+      // Verify the real public channel before commit; no authenticated source credentials are used.
+      for (const origin of this.origins.length ? this.origins : ['*']) {
+        const response = await fetch(this.url(publicObjectKey(ref)), {
+          headers: { origin: origin === '*' ? 'https://violet-resource-verification.invalid' : origin },
+          credentials: 'omit',
+          redirect: 'error',
+          signal: AbortSignal.timeout(30000),
+        });
+        this.metrics.verifyGet++;
+        const cors = response.headers.get('access-control-allow-origin');
+        if (
+          !response.ok ||
+          response.headers.get('content-type')?.split(';')[0] !== ref.mediaType ||
+          !response.headers.get('cache-control')?.includes('immutable') ||
+          (cors !== '*' && cors !== (origin === '*' ? 'https://violet-resource-verification.invalid' : origin))
+        ) {
+          await response.body?.cancel();
+          throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'public resource HTTP/CORS contract failed');
+        }
+        const bytes = await readLimitedBody(response, ref.bytes);
+        if (!bytes) throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'public resource exceeds declared byte size');
+        verifyArtifact(ref, bytes);
       }
-      const bytes = await readLimitedBody(response, ref.bytes);
-      if (!bytes) throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'public resource exceeds declared byte size');
-      verifyArtifact(ref, bytes);
+    } finally {
+      release();
     }
   }
   async exists(ref: ArtifactRef): Promise<boolean> {

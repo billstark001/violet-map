@@ -37,6 +37,7 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
         publisher ? (mounts.publicationStore as PublicationStorage) : undefined,
         Math.floor(config.resources.cache.metadataBytes / 4),
         workBudget,
+        config.resources.publication.retainedMs,
       )
     : undefined;
   const target =
@@ -47,6 +48,7 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
           config.resources.delivery.publicBaseUrl!,
           store,
           config.server.cors.origins,
+          workBudget,
         )
       : undefined;
   const needsDynamic =

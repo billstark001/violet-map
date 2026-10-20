@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { PersistentResourceCache, PublicationStore } from '../src/index.js';
+import { ByteBudget, PersistentResourceCache, PublicationStore, PublicTarget } from '../src/index.js';
 
 const manifest = (renderRoot = 'a'.repeat(64)): PublicationManifest => ({
   schemaVersion: 1,
@@ -134,6 +134,41 @@ test('head commit success is not reported as failure when prepared cleanup fails
   await store.unpin('backup-1');
   assert.equal(await storage.read('pins/backup-1.json'), null);
   await store.close();
+});
+
+test('publication reads honor configured retention beyond the minimum seven days', async (t) => {
+  const storage = await fixture(t);
+  const store = new PublicationStore(storage, storage, undefined, undefined, 14 * 86400000);
+  const first = await store.commit(
+    manifest(),
+    null,
+    async () => {},
+    async () => {},
+  );
+  await store.commit(
+    manifest('b'.repeat(64)),
+    first.publicationId,
+    async () => {},
+    async () => {},
+  );
+  const key = `retained/${first.publicationId}.json`;
+  const record = JSON.parse(new TextDecoder().decode((await storage.read(key))!));
+  record.retiredAt = Date.now() - 8 * 86400000;
+  await storage.replace(key, new TextEncoder().encode(JSON.stringify(record)));
+  assert.equal((await store.retainedHead(first.publicationId))?.publicationId, first.publicationId);
+  record.retiredAt = Date.now() - 15 * 86400000;
+  await storage.replace(key, new TextEncoder().encode(JSON.stringify(record)));
+  assert.equal(await store.retainedHead(first.publicationId), null);
+  await store.close();
+});
+
+test('public verification reserves work before fetching even without a dynamic repository', async (t) => {
+  const storage = await fixture(t);
+  const store = new PublicationStore(storage);
+  const work = new ByteBudget(4);
+  const target = new PublicTarget(storage, undefined, 'https://resources.example/', store, ['*'], work);
+  await assert.rejects(target.verify(artifactRef(new Uint8Array(3), 'image/png', 'png')), { code: 'RESOURCE_BUSY' });
+  assert.equal(work.bytes, 0);
 });
 
 test('persistent cache has one explicit writer; read-only users never write, while corruption is an error', async (t) => {

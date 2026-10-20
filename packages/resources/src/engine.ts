@@ -977,12 +977,7 @@ export class ResourceEngine {
         const lease = await media.read();
         try {
           await this.target.ensure(entry.artifact, lease.bytes);
-          const release = this.repo().work.reserve(entry.artifact.bytes);
-          try {
-            await this.target.verify(entry.artifact);
-          } finally {
-            release();
-          }
+          await this.target.verify(entry.artifact);
         } finally {
           lease.release();
         }
@@ -992,12 +987,7 @@ export class ResourceEngine {
         const lease = await this.repo().acquire(ref, false);
         try {
           await this.target.ensure(ref, lease.bytes);
-          const release = this.repo().work.reserve(ref.bytes);
-          try {
-            await this.target.verify(ref);
-          } finally {
-            release();
-          }
+          await this.target.verify(ref);
         } finally {
           lease.release();
         }
@@ -1245,13 +1235,8 @@ export class ResourceEngine {
       throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'publication target is not configured');
     let objects = 0;
     const verify = async (ref: ArtifactRef) => {
-      const release = this.repository?.work.reserve(ref.bytes);
-      try {
-        await this.target!.verify(ref);
-        objects++;
-      } finally {
-        release?.();
-      }
+      await this.target!.verify(ref);
+      objects++;
     };
     for (const entry of manifest.entries) {
       await verify(entry.artifact);
