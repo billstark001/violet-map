@@ -4,7 +4,7 @@ Violet Map is a browser-first Minecraft Java world explorer. It combines a Hono 
 
 ## Quick start
 
-Requires Node.js 24+ and pnpm 12.
+Requires Node.js 24+ and pnpm 12.x. Any minor or patch release within pnpm 12 is accepted; the project does not pin or automatically switch pnpm versions.
 
 ```bash
 pnpm install

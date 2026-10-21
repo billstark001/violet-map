@@ -51,5 +51,7 @@
     "tsx": "^4.23.0",
     "typescript": "^6.0.3"
   },
-  "packageManager": "pnpm@12.11.2"
+  "engines": {
+    "pnpm": "12.x"
+  }
 }

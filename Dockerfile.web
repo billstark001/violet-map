@@ -1,5 +1,5 @@
 FROM node:24-bookworm-slim AS build
-RUN corepack enable
+RUN npm install --global pnpm@12
 WORKDIR /workspace
 COPY . .
 ARG VITE_BASE_PATH=/
