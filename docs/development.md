@@ -38,6 +38,12 @@ pnpm test:overlays
 pnpm test:transparency
 ```
 
+These commands run on Windows, macOS and Linux without Unix shell environment assignments. Asset extraction reads JARs in Node and does not require `unzip`. Artifact and benchmark subprocesses reuse the active pnpm executable; run their checks through the documented pnpm scripts. Browser checks use installed Chrome on macOS when available, otherwise Playwright Chromium; `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` explicitly selects another executable.
+
+Git keeps text files as LF on every platform through `.gitattributes`, so `format:check` also works with Windows `core.autocrlf=true`.
+
+CI includes native Windows and macOS jobs for unit tests, builds, relocated artifacts and frontend acceptance, alongside Linux verification with PostgreSQL and containers.
+
 To exercise the real OS credential store on a machine with an unlocked keychain, run `pnpm --filter @violet-map/cli test:keychain` explicitly. This integration test uses a temporary CLI home and its isolated random keychain namespace, checks native write/read/update/delete and the application's replacement lifecycle, and verifies cleanup of every test entry and the temporary directory. It never reads or changes existing CLI credentials. It is excluded from `pnpm test` and CI because those environments may not have an accessible credential store.
 
 ## Versions and changelog

@@ -5,6 +5,39 @@ on:
   pull_request:
 
 jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm boundary:check
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm --filter @violet-map/cli test:artifact
+      - run: pnpm --filter @violet-map/server test:db:artifact
+      - run: pnpm test:production
+      - run: pnpm test:release
+      - run: pnpm bench:resources --smoke
+      - run: pnpm exec playwright install chromium
+      - run: pnpm test:frontend
+      - run: pnpm test:overlays
+      - run: pnpm test:transparency
   verify:
     runs-on: ubuntu-latest
     services:
