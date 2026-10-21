@@ -14,7 +14,7 @@ export interface TopMapDependencies {
 
 /** Uses the effective override-before-region terrain source, exactly as the viewer does. */
 export async function prepareTopMapRegion(
-  source: Pick<WorldSource, 'getChunkNbtWithMeta'>,
+  source: Pick<WorldSource, 'readChunks'>,
   world: string,
   dimension: string,
   rx: number,
@@ -28,8 +28,8 @@ export async function prepareTopMapRegion(
     for (let x = 0; x < 32; x++) {
       const cx = rx * 32 + x,
         cz = rz * 32 + z;
-      const chunk = await source.getChunkNbtWithMeta(world, dimension, cx, cz);
-      dependencies.push({ cx, cz, digest: chunk ? sha256(chunk.data) : null });
+      const chunk = (await source.readChunks(world, dimension, [{ cx: cx, cz: cz }]))[0] ?? null;
+      dependencies.push({ cx, cz, digest: chunk?.terrainDigest ?? null });
       if (chunk && columns) {
         inputBytes += chunk.data.byteLength;
         if (inputBytes > 64 * 1024 ** 2)

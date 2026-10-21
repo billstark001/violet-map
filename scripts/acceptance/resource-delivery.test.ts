@@ -1,3 +1,4 @@
+import { waitForProcessOutput } from './helpers/process-startup.js';
 import { chromiumExecutablePath } from '../helpers/browser.mjs';
 import { stopProcess } from '../helpers/process.mjs';
 import assert from 'node:assert/strict';
@@ -5,7 +6,6 @@ import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { waitForProcessOutput } from './helpers/process-startup.js';
 import { serve } from '@hono/node-server';
 import { chromium } from 'playwright';
 import type { ResourceRef, ResourceKind } from '../../packages/core/src/resources.js';
@@ -261,7 +261,7 @@ test(
       { bindingId: 'main', layerId: layer.layerId, dimension: 'minecraft:overworld', enabled: true, order: 0 },
       map.revision,
     );
-    const first = await writer.resources.publish(null);
+    const first = await writer.resources.publication.publish(null);
     const before = {
       generated: writer.resources.repository!.metrics.generation,
       uploaded: writer.resources.target!.metrics.uploadedBytes,
@@ -272,7 +272,7 @@ test(
       { ...layer, revision: 2, features: [{ ...feature, position: [2, 0, 0] }] },
       layer.revision,
     );
-    const second = await writer.resources.publish(first.publicationId);
+    const second = await writer.resources.publication.publish(first.publicationId);
     assert.notEqual(second.publicationId, first.publicationId);
     assert.equal(writer.resources.repository!.metrics.generation, before.generated);
     assert.equal(writer.resources.target!.metrics.uploadedBytes, before.uploaded);

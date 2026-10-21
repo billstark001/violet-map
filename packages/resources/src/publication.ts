@@ -40,7 +40,15 @@ function document(value: unknown, fields: string[]): Record<string, unknown> {
 }
 
 export function parsePublicationEntry(value: unknown): PublicationEntry {
-  const v = document(value, ['selector', 'artifact', 'actionKey', 'image', 'nbtHash', 'terrainHash', 'entityHash']);
+  const v = document(value, [
+    'selector',
+    'artifact',
+    'actionKey',
+    'image',
+    'contentDigest',
+    'terrainDigest',
+    'entityDigest',
+  ]);
   const result: PublicationEntry = {
     selector: parseResourceSelector(v.selector),
     artifact: parseArtifactRef(v.artifact),
@@ -51,12 +59,17 @@ export function parsePublicationEntry(value: unknown): PublicationEntry {
   if (v.image !== undefined) result.image = parseArtifactRef(v.image);
   if ((result.selector.kind === 'atlas') !== (result.image !== undefined))
     throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'atlas requires its image artifact');
-  for (const k of ['nbtHash', 'terrainHash', 'entityHash'] as const)
+  for (const k of ['contentDigest', 'terrainDigest', 'entityDigest'] as const)
     if (v[k] !== undefined) {
       if (typeof v[k] !== 'string' || !/^[a-f0-9]{64}$/.test(v[k]))
         throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'invalid chunk digest');
       result[k] = v[k];
     }
+  if (result.selector.kind === 'chunk') {
+    if (!result.contentDigest || !result.terrainDigest)
+      throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'chunk publication requires content digests');
+  } else if (['contentDigest', 'terrainDigest', 'entityDigest'].some((key) => v[key] !== undefined))
+    throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'chunk digests require a chunk selector');
   return result;
 }
 

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { deflateSync, inflateSync } from 'node:zlib';
 import { LruCache } from '../../packages/core/src/cache.js';
 import { BlobRepository, InvalidationCoordinator, MemoryActionIndex } from '../../packages/resources/src/index.js';
+import { chunkIdentity } from '../../packages/resources/src/chunkIdentity.js';
 import { prepareChunkArtifact } from '../../packages/resources/src/chunkArtifact.js';
 
 const fixture = JSON.parse(await fs.readFile(new URL('./resources-fixture.json', import.meta.url), 'utf8'));
@@ -14,7 +15,8 @@ const input = new Uint8Array(fixture.objectBytes);
 
 for (let i = 0; i < input.length; i++) input[i] = (i * 31 + (i >>> 8)) & 255;
 
-const overhead = prepareChunkArtifact({ cx: 0, cz: 0, data: input }).generate().length - input.length;
+const overhead =
+  prepareChunkArtifact({ cx: 0, cz: 0, data: input }, chunkIdentity(input)).generate().length - input.length;
 const compressed = deflateSync(input.subarray(0, input.length - overhead));
 const digest = (s: string) => createHash('sha256').update(s).digest('hex');
 
@@ -66,7 +68,7 @@ async function measure(name: string, strategy: string, capacity: number, rate = 
       generate: async () => {
         const source = new Uint8Array(inflateSync(compressed));
         new DataView(source.buffer).setUint32(0, id);
-        return prepareChunkArtifact({ cx: 0, cz: 0, data: source }).generate();
+        return prepareChunkArtifact({ cx: 0, cz: 0, data: source }, chunkIdentity(source)).generate();
       },
     });
     const read = await repository.acquire(lease.artifact);

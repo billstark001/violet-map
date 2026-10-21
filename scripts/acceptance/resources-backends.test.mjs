@@ -197,11 +197,11 @@ test(
         { bindingId: 'main', layerId: layer.layerId, dimension: 'minecraft:overworld', enabled: true, order: 0 },
         map.revision,
       );
-      head = await publisher.resources.publish(null);
+      head = await publisher.resources.publication.publish(null);
       const puts = publisher.resources.target.metrics.put;
-      await publisher.resources.publish(head.publicationId);
+      await publisher.resources.publication.publish(head.publicationId);
       assert.equal(publisher.resources.target.metrics.put, puts);
-      await publisher.resources.verify();
+      await publisher.resources.publication.verify();
     } finally {
       await publisher.close();
     }

@@ -1,13 +1,12 @@
-import { resourceFailure } from '../resourceErrors.js';
-import { ResourceError } from '@violet-map/core/resources';
+import { contentFailure } from '../contentErrors.js';
 import { WorkLimiter } from '@violet-map/core/async';
 import { readLimitedBody } from '@violet-map/core/http';
 import { ContentValidationError, revisionTag } from '@violet-map/core/overlays';
 import { mediaArtifact } from '@violet-map/core/resources';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
-import { createHash } from 'node:crypto';
 import type { ServerConfig } from '../configuration.js';
-import { ContentError, type PublishedMedia } from '../content.js';
+import { ContentError } from '../content.js';
+import { readRequestJson } from '../httpBody.js';
 import { artifactResponse } from '../resourceHttp.js';
 import type { AppServices } from '../serviceTypes.js';
 
@@ -20,16 +19,6 @@ function condition(c: Context): number | undefined {
   return revision;
 }
 
-async function jsonBody(c: Context, limit: number): Promise<unknown> {
-  const bytes = await readLimitedBody(c.req.raw, limit);
-  if (!bytes) throw new ContentError('PAYLOAD_TOO_LARGE', 413, 'content document exceeds upload limit');
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    throw new ContentValidationError('invalid JSON');
-  }
-}
-
 function documentResponse(c: Context, document: { revision: number }, created = false) {
   c.header('etag', revisionTag(document.revision));
   c.header('cache-control', 'no-store');
@@ -37,47 +26,21 @@ function documentResponse(c: Context, document: { revision: number }, created = 
   return c.json(document, created ? 201 : 200);
 }
 
-async function bytesResponse(c: Context, { version, read }: PublishedMedia) {
-  return artifactResponse(c, mediaArtifact(version), read);
-}
-
 export function mountContent(app: Hono, config: ServerConfig, services: AppServices): void {
   if (!config.features.contentReads || !services.content) return;
   const content = services.content;
   const routes = new Hono();
-  routes.onError((error, c) => {
-    if (error instanceof ResourceError) return resourceFailure(error, c);
-    if (error instanceof ContentValidationError)
-      return c.json({ code: error.code, error: error.message }, error.code === 'UNSUPPORTED_FORMAT' ? 415 : 400);
-    if (error instanceof ContentError) {
-      if (error.code === 'CONTENT_BUSY') c.header('retry-after', '1');
-      return c.json({ code: error.code, error: error.message }, error.status);
-    }
-    // Backend errors may include endpoint URLs and credentials. Never reflect them.
-    return c.json({ code: 'CONTENT_BACKEND_UNAVAILABLE', error: 'content backend is unavailable' }, 503);
-  });
-  routes.get('/api/maps/:id/overlays', async (c) => {
-    const dimension = c.req.query('dimension');
-    if (!dimension) throw new ContentValidationError('dimension is required');
-    if (c.req.query('delivery') !== undefined)
-      throw new ContentValidationError('delivery was removed; resource mode is selected by the server');
-    const viewId = c.req.query('viewId');
-    if (!viewId) throw new ContentValidationError('viewId is required');
-    const manifest = await services.resources.overlays(c.req.param('id'), dimension, viewId);
-    const body = JSON.stringify(manifest);
-    const etag = `"${createHash('sha256').update(body).digest('hex')}"`;
-    c.header('etag', etag);
-    c.header('cache-control', 'no-cache');
-    if (c.req.header('if-none-match') === etag) return c.body(null, 304);
-    return c.body(body, 200, { 'content-type': 'application/json' });
-  });
+  routes.onError(contentFailure);
   routes.get('/api/maps/:id/media/:assetId/:versionId', async (c) => {
     const dimension = c.req.query('dimension');
     if (!dimension) throw new ContentValidationError('dimension is required');
-    return bytesResponse(
-      c,
-      await content.openPublicMedia(c.req.param('id'), dimension, c.req.param('assetId'), c.req.param('versionId')),
+    const { version, read } = await content.openPublicMedia(
+      c.req.param('id'),
+      dimension,
+      c.req.param('assetId'),
+      c.req.param('versionId'),
     );
+    return artifactResponse(c, mediaArtifact(version), read);
   });
   if (config.features.adminApi) {
     routes.use('/api/admin/*', services.authorization.requireRole('ci'));
@@ -118,9 +81,10 @@ export function mountContent(app: Hono, config: ServerConfig, services: AppServi
     routes.get('/api/admin/media/:id/versions/:versionId', async (c) =>
       c.json(await content.getMediaVersion(c.req.param('id'), c.req.param('versionId'))),
     );
-    routes.get('/api/admin/media/:id/versions/:versionId/file', async (c) =>
-      bytesResponse(c, await content.openMedia(c.req.param('id'), c.req.param('versionId'))),
-    );
+    routes.get('/api/admin/media/:id/versions/:versionId/file', async (c) => {
+      const { version, read } = await content.openMedia(c.req.param('id'), c.req.param('versionId'));
+      return artifactResponse(c, mediaArtifact(version), read);
+    });
     if (config.features.contentWrites) {
       const mutations = new WorkLimiter(
         config.limits.contentMutations,
@@ -129,12 +93,16 @@ export function mountContent(app: Hono, config: ServerConfig, services: AppServi
       );
       const reserveMutation: MiddlewareHandler = (_c, next) => mutations.run(next);
       routes.post('/api/admin/maps', reserveMutation, async (c) =>
-        documentResponse(c, await content.createMap(await jsonBody(c, config.limits.uploadBytes)), true),
+        documentResponse(c, await content.createMap(await readRequestJson(c, config.limits.uploadBytes)), true),
       );
       routes.put('/api/admin/maps/:id', reserveMutation, async (c) =>
         documentResponse(
           c,
-          await content.replaceMap(c.req.param('id'), await jsonBody(c, config.limits.uploadBytes), condition(c)),
+          await content.replaceMap(
+            c.req.param('id'),
+            await readRequestJson(c, config.limits.uploadBytes),
+            condition(c),
+          ),
         ),
       );
       routes.delete('/api/admin/maps/:id', reserveMutation, async (c) => {
@@ -147,7 +115,7 @@ export function mountContent(app: Hono, config: ServerConfig, services: AppServi
           await content.setBinding(
             c.req.param('id'),
             c.req.param('bindingId'),
-            await jsonBody(c, config.limits.uploadBytes),
+            await readRequestJson(c, config.limits.uploadBytes),
             condition(c),
           ),
         ),
@@ -156,16 +124,20 @@ export function mountContent(app: Hono, config: ServerConfig, services: AppServi
         documentResponse(c, await content.setBinding(c.req.param('id'), c.req.param('bindingId'), null, condition(c))),
       );
       routes.post('/api/admin/overlays/layers', reserveMutation, async (c) =>
-        documentResponse(c, await content.createLayer(await jsonBody(c, config.limits.uploadBytes)), true),
+        documentResponse(c, await content.createLayer(await readRequestJson(c, config.limits.uploadBytes)), true),
       );
       routes.put('/api/admin/overlays/layers/:id', reserveMutation, async (c) =>
         documentResponse(
           c,
-          await content.replaceLayer(c.req.param('id'), await jsonBody(c, config.limits.uploadBytes), condition(c)),
+          await content.replaceLayer(
+            c.req.param('id'),
+            await readRequestJson(c, config.limits.uploadBytes),
+            condition(c),
+          ),
         ),
       );
       routes.post('/api/admin/overlays/layers/:id/copy', reserveMutation, async (c) => {
-        const body = await jsonBody(c, config.limits.uploadBytes);
+        const body = await readRequestJson(c, config.limits.uploadBytes);
         if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((k) => k !== 'name'))
           throw new ContentValidationError('copy accepts only a name');
         return documentResponse(c, await content.copyLayer(c.req.param('id'), (body as { name?: string }).name), true);

@@ -9,10 +9,9 @@ import { createRouteContext } from './routes/context.js';
 import { mountData } from './routes/data.js';
 import { mountDataWrite } from './routes/dataWrite.js';
 import { mountDiagnostics } from './routes/diagnostics.js';
-import { mountPublicationProjections, mountResources } from './routes/resources.js';
+import { mountResourceProjections, mountResources } from './routes/resources.js';
 import { createUserRoutes } from './routes/users.js';
 import { mountWorldAdmin } from './routes/worldAdmin.js';
-import { mountWorldRead } from './routes/worldRead.js';
 import { mountWorldWrite } from './routes/worldWrite.js';
 import type { AppServices } from './serviceTypes.js';
 
@@ -80,7 +79,7 @@ export function createApp(config: ServerConfig, services: AppServices) {
     if (/^\/api\/admin\/(?:maps|overlays|media)(?:\/|$)/.test(path)) await next();
     else await services.resources.mutateSource(next);
     if (config.resources.delivery.mode === 'public' && c.res.ok) {
-      c.header('Resource-Publication-State', services.resources.state.publication);
+      c.header('Resource-Publication-State', services.resources.publication.state.publication);
       const revision = c.res.headers.get('etag') ?? c.req.header('if-match');
       if (revision) c.header('Resource-Publication-Revision', revision);
     }
@@ -88,10 +87,10 @@ export function createApp(config: ServerConfig, services: AppServices) {
   app.get('/api/capabilities', (c) => c.json(serviceCapabilities(config)));
   mountResources(app, config, services);
   mountContent(app, config, services);
-  if (config.resources.delivery.mode === 'public') mountPublicationProjections(app, services);
+  if (config.features.worldReads || config.resources.delivery.mode === 'public')
+    mountResourceProjections(app, services);
   if (services.assets && services.gameData && services.topMap && services.worldStore && services.mounts.worlds) {
     const context = createRouteContext(app, config, services);
-    if (config.features.worldReads) mountWorldRead(context);
     mountAssets(context);
     mountData(context);
     if (config.features.adminApi) mountWorldAdmin(context);

@@ -214,7 +214,7 @@ export class ResourceClient {
     selectors: ResourceSelector[],
     world = '',
     signal?: AbortSignal,
-  ): Promise<{ head: ResourceViewHead; resources: ResolvedResource[] }> {
+  ): Promise<{ head: ResourceViewHead; resources: ResolvedResource[]; validUntil: number }> {
     const head = await this.head(world, false, signal);
     const response = await apiFetch('api/resources/resolve', {
       method: 'POST',
@@ -249,7 +249,7 @@ export class ResourceClient {
       if (canonicalJson(parseResourceSelector(result.selector)) !== canonicalJson(selectors[index]))
         throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'resource selector order mismatch');
     });
-    return { head, resources: batch.resources };
+    return { head, resources: batch.resources, validUntil: batch.validUntil };
   }
 }
 

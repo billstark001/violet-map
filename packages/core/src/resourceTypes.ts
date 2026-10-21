@@ -1,5 +1,11 @@
 export type Sha256 = string;
 
+export interface ChunkContentIdentity {
+  terrainDigest: Sha256;
+  entityDigest?: Sha256;
+  contentDigest: Sha256;
+}
+
 export type ResourceKind =
   | 'chunk'
   | 'texture'
@@ -62,7 +68,13 @@ export type ResourceSelector =
 
 export type ResolvedResource =
   | { selector: ResourceSelector; missing: true }
-  | { selector: ResourceSelector; resource: ResourceRef; nbtHash?: string; terrainHash?: string; entityHash?: string }
+  | {
+      selector: ResourceSelector;
+      resource: ResourceRef;
+      contentDigest?: string;
+      terrainDigest?: string;
+      entityDigest?: string;
+    }
   | { selector: ResourceSelector; manifest: ResourceRef; image: ResourceRef };
 
 export interface ResourceResolveBatch {
@@ -76,9 +88,9 @@ export interface PublicationEntry {
   artifact: ArtifactRef;
   actionKey: string;
   image?: ArtifactRef;
-  nbtHash?: string;
-  terrainHash?: string;
-  entityHash?: string;
+  contentDigest?: string;
+  terrainDigest?: string;
+  entityDigest?: string;
 }
 
 export interface RegionResourcePage {

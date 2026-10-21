@@ -124,7 +124,7 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
         workBudget,
         handoffBytes: config.resources.work.handoffBytes,
         handoffMs: config.resources.work.handoffMs,
-        maxTasks: config.limits.chunkReads + config.limits.atlasBuilds,
+        maxTasks: config.resources.work.maxTasks,
         metadataEntries: Math.floor(config.resources.cache.metadataBytes / 8192),
         index,
         source: coordinator,
@@ -142,13 +142,11 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
             (operation) => resources.mutateSource(operation, 'content'),
           )
         : undefined;
-    // Original-source caches do not retain a second copy of derived working sets.
-    const sourceConfig = {
-      ...config,
-      cache: { ...config.cache, regionBytes: 0, chunkNbtBytes: 0, textureBytes: 0, metadataEntries: 0, worldListMs: 0 },
-    };
     const assets = needsDynamic
-      ? (await import('@violet-map/resources/asset-pack')).createAssetPack(sourceConfig)
+      ? (await import('@violet-map/resources/asset-pack')).createAssetPack({
+          assets: config.assets,
+          cache: { textureBytes: 0, metadataEntries: 0 },
+        })
       : undefined;
     const gameData = assets
       ? (await import('./gameData.js')).createGameDataService(
@@ -164,7 +162,7 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
         : undefined;
     const worldStore =
       needsDynamic && storage && topMap
-        ? (await import('./worldStore.js')).createWorldStore(storage, sourceConfig)
+        ? (await import('./worldStore.js')).createWorldStore(storage, config.minecraft.version)
         : undefined;
     const dynamic = assets && gameData && topMap && worldStore ? { assets, gameData, topMap, worldStore } : undefined;
     const resources: ResourceEngine = new ResourceEngine(
@@ -196,7 +194,7 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
       content,
     );
     activeEngine = resources;
-    if (factories.resumePublications !== false) await resources.resumePublications();
+    if (factories.resumePublications !== false) await resources.publication.resume();
     const base = { mounts, content, assets, gameData, topMap, worldStore, resources };
     let closing: Promise<void> | undefined;
     const closeResources = () =>

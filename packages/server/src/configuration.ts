@@ -96,6 +96,19 @@ export function loadServerConfig(options: ConfigurationOptions = {}) {
           : undefined,
     },
   };
+  for (const key of [
+    'REGION_CACHE_BYTES',
+    'CHUNK_NBT_CACHE_BYTES',
+    'TEXTURE_CACHE_BYTES',
+    'MANIFEST_CACHE_MS',
+    'WORLD_LIST_CACHE_MS',
+  ])
+    if (env[key] !== undefined)
+      throw new Error(
+        key + ' is not an online server cache setting; configure resources.cache or standalone source options',
+      );
+  for (const key of ['CHUNK_READ_CONCURRENCY', 'CHUNK_READ_QUEUE', 'ATLAS_BUILD_CONCURRENCY', 'ATLAS_BUILD_QUEUE'])
+    if (env[key] !== undefined) throw new Error(key + ' was removed; configure RESOURCES_WORK_MAX_TASKS');
   if (setting.env.CACHE_PREWARM !== undefined || setting.yamlValue('cache.prewarm') !== undefined)
     throw new Error('CACHE_PREWARM/cache.prewarm was removed; use resources prepare');
   const resolvedStorage = resolveStorage(
@@ -151,23 +164,10 @@ export function loadServerConfig(options: ConfigurationOptions = {}) {
       dataVersion: string('MC_DATA_VERSION', mcVersion, 'mcDataVersion', 'minecraft.dataVersion'),
     },
     cache: {
-      regionBytes: number('REGION_CACHE_BYTES', 256 * 1024 ** 2, 0, Number.MAX_SAFE_INTEGER, 'cache.regionBytes'),
-      chunkNbtBytes: number(
-        'CHUNK_NBT_CACHE_BYTES',
-        128 * 1024 ** 2,
-        0,
-        Number.MAX_SAFE_INTEGER,
-        'cache.chunkNbtBytes',
-      ),
-      textureBytes: number('TEXTURE_CACHE_BYTES', 32 * 1024 ** 2, 0, Number.MAX_SAFE_INTEGER, 'cache.textureBytes'),
       storageStatMs: number('STORAGE_STAT_CACHE_MS', 1000, 0, Number.MAX_SAFE_INTEGER, 'cache.storageStatMs'),
       storageListMs: number('STORAGE_LIST_CACHE_MS', 2000, 0, Number.MAX_SAFE_INTEGER, 'cache.storageListMs'),
-      manifestMs: number('MANIFEST_CACHE_MS', 5000, 0, Number.MAX_SAFE_INTEGER, 'cache.manifestMs'),
-      worldListMs: number('WORLD_LIST_CACHE_MS', 15000, 0, Number.MAX_SAFE_INTEGER, 'cache.worldListMs'),
     },
     limits: {
-      chunkReads: number('CHUNK_READ_CONCURRENCY', 8, 1, 1024, 'limits.chunkReads'),
-      chunkQueue: number('CHUNK_READ_QUEUE', 64, 0, 65536, 'limits.chunkQueue'),
       chunkRequestBytes: number(
         'CHUNK_REQUEST_BYTES',
         64 * 1024,
@@ -184,8 +184,6 @@ export function loadServerConfig(options: ConfigurationOptions = {}) {
       ),
       diagnosticBytes: number('DIAGNOSTIC_BYTES', 2 * 1024 ** 2, 1, Number.MAX_SAFE_INTEGER, 'limits.diagnosticBytes'),
       uploadBytes: number('UPLOAD_BYTES', 256 * 1024 ** 2, 1, Number.MAX_SAFE_INTEGER, 'limits.uploadBytes'),
-      atlasBuilds: number('ATLAS_BUILD_CONCURRENCY', 1, 1, 1024, 'limits.atlasBuilds'),
-      atlasQueue: number('ATLAS_BUILD_QUEUE', 16, 0, 65536, 'limits.atlasQueue'),
       mediaImports: number('MEDIA_IMPORT_CONCURRENCY', 1, 1, 1024, 'limits.mediaImports'),
       mediaQueue: number('MEDIA_IMPORT_QUEUE', 8, 0, 65536, 'limits.mediaQueue'),
       contentMutations: number('CONTENT_MUTATION_CONCURRENCY', 1, 1, 1024, 'limits.contentMutations'),

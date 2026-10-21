@@ -106,15 +106,27 @@ test('public and sync never open a user DB; public POST reads and static authori
     });
     const app = createApp(config, services);
     assert.equal((await app.request('/api/worlds')).status, 200);
+    assert.equal((await app.request('/api/maps/unavailable/overlays?dimension=overworld')).status, 404);
+    const head = await (await app.request('/api/resources/views/current')).json();
+    assert.equal(
+      (
+        await app.request('/api/resources/resolve', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ viewId: head.viewId, selectors: [] }),
+        })
+      ).status,
+      200,
+    );
     for (const url of ['chunks', 'chunk-hashes'])
       assert.equal(
         (
-          await app.request(`/api/worlds/world/minecraft:overworld/${url}`, {
+          await app.request('/api/worlds/world/minecraft:overworld/' + url, {
             method: 'POST',
             body: encode({ chunks: [] }) as BodyInit,
           })
         ).status,
-        200,
+        404,
       );
     assert.equal((await app.request('/api/auth/me')).status, 404);
     assert.equal((await app.request('/api/admin/storage/list')).status, profile === 'public' ? 404 : 401);

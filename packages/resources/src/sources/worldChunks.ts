@@ -1,6 +1,6 @@
 import { mapWithConcurrency } from '@violet-map/core/async';
 import { LruCache } from '@violet-map/core/cache';
-import type { ChunkCoverage, ChunkHashPayload, WorldInfo } from '@violet-map/core/contracts';
+import type { ChunkCoverage, WorldInfo } from '@violet-map/core/contracts';
 import {
   assertDimensionId,
   assertWorldName,
@@ -14,10 +14,18 @@ import { parseRegionFileName } from '@violet-map/core/region';
 import { ResourceError } from '@violet-map/core/resources';
 import type { ObjectReader, StoredFileInfo } from '@violet-map/core/storage';
 import { cleanStoragePath, sha256 } from '@violet-map/storage';
-import { createHash } from 'node:crypto';
+import { chunkIdentity } from '../chunkIdentity.js';
 import { decodeRegionChunk, decompressNbt } from './nbtCodec.js';
 
-export interface ChunkMetadata extends ChunkHashPayload {
+export interface ChunkMetadata {
+  cx: number;
+  cz: number;
+  missing?: boolean;
+  sourceRevision?: string;
+  terrainRevision?: string;
+  entityRevision?: string;
+  source?: 'region' | 'chunk';
+  region?: { x: number; z: number };
   sourcePath?: string;
   entitySourcePath?: string;
 }
@@ -25,8 +33,11 @@ export interface ChunkMetadata extends ChunkHashPayload {
 export interface ChunkReadResult extends ChunkMetadata {
   data: Uint8Array;
   entities?: Uint8Array;
-  hash: string;
-  fileHash: string;
+  sourceRevision: string;
+  terrainRevision: string;
+  contentDigest: string;
+  terrainDigest: string;
+  entityDigest?: string;
   source: 'region' | 'chunk';
   sourcePath: string;
 }
@@ -38,7 +49,6 @@ export interface WorldSourceOptions {
 
 export interface RegionCacheEntry {
   validator: string;
-  hash: string;
   bytes: Uint8Array;
 }
 
@@ -68,18 +78,19 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
 
   interface RegionHeaderCacheEntry {
     validator: string;
-    hash: string;
     header: Uint8Array;
   }
   interface ChunkCacheEntry {
     sourcePath: string;
-    fileHash: string;
+    terrainRevision: string;
     data: Uint8Array;
-    nbtHash: string;
-    entityHash?: string;
+    contentDigest: string;
+    terrainDigest: string;
+    entityDigest?: string;
+    entityRevision?: string;
     entities?: Uint8Array;
   }
-  const fileHashCache = new LruCache<string, HashCacheEntry>({ maxEntries: config.cache.metadataEntries ?? 4096 });
+  const fileDigestCache = new LruCache<string, HashCacheEntry>({ maxEntries: config.cache.metadataEntries ?? 4096 });
   const regionCache = new LruCache<string, RegionCacheEntry>({
     maxEntries: 16,
     maxWeight: config.cache.regionBytes,
@@ -112,24 +123,13 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
   const chunkCacheKey = (world: string, dim: string, cx: number, cz: number) => `${world}|${dim}|${cx},${cz}`;
   const levelDatPath = (world: string) => `${world}/level.dat`;
   const worldMetaPath = (world: string) => `${world}/.violet-map/world.json`;
-  function chunkPayloadHash(data: Uint8Array, entities?: Uint8Array): string {
-    const hash = createHash('sha256');
-    hash.update(data);
-    // Delimiters prevent an accidental equivalent concatenation of two chunks.
-    hash.update(new Uint8Array([0]));
-    if (entities) hash.update(entities);
-    return hash.digest('hex');
-  }
   function validator(info: StoredFileInfo): string {
     return `${info.size}:${info.modifiedAt ?? ''}:${info.etag ?? ''}`;
-  }
-  function sourceHashForInfo(info: StoredFileInfo): string {
-    return `v2:${validator(info)}`;
   }
   function invalidatePath(filePath: string) {
     storageCacheGeneration++;
     const clean = cleanStoragePath(filePath);
-    fileHashCache.delete(clean);
+    fileDigestCache.delete(clean);
     regionCache.delete(clean);
     regionHeaderCache.delete(clean);
     regionReadInflight.delete(clean);
@@ -151,7 +151,7 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
   }
   function clearWorldObjectCaches(world: string): void {
     const prefix = `${world}/`;
-    for (const cache of [fileHashCache, regionCache, regionHeaderCache, regionReadInflight, regionHeaderInflight]) {
+    for (const cache of [fileDigestCache, regionCache, regionHeaderCache, regionReadInflight, regionHeaderInflight]) {
       for (const key of cache.keys()) if (key.startsWith(prefix)) cache.delete(key);
     }
   }
@@ -179,13 +179,13 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
   async function hashFileInfo(info: StoredFileInfo): Promise<string> {
     const clean = cleanStoragePath(info.path);
     const v = validator(info);
-    const hit = fileHashCache.get(clean);
+    const hit = fileDigestCache.get(clean);
     if (hit?.validator === v) return hit.hash;
     const generation = storageCacheGeneration;
     const bytes = await readSource(clean);
     if (!bytes) throw new Error(`file disappeared while hashing: ${clean}`);
     const hash = sha256(bytes);
-    if (generation === storageCacheGeneration) fileHashCache.set(clean, { validator: v, hash });
+    if (generation === storageCacheGeneration) fileDigestCache.set(clean, { validator: v, hash });
     return hash;
   }
   function dimensionEntityCandidates(dim: string): string[] {
@@ -268,15 +268,13 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
       if (!bytes) throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'region disappeared during read', true);
       if (bytes.byteLength !== info.size)
         throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'region size changed during read', true);
-      const hash = sourceHashForInfo(info);
       if (regionReadInflight.get(clean) === load && bytes.length >= REGION_LOCATION_BYTES) {
         regionHeaderCache.set(clean, {
           validator: v,
-          hash,
           header: bytes.subarray(0, REGION_LOCATION_BYTES).slice(),
         });
       }
-      const value = { validator: v, hash, bytes };
+      const value = { validator: v, bytes };
       if (regionReadInflight.get(clean) === load) regionCache.set(clean, value);
       return value;
     })();
@@ -294,7 +292,7 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     const v = validator(info);
     const fullHit = regionCache.get(clean);
     if (fullHit?.validator === v) {
-      return { validator: v, hash: fullHit.hash, header: fullHit.bytes.subarray(0, REGION_LOCATION_BYTES) };
+      return { validator: v, header: fullHit.bytes.subarray(0, REGION_LOCATION_BYTES) };
     }
     const hit = regionHeaderCache.get(clean);
     if (hit?.validator === v) return hit;
@@ -305,7 +303,7 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
       const header = await worldStorage.readRange(clean, 0, REGION_LOCATION_BYTES);
       if (!header || header.length < REGION_LOCATION_BYTES)
         throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'region header changed during read', true);
-      const value: RegionHeaderCacheEntry = { validator: v, hash: sourceHashForInfo(info), header };
+      const value: RegionHeaderCacheEntry = { validator: v, header };
       if (regionHeaderInflight.get(clean) === load) regionHeaderCache.set(clean, value);
       return value;
     })();
@@ -449,7 +447,7 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     }
     return [...out.values()].sort((a, b) => a.cx - b.cx || a.cz - b.cz);
   }
-  async function getChunkMetadataBatch(
+  async function inspectChunks(
     world: string,
     dim: string,
     chunks: { cx: number; cz: number }[],
@@ -480,8 +478,15 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
       const chunkPath = `${overrideDirectory}/c.${cx}.${cz}.nbt`;
       const chunkInfo = hasOverrides ? await worldStorage.stat(chunkPath) : null;
       if (chunkInfo) {
-        const fileHash = sourceHashForInfo(chunkInfo);
-        out[index] = { cx, cz, hash: fileHash, fileHash, source: 'chunk', sourcePath: chunkPath };
+        const terrainRevision = validator(chunkInfo);
+        out[index] = {
+          cx,
+          cz,
+          sourceRevision: terrainRevision,
+          terrainRevision,
+          source: 'chunk',
+          sourcePath: chunkPath,
+        };
         return;
       }
 
@@ -504,8 +509,8 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
         out[item.index] = {
           cx: item.cx,
           cz: item.cz,
-          hash: region.hash,
-          fileHash: region.hash,
+          sourceRevision: region.validator,
+          terrainRevision: region.validator,
           source: 'region',
           sourcePath: group.filePath,
           region: { x: group.rx, z: group.rz },
@@ -516,10 +521,11 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     // Since 1.17 entities live in a sibling region directory. Attach its
     // validator to the terrain metadata so a changed entity chunk invalidates
     // the browser mesh cache even when block data stayed identical.
+    if (config.entities === false) return out;
     const entityRegions = new Map<string, { filePath: string; items: { index: number; cx: number; cz: number }[] }>();
     for (let index = 0; index < out.length; index++) {
       const meta = out[index];
-      if (!meta || meta.missing || !meta.hash) continue;
+      if (!meta || meta.missing || !meta.sourceRevision) continue;
       const rx = meta.cx >> 5;
       const rz = meta.cz >> 5;
       const filePath = regionPathFromDir(entityBase, rx, rz);
@@ -533,37 +539,44 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
       for (const item of group.items) {
         const meta = out[item.index];
         if (!meta || !hasRegionChunkHeader(region.header, item.cx & 31, item.cz & 31)) continue;
-        meta.entityHash = region.hash;
+        meta.entityRevision = region.validator;
         meta.entitySourcePath = group.filePath;
-        // `hash` is a source validator used before full NBT is fetched. Include
-        // entities here; `nbtHash` below remains the precise payload hash.
-        meta.hash = `v3:${sha256(new TextEncoder().encode(`${meta.hash}|${region.hash}`))}`;
+        // Include entity revisions in source invalidation, independently of content digests.
+        meta.sourceRevision = `v3:${sha256(new TextEncoder().encode(`${meta.sourceRevision}|${region.validator}`))}`;
       }
     });
 
     return out;
   }
-  async function getChunkMetadata(world: string, dim: string, cx: number, cz: number): Promise<ChunkMetadata> {
-    return (await getChunkMetadataBatch(world, dim, [{ cx, cz }]))[0] ?? { cx, cz, missing: true };
-  }
-  async function getChunksNbtWithMetaBatch(
+  async function readChunks(
     world: string,
     dim: string,
     chunks: { cx: number; cz: number }[],
   ): Promise<(ChunkReadResult | null)[]> {
     const generation = storageCacheGeneration;
-    const metas = await getChunkMetadataBatch(world, dim, chunks);
+    const metas = await inspectChunks(world, dim, chunks);
     const out = new Array<ChunkReadResult | null>(metas.length).fill(null);
     const cachedResults = new Uint8Array(metas.length);
     const byRegion = new Map<string, { meta: ChunkMetadata; index: number }[]>();
 
     await mapWithConcurrency(metas, MAX_PARALLEL_STORAGE_READS, async (meta, index) => {
-      if (!meta.hash || !meta.fileHash || !meta.source || !meta.sourcePath || meta.missing) return;
+      if (!meta.sourceRevision || !meta.terrainRevision || !meta.source || !meta.sourcePath || meta.missing) return;
 
       const cacheKey = chunkCacheKey(world, dim, meta.cx, meta.cz);
       const hit = chunkNbtCache.get(cacheKey);
-      if (hit?.sourcePath === meta.sourcePath && hit.fileHash === meta.fileHash && hit.entityHash === meta.entityHash) {
-        out[index] = { ...meta, data: hit.data, entities: hit.entities, nbtHash: hit.nbtHash } as ChunkReadResult;
+      if (
+        hit?.sourcePath === meta.sourcePath &&
+        hit.terrainRevision === meta.terrainRevision &&
+        hit.entityRevision === meta.entityRevision
+      ) {
+        out[index] = {
+          ...meta,
+          data: hit.data,
+          entities: hit.entities,
+          contentDigest: hit.contentDigest,
+          terrainDigest: hit.terrainDigest,
+          entityDigest: hit.entityDigest,
+        } as ChunkReadResult;
         cachedResults[index] = 1;
         return;
       }
@@ -572,7 +585,7 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
         const bytes = await readSource(meta.sourcePath);
         if (!bytes) throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'chunk disappeared during read', true);
         const data = await decompressNbt(bytes);
-        out[index] = { ...meta, data, nbtHash: chunkPayloadHash(data) } as ChunkReadResult;
+        out[index] = { ...meta, data } as ChunkReadResult;
         return;
       }
 
@@ -585,11 +598,11 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
       const region = await readRegionFile(filePath);
       if (!region) throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'region disappeared during read', true);
       for (const { meta, index } of items) {
-        if (!meta.fileHash || !meta.sourcePath) continue;
+        if (!meta.terrainRevision || !meta.sourcePath) continue;
         const data = await decodeRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31);
         if (!data)
           throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'declared source chunk is truncated or invalid');
-        out[index] = { ...meta, data, nbtHash: chunkPayloadHash(data) } as ChunkReadResult;
+        out[index] = { ...meta, data } as ChunkReadResult;
       }
     });
 
@@ -611,35 +624,29 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
         if (!entities)
           throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'declared entity chunk is truncated or invalid');
         result.entities = entities;
-        result.nbtHash = chunkPayloadHash(result.data, entities);
       }
     });
 
     // Cache only after both terrain and optional entity NBT have been merged.
     for (let index = 0; index < out.length; index++) {
-      if (generation !== storageCacheGeneration) break;
       if (cachedResults[index]) continue;
       const result = out[index];
-      if (!result?.data || !result.sourcePath || !result.fileHash) continue;
+      if (!result?.data || !result.sourcePath || !result.terrainRevision) continue;
+      Object.assign(result, chunkIdentity(result.data, result.entities));
+      if (generation !== storageCacheGeneration) continue;
       chunkNbtCache.set(chunkCacheKey(world, dim, result.cx, result.cz), {
         sourcePath: result.sourcePath,
-        fileHash: result.fileHash,
+        terrainRevision: result.terrainRevision,
         data: result.data,
-        nbtHash: result.nbtHash ?? chunkPayloadHash(result.data, result.entities),
-        entityHash: result.entityHash,
+        contentDigest: result.contentDigest,
+        terrainDigest: result.terrainDigest,
+        entityDigest: result.entityDigest,
+        entityRevision: result.entityRevision,
         entities: result.entities,
       });
     }
 
     return out;
-  }
-  async function getChunkNbtWithMeta(
-    world: string,
-    dim: string,
-    cx: number,
-    cz: number,
-  ): Promise<ChunkReadResult | null> {
-    return (await getChunksNbtWithMetaBatch(world, dim, [{ cx, cz }]))[0] ?? null;
   }
   function cacheStats() {
     return {
@@ -648,7 +655,7 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
       regionHeaders: regionHeaderCache.size,
       chunks: chunkNbtCache.size,
       chunkBytes: chunkNbtCache.weight,
-      fileHashes: fileHashCache.size,
+      fileDigests: fileDigestCache.size,
       directories: regionDirCache.size + entityDirCache.size,
     };
   }
@@ -657,10 +664,8 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     listWorlds,
     listRegions,
     listChunkSourceCoverage,
-    getChunkMetadataBatch,
-    getChunkMetadata,
-    getChunksNbtWithMetaBatch,
-    getChunkNbtWithMeta,
+    inspectChunks,
+    readChunks,
     invalidateStoredFile,
     invalidateWorldList,
     invalidatePath,

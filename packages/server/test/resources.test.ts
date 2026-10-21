@@ -30,6 +30,7 @@ test('dynamic zero retention resolves and GETs deterministic chunks; source writ
       DATA_DIR: root,
       WORLDS_DIR: path.join(root, 'worlds'),
       RESOURCES_CACHE_MEMORY_BYTES: '0',
+      RESOURCES_WORK_MAX_TASKS: '1',
     },
     cwd: root,
   });
@@ -52,6 +53,9 @@ test('dynamic zero retention resolves and GETs deterministic chunks; source writ
   for (const response of responses) assert.equal(response.status, 200, await response.clone().text());
   assert.equal(services.resources.repository!.metrics.generation - before, 1);
   const batch = await responses[0].json();
+  const sourceChunk = (await services.worldStore!.readChunks('world', dim, [{ cx: 0, cz: 0 }]))[0]!;
+  for (const field of ['terrainDigest', 'entityDigest', 'contentDigest'] as const)
+    assert.equal(batch.resources[0][field], sourceChunk[field], 'source and resource identities must agree');
   const reference = batch.resources[0].resource;
   const headOnly = await app.request(reference.url, { method: 'HEAD' });
   assert.equal(headOnly.status, 200);
@@ -60,10 +64,12 @@ test('dynamic zero retention resolves and GETs deterministic chunks; source writ
   assert.equal(response.status, 200);
   const bytes = new Uint8Array(await response.arrayBuffer());
   assert.equal(sha256(bytes), reference.artifact.digest);
-  const chunk = decode(bytes) as { schemaVersion: number; data: Uint8Array; fileHash?: string };
+  const chunk = decode(bytes) as { schemaVersion: number; data: Uint8Array };
   assert.equal(chunk.schemaVersion, 1);
   assert.deepEqual(chunk.data, nbt);
   assert.equal('fileHash' in chunk, false);
+  for (const url of ['chunk/0/0', 'top-map/tile/0/0'])
+    assert.equal((await app.request(`/api/worlds/world/${dim}/${url}`)).status, 404);
   for (let i = 1; i < 100; i++) {
     const next = await app.request(reference.url);
     assert.equal(next.status, 200);
@@ -151,23 +157,25 @@ test('publisher and source-free public reader share a durable closure with zero 
   await writer.mounts.worlds!.write(`world/chunks/${encodeURIComponent(dim)}/c.0.0.nbt`, nbt);
   await writer.mounts.worlds!.write('world/region/r.0.0.mca', new Uint8Array());
   await writer.mounts.worlds!.write('world/entities/r.0.0.mca', new Uint8Array());
-  const first = await writer.resources.publish(null);
+  const first = await writer.resources.publication.publish(null);
   const before = { ...writer.resources.store!.metrics };
   const uploads = { ...writer.resources.target!.metrics };
   const generated = writer.resources.repository!.metrics.generation;
-  const second = await writer.resources.publish(first.publicationId);
+  const second = await writer.resources.publication.publish(first.publicationId);
   assert.deepEqual(second, first);
   assert.equal(writer.resources.store!.metrics.controlPut, before.controlPut);
   assert.equal(writer.resources.target!.metrics.put, uploads.put);
   assert.equal(writer.resources.repository!.metrics.generation, generated);
   assert.equal(writer.resources.repository!.handoff.budget.bytes, 0);
-  const prepared = await writer.resources.prepare();
-  assert.deepEqual(await writer.resources.publish(second.publicationId, prepared), second);
+  const prepared = await writer.resources.publication.prepare();
+  assert.deepEqual(await writer.resources.publication.publish(second.publicationId, prepared), second);
   assert.equal(writer.resources.repository!.handoff.budget.bytes, 0);
   const writerApp = createApp(config, writer);
   await writer.mounts.worlds!.write(`draft/chunks/${encodeURIComponent(dim)}/c.0.0.nbt`, nbt);
   const beforeDrift = { ...writer.resources.target!.metrics };
-  await assert.rejects(writer.resources.publish(second.publicationId, prepared), { code: 'SOURCE_SNAPSHOT_CHANGED' });
+  await assert.rejects(writer.resources.publication.publish(second.publicationId, prepared), {
+    code: 'SOURCE_SNAPSHOT_CHANGED',
+  });
   assert.equal(writer.resources.target!.metrics.put, beforeDrift.put);
   assert.deepEqual(await writer.resources.store!.head(), second);
   assert.deepEqual(

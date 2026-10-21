@@ -4,7 +4,6 @@ import { mapWithConcurrency } from '@violet-map/core/async';
 import type {
   AtlasDocument,
   ChunkCoverage,
-  ChunkHashPayload,
   ChunkPayload,
   DiagnosticUploadResponse,
   TextureAtlasManifest,
@@ -14,7 +13,13 @@ import type {
 } from '@violet-map/core/contracts';
 import type { BiomeMap, DimensionMap } from '@violet-map/core/domain';
 import type { TopMapTilePayload } from '@violet-map/core/formats/top-map';
-import { ResourceError, canonicalJson, type ResourceRef, type ResourceSelector } from '@violet-map/core/resources';
+import {
+  ResourceError,
+  canonicalJson,
+  type ResourceRef,
+  type ResourceSelector,
+  type ResourceViewHead,
+} from '@violet-map/core/resources';
 import { resourceClient } from './resources/client';
 import { downloadResource } from './resources/download';
 import { apiFetch } from './runtime';
@@ -53,54 +58,75 @@ export const fetchBiomes = (signal?: AbortSignal) =>
 export const fetchDimensions = (signal?: AbortSignal) =>
   resourceJson<DimensionMap>({ kind: 'game-data', name: 'dimensions' }, signal);
 
-async function resolveChunks(world: string, dim: string, chunks: { cx: number; cz: number }[], signal?: AbortSignal) {
-  const head = await resourceClient.head(world, false, signal);
-  const out: import('@violet-map/core/resources').ResolvedResource[] = [];
-  for (let i = 0; i < chunks.length; i += 128)
-    out.push(
-      ...(
-        await resourceClient.resolve(
-          chunks.slice(i, i + 128).map(({ cx, cz }) => ({ kind: 'chunk' as const, world, dimension: dim, cx, cz })),
-          world,
-          signal,
-        )
-      ).resources,
-    );
-  resourceClient.assertCurrent(head, world);
-  return { head, results: out };
-}
-
-export async function fetchChunkHashes(
-  world: string,
-  dim: string,
-  chunks: { cx: number; cz: number }[],
-  signal?: AbortSignal,
-): Promise<ChunkHashPayload[]> {
-  const { head, results } = await resolveChunks(world, dim, chunks, signal);
-  resourceClient.assertCurrent(head, world);
-  return results.map((result, index) =>
-    'missing' in result
-      ? { ...chunks[index], missing: true }
-      : 'resource' in result
-        ? { ...chunks[index], hash: result.nbtHash, nbtHash: result.nbtHash, entityHash: result.entityHash }
-        : (() => {
-            throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'chunk selector resolved to an atlas');
-          })(),
+export type ResolvedChunk = Extract<ResourceSelector, { kind: 'chunk' }> & {
+  head: ResourceViewHead;
+  validUntil: number;
+} & (
+    | { missing: true }
+    | {
+        missing?: false;
+        resource: ResourceRef;
+        contentDigest: string;
+        terrainDigest: string;
+        entityDigest?: string;
+      }
   );
-}
 
-export async function fetchChunks(
+/** Resolve once; callers retain these bounded leases until they choose to read the bodies. */
+export async function resolveChunks(
   world: string,
   dim: string,
   chunks: { cx: number; cz: number }[],
   signal?: AbortSignal,
-): Promise<ChunkPayload[]> {
-  const { head, results } = await resolveChunks(world, dim, chunks, signal);
-  const payloads = await mapWithConcurrency(results, 4, async (result, index) => {
-    if ('missing' in result) return { ...chunks[index], missing: true };
-    if (!('resource' in result) || result.resource.artifact.format !== 'chunk-msgpack-v1' || !result.nbtHash)
-      throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'invalid chunk resource format');
-    const payload = decode(await downloadResource(result.resource, signal)) as {
+): Promise<ResolvedChunk[]> {
+  const head = await resourceClient.head(world, false, signal);
+  const out: ResolvedChunk[] = [];
+  for (let i = 0; i < chunks.length; i += 128) {
+    const coordinates = chunks.slice(i, i + 128);
+    const batch = await resourceClient.resolve(
+      coordinates.map(({ cx, cz }) => ({ kind: 'chunk' as const, world, dimension: dim, cx, cz })),
+      world,
+      signal,
+    );
+    batch.resources.forEach((result, index) => {
+      const selected = {
+        kind: 'chunk' as const,
+        world,
+        dimension: dim,
+        head,
+        validUntil: batch.validUntil,
+        ...coordinates[index],
+      };
+      if ('missing' in result) out.push({ ...selected, missing: true });
+      else if ('resource' in result && result.contentDigest && result.terrainDigest)
+        out.push({
+          ...selected,
+          resource: result.resource,
+          contentDigest: result.contentDigest,
+          terrainDigest: result.terrainDigest,
+          ...(result.entityDigest ? { entityDigest: result.entityDigest } : {}),
+        });
+      else throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'invalid chunk resolution');
+    });
+  }
+  resourceClient.assertCurrent(head, world);
+  return out;
+}
+
+/** Read exactly the resolved references; an expired lease must be resolved again explicitly. */
+export async function readChunks(chunks: ResolvedChunk[], signal?: AbortSignal): Promise<ChunkPayload[]> {
+  signal?.throwIfAborted();
+  for (const chunk of chunks) {
+    resourceClient.assertCurrent(chunk.head, chunk.world);
+    if (chunk.validUntil <= Date.now())
+      throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'chunk resolution expired', true);
+  }
+  const payloads = await mapWithConcurrency(chunks, 4, async (chunk) => {
+    if (chunk.missing) return { cx: chunk.cx, cz: chunk.cz, missing: true };
+    resourceClient.assertCurrent(chunk.head, chunk.world);
+    if (chunk.validUntil <= Date.now())
+      throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'chunk resolution expired before body admission', true);
+    const payload = decode(await downloadResource(chunk.resource, signal)) as {
       schemaVersion?: number;
       cx: number;
       cz: number;
@@ -109,8 +135,8 @@ export async function fetchChunks(
     };
     if (
       payload.schemaVersion !== 1 ||
-      payload.cx !== chunks[index].cx ||
-      payload.cz !== chunks[index].cz ||
+      payload.cx !== chunk.cx ||
+      payload.cz !== chunk.cz ||
       !(payload.data instanceof Uint8Array) ||
       (payload.entities !== undefined && !(payload.entities instanceof Uint8Array))
     )
@@ -120,12 +146,12 @@ export async function fetchChunks(
       cz: payload.cz,
       data: payload.data,
       ...(payload.entities ? { entities: payload.entities } : {}),
-      hash: result.nbtHash,
-      nbtHash: result.nbtHash,
-      entityHash: result.entityHash,
+      contentDigest: chunk.contentDigest,
+      terrainDigest: chunk.terrainDigest,
+      ...(chunk.entityDigest ? { entityDigest: chunk.entityDigest } : {}),
     };
   });
-  resourceClient.assertCurrent(head, world);
+  for (const chunk of chunks) resourceClient.assertCurrent(chunk.head, chunk.world);
   return payloads;
 }
 

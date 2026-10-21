@@ -15,7 +15,7 @@ test('unavailable IndexedDB falls back to worker meshing for both full and LOD t
         key: 'test',
         state: 'stored',
         dirtyToken: 0,
-        nbtHash: 'nbt',
+        contentDigest: 'nbt',
         pendingFullVersion: -1,
         pendingLodVersion: -1,
       };

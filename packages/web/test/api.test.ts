@@ -2,7 +2,8 @@ import { encode } from '@msgpack/msgpack';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
-import { fetchChunkHashes, fetchChunks } from '../src/api.js';
+import { resolveChunks, readChunks } from '../src/api.js';
+import { resourceClient } from '../src/resources/client.js';
 
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
@@ -33,8 +34,8 @@ test('chunk selectors preserve dimensions with path separators and one exact ver
         validUntil: Date.now() + 30000,
         resources: body.selectors.map((selector: unknown) => ({
           selector,
-          nbtHash: 'c'.repeat(64),
-          terrainHash: 'd'.repeat(64),
+          contentDigest: 'c'.repeat(64),
+          terrainDigest: 'd'.repeat(64),
           resource: {
             schemaVersion: 1,
             kind: 'chunk',
@@ -53,15 +54,22 @@ test('chunk selectors preserve dimensions with path separators and one exact ver
     return new Response(bytes, { headers: { 'content-type': 'application/msgpack' } });
   };
   const coordinates = [{ cx: 0, cz: 0 }];
-  const hashes = await fetchChunkHashes('example', 'mod:sky/islands', coordinates);
-  assert.equal(hashes[0].nbtHash, 'c'.repeat(64));
+  const hashes = await resolveChunks('example', 'mod:sky/islands', coordinates);
+  assert.equal(hashes[0].dimension, 'mod:sky/islands');
+  assert.equal('contentDigest' in hashes[0] && hashes[0].contentDigest, 'c'.repeat(64));
   assert.equal(bodies, 0);
-  const chunks = await fetchChunks('example', 'mod:sky/islands', coordinates);
+  const chunks = await readChunks(hashes);
   assert.deepEqual(chunks[0].data, new Uint8Array([1]));
   assert.equal(bodies, 1);
+  assert.equal(selectors.length, 1, 'body reads reuse the exact resolved reference');
   assert.ok(selectors.every((s: any) => s.dimension === 'mod:sky/islands'));
   globalThis.fetch = async () => new Response(null, { status: 503 });
-  await assert.rejects(fetchChunks('example', 'mod:sky/islands', coordinates), {
-    code: 'RESOURCE_BACKEND_UNAVAILABLE',
+  await assert.rejects(readChunks(hashes.map((chunk) => ({ ...chunk, validUntil: 0 }))), {
+    code: 'RESOURCE_VIEW_EXPIRED',
   });
+  assert.equal(bodies, 1, 'expired references fail before downloading');
+  globalThis.fetch = async () => Response.json({ ...head, viewId: 'e'.repeat(64), generation: 1 });
+  await resourceClient.refresh();
+  await assert.rejects(readChunks(hashes), { code: 'RESOURCE_VIEW_EXPIRED' });
+  assert.equal(bodies, 1, 'a changed view cannot reuse an old chunk reference');
 });

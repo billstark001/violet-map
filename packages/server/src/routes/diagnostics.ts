@@ -1,11 +1,11 @@
 import { requireStorageCapabilities } from '@violet-map/storage';
+import { readRequestJson, RequestBodyError } from '../httpBody.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { bearer } from '../auth.js';
 import type { RouteContext } from './context.js';
 
 export function mountDiagnostics(context: RouteContext) {
-  const { app, config, requireRole, MAX_DIAGNOSTIC_BYTES, randomUUID, fs, path, readLimitedBody, REQUIRED_ROLE } =
-    context;
+  const { app, config, requireRole, MAX_DIAGNOSTIC_BYTES, randomUUID, fs, path, REQUIRED_ROLE } = context;
   const normalAuthorization = requireRole(REQUIRED_ROLE.diagnostics);
   app.post(
     '/api/diagnostics',
@@ -25,16 +25,15 @@ export function mountDiagnostics(context: RouteContext) {
       return normalAuthorization(c, next);
     },
     async (c) => {
-      const bytes = await readLimitedBody(c.req.raw, MAX_DIAGNOSTIC_BYTES);
-      if (!bytes) {
-        return c.json({ error: 'diagnostic payload too large' }, 413);
-      }
-
       let payload: unknown;
       try {
-        payload = JSON.parse(new TextDecoder().decode(bytes));
-      } catch {
-        return c.json({ error: 'invalid diagnostic JSON' }, 400);
+        payload = await readRequestJson(c, MAX_DIAGNOSTIC_BYTES);
+      } catch (error) {
+        if (!(error instanceof RequestBodyError)) throw error;
+        return c.json(
+          { error: error.reason === 'too-large' ? 'diagnostic payload too large' : 'invalid diagnostic JSON' },
+          error.status,
+        );
       }
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
         return c.json({ error: 'diagnostic payload must be an object' }, 400);

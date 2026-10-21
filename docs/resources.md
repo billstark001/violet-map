@@ -4,9 +4,15 @@ The API, viewer, admin and CLI switch together to capabilities protocol 2 and ov
 
 `core` owns browser-safe contracts. `storage` owns object I/O, conditional writes, CAS and URL encoding. `resources` owns dependencies, generators, caching and publication lifetimes. Server and CLI assemble roles and expose operations. The browser uses one anonymous integrity downloader for chunks, atlas/texture images, top-map tiles and overlay media.
 
+`ResourceGenerator` owns preparation and output leases; `ResourceViewSessions` owns identities and view retention; `ResourcePublisher` owns complete publication closures, reconciliation and GC. `ResourceEngine` coordinates reads and business projections. Publisher operations have one entry point, `resources.publication`; there are no engine-level publisher aliases.
+
+Storage decorators preserve the backend's optional capabilities; service assembly selects them with `requireStorageCapabilities` before I/O. Publication authorities and persistent caches use `TransactionalObjectStorage`. Both HTTP adapters share range validation and bounded stream slicing with S3; requested lengths do not trigger allocations before bytes arrive. Public copies and HTTP CAS use `verifyPublicArtifact` for anonymous HTTP, immutable caching and byte integrity; publication additionally supplies each permitted browser origin for CORS verification.
+
 ## Roles and retention
 
 `roles: [serve]` is the default. A public reader needs only readable committed publication control objects and public bodies. It does not initialize worlds, generators, SQLite, a publisher lock or writable directories. Enable source/content management explicitly when required. `publish` requires a reliable target and conditional publication store; temporary caches never substitute for either.
+
+Online cache settings and removal of ineffective source-cache knobs are documented in [server configuration](server-configuration.md). Standalone source readers retain explicit cache options. One positive `resources.work.maxTasks` setting bounds distinct resource tasks; requests for the same task coalesce.
 
 The memory, local and shared derived caches permit zero bytes. Missing local cache, SQLite and workspace configuration means no probing or creation. Selected drivers fail explicitly. Work and handoff budgets are separate positive bounds: reserve before preparing input; admission failures reject before generation. A zero-retention resolve pins its results only until transfer/cancellation or the advertised handoff deadline. Oversized optional cache entries do not evict a hot working set. Optional cache write admission has no unbounded waiting queue.
 
@@ -20,9 +26,15 @@ World identity, content metadata, retained media originals, publication manifest
 
 `snapshot` declares a controlled/frozen source. Stop external world synchronization and edits while preparing/publishing; the in-process snapshot gate excludes controlled source/content commits. Separate instances must not write the same source during publication. `bounded` explicitly supports external mutable sources: active sources are checked at intervals of at most 5 seconds, using content digests when no fixed revision exists. Observing a change invalidates source metadata and the render root. It is not a cross-file frozen snapshot and cannot publish. Status separates source observation and publication lag.
 
-Chunks use deterministic `chunk-msgpack-v1`: coordinates, terrain NBT and optional entity NBT, with terrain/entity/content digests in the reference metadata. File validators and source paths are not encoded into output bytes. Overrides take precedence over MCA through the same source reader used by baking.
+Chunks use deterministic `chunk-msgpack-v1`: coordinates, terrain NBT and optional entity NBT, with terrain/entity/content digests in the reference metadata. `terrainDigest` and optional `entityDigest` hash decoded NBT independently. `contentDigest` hashes their canonical dependency tuple, including explicit entity absence. The source reader computes this identity once and generation reuses it. `sourceRevision` is an opaque source validator, independent from these digests. The transport artifact digest hashes the encoded MessagePack bytes. File validators and source paths are not encoded into output bytes. Overrides take precedence over MCA through the same source reader used by baking.
+
+Publications using the previous chunk hash field names must be prepared and published again with the matching writer. Readers reject that metadata rather than interpreting legacy field names. The new mesh cache schema also prevents reuse of keys from the previous serializer.
 
 Zero-byte terrain and entity MCA files are read as empty region placeholders without rewriting the archive. Nonempty files shorter than the complete 8 KiB header and invalid declared chunk records remain integrity errors. A declared region becoming empty while its header or chunk body is being read remains a source-change error; it is not silently omitted from an in-progress read.
+
+Mesh render keys use the same strict `canonicalJson` contract as resource keys, with a new mesh cache schema. Browser textures and overlay images share one abortable image loader; rasterization and GPU disposal remain specific to each consumer.
+
+Offline meshes and browser workers share `blockStateKey` and `blockTint`. Block-state keys escape property delimiters; mesh baking passes the actual biome and block state to tinting. The colors4 top-map generator identity and mesh cache schema invalidate outputs from the previous tint policy; rebake old top maps with the matching CLI.
 
 Atlas output is an immutable PNG plus `atlas-manifest-v1`; the manifest contains the PNG ArtifactRef and UV/animation/color metadata, without a URL. The retained explicit atlas POST uses the same generator and repository. Missing optional textures are explicit missing results; malformed PNG/JSON, I/O and integrity errors are errors.
 
@@ -33,7 +45,9 @@ Top-map payloads remain v6. New manifests carry a complete environment dependenc
 - `GET /api/resources/views/current?world=...`: ETag/no-cache head.
 - `POST /api/resources/resolve`: `{viewId, selectors}`, at most 128 typed selectors, with `validUntil`.
 - `GET/HEAD /api/resources/:viewId/:kind/:digest`: server-mode body membership, authorization, Range and validators. It is absent in public mode.
-- Overlay manifests require `dimension` and `viewId`; each media entry is `{version, resource}`. Retained authenticated library reads and current-binding media reads remain business APIs.
+- The viewer calls `resolveChunks` once and retains each reference with its view and `validUntil`. `readChunks` reads those exact references without another resolve; expired references must be explicitly resolved again. Changed views reject stale bytes.
+- World inventory, capabilities, coverage and top-map manifests share resource projections in both modes. The old world chunk/chunks/chunk-hashes and top-map tile body routes are removed; use resource selectors and resolved URLs. These reads retain no route or hash-field aliases.
+- Overlay manifests require `dimension` and `viewId`; each media entry is `{version, resource}`. One handler supplies validation, ETag/no-cache and conditional 304 responses in both delivery modes. Retained authenticated library reads and current-binding media reads remain business APIs.
 - `GET /api/admin/resources/status` and explicit publisher prepare/publish/verify/GC operations require the configured management role. A publication requires an expected parent head.
 
 ```sh

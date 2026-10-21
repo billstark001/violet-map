@@ -12,7 +12,11 @@ test('configuration validates values, names, secrets, and authentication combina
   assert.equal(load({ DEPLOYMENT_PROFILE: 'sync', STATIC_API_TOKEN: 'test' }).auth.mode, 'static');
   for (const value of ['', 'no', '2']) assert.throws(() => load({ USERS_ENABLED: value }), /boolean/);
   for (const value of ['', 'bad', '0', '65536', '1.2']) assert.throws(() => load({ PORT: value }), /integer/);
-  assert.equal(load({ REGION_CACHE_BYTES: '0' }).cache.regionBytes, 0);
+  assert.throws(() => load({ REGION_CACHE_BYTES: '0' }), /not an online server cache setting/);
+  assert.equal(load({}).resources.work.maxTasks, 16);
+  assert.equal(load({ RESOURCES_WORK_MAX_TASKS: '2' }).resources.work.maxTasks, 2);
+  assert.throws(() => load({ RESOURCES_WORK_MAX_TASKS: '0' }), /maxTasks/);
+  assert.throws(() => load({ CHUNK_READ_QUEUE: '1' }), /RESOURCES_WORK_MAX_TASKS/);
   assert.equal(load({}).limits.mediaImports, 1);
   assert.equal(load({ MEDIA_IMPORT_QUEUE: '0' }).limits.mediaQueue, 0);
   assert.throws(() => load({ MEDIA_IMPORT_CONCURRENCY: '0' }), /MEDIA_IMPORT_CONCURRENCY/);

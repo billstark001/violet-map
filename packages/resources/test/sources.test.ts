@@ -36,6 +36,37 @@ async function sourceFixture(t: { after(fn: () => Promise<unknown>): void }, reg
   return { storage, source };
 }
 
+test('source revisions invalidate cached terrain/entities without becoming content digests', async (t) => {
+  const { storage, source } = await sourceFixture(t, 64 * 1024);
+  const stat = storage.stat.bind(storage);
+  let revision = 1;
+  storage.stat = async (key) => {
+    const info = await stat(key);
+    return info ? { ...info, modifiedAt: revision } : null;
+  };
+  const terrain = new Uint8Array([10, 0, 0, 0]),
+    entities = new Uint8Array([10, 0, 0, 1]);
+  await storage.write('world/region/r.0.0.mca', savedRegion(terrain));
+  await storage.write('world/entities/r.0.0.mca', savedRegion(entities));
+  const read = async () => (await source.readChunks('world', 'minecraft:overworld', [{ cx: 0, cz: 0 }]))[0]!;
+  const first = await read(),
+    cached = await read();
+  assert.equal(cached.data, first.data);
+  assert.equal(cached.entities, first.entities);
+  assert.equal(first.terrainDigest, sha256(terrain));
+  assert.equal(first.entityDigest, sha256(entities));
+  revision++;
+  const same = await read();
+  assert.notEqual(same.sourceRevision, first.sourceRevision);
+  assert.equal(same.contentDigest, first.contentDigest);
+  await storage.write('world/entities/r.0.0.mca', savedRegion(new Uint8Array([10, 0, 0, 2])));
+  revision++;
+  const changed = await read();
+  assert.equal(changed.terrainDigest, first.terrainDigest);
+  assert.notEqual(changed.entityDigest, first.entityDigest);
+  assert.notEqual(changed.contentDigest, first.contentDigest);
+});
+
 test('bounded observations coalesce and detect changed bytes with unchanged weak file metadata', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: 10000 });
   const coordinator = new InvalidationCoordinator();
@@ -125,10 +156,13 @@ test('declared but corrupt source regions and chunks never become logical missin
   view.setUint32(8192, 5000);
   region[8196] = 3;
   await storage.replace(key, region);
-  await assert.rejects(source.getChunkNbtWithMeta('world', 'minecraft:overworld', 0, 0), {
-    code: 'RESOURCE_INTEGRITY_FAILED',
-  });
-  assert.equal(await source.getChunkNbtWithMeta('world', 'minecraft:overworld', 1, 0), null);
+  await assert.rejects(
+    source.readChunks('world', 'minecraft:overworld', [{ cx: 0, cz: 0 }]).then((rows) => rows[0] ?? null),
+    {
+      code: 'RESOURCE_INTEGRITY_FAILED',
+    },
+  );
+  assert.equal((await source.readChunks('world', 'minecraft:overworld', [{ cx: 1, cz: 0 }]))[0] ?? null, null);
 });
 
 test('zero-byte terrain and entity regions are empty, preserve saved neighbors and can receive chunks later', async (t) => {
@@ -157,8 +191,8 @@ test('zero-byte terrain and entity regions are empty, preserve saved neighbors a
       );
       assert.equal(await source.readRegionFile(empty), null);
       assert.equal(await source.readRegionFile(entities), null);
-      assert.equal(await source.getChunkNbtWithMeta('world', 'minecraft:overworld', 0, 0), null);
-      const saved = await source.getChunkNbtWithMeta('world', 'minecraft:overworld', 32, 0);
+      assert.equal((await source.readChunks('world', 'minecraft:overworld', [{ cx: 0, cz: 0 }]))[0] ?? null, null);
+      const saved = (await source.readChunks('world', 'minecraft:overworld', [{ cx: 32, cz: 0 }]))[0] ?? null;
       assert.deepEqual(saved?.data, terrainNbt);
       assert.equal(saved?.entities, undefined);
       assert.equal((await storage.stat(empty))?.size, 0);
@@ -166,15 +200,24 @@ test('zero-byte terrain and entity regions are empty, preserve saved neighbors a
 
       await storage.replace(entities, savedRegion(entityNbt));
       source.invalidateStoredFile(entities);
-      assert.deepEqual((await source.getChunkNbtWithMeta('world', 'minecraft:overworld', 32, 0))?.entities, entityNbt);
+      assert.deepEqual(
+        ((await source.readChunks('world', 'minecraft:overworld', [{ cx: 32, cz: 0 }]))[0] ?? null)?.entities,
+        entityNbt,
+      );
       await storage.replace(empty, savedRegion(terrainNbt));
       source.invalidateStoredFile(empty);
-      assert.deepEqual((await source.getChunkNbtWithMeta('world', 'minecraft:overworld', 0, 0))?.data, terrainNbt);
+      assert.deepEqual(
+        ((await source.readChunks('world', 'minecraft:overworld', [{ cx: 0, cz: 0 }]))[0] ?? null)?.data,
+        terrainNbt,
+      );
       await storage.replace(entities, new Uint8Array(100));
       source.invalidateStoredFile(entities);
-      await assert.rejects(source.getChunkNbtWithMeta('world', 'minecraft:overworld', 32, 0), {
-        code: 'RESOURCE_INTEGRITY_FAILED',
-      });
+      await assert.rejects(
+        source.readChunks('world', 'minecraft:overworld', [{ cx: 32, cz: 0 }]).then((rows) => rows[0] ?? null),
+        {
+          code: 'RESOURCE_INTEGRITY_FAILED',
+        },
+      );
     });
   }
 });
@@ -202,9 +245,12 @@ test('declared terrain and entity regions becoming empty during reads remain sou
           }
           return stat(filePath);
         });
-        await assert.rejects(source.getChunkNbtWithMeta('world', 'minecraft:overworld', 0, 0), {
-          code: 'SOURCE_SNAPSHOT_CHANGED',
-        });
+        await assert.rejects(
+          source.readChunks('world', 'minecraft:overworld', [{ cx: 0, cz: 0 }]).then((rows) => rows[0] ?? null),
+          {
+            code: 'SOURCE_SNAPSHOT_CHANGED',
+          },
+        );
       });
     }
   }

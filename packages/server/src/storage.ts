@@ -68,10 +68,3 @@ export async function createStorageMounts(config: ServerConfig, onWorldMutation?
     ...(config.features.contentReads ? { content: await mount('content'), blobs: await mount('blobs') } : {}),
   };
 }
-
-/** Existing public factory returns the worlds mount. */
-export async function createStorage(config: ServerConfig) {
-  const worlds = (await createStorageMounts(config)).worlds;
-  if (!worlds) throw new Error('world source storage is disabled by resource roles');
-  return worlds;
-}

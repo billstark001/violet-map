@@ -8,7 +8,7 @@ import { prepareTopMapRegion, topMapAction, topMapParameters } from './topMapDep
 
 export function createTopMapSource(
   reader: ObjectReader,
-  source: () => Pick<WorldSource, 'getChunkNbtWithMeta'>,
+  source: () => Pick<WorldSource, 'readChunks'>,
   environment: () => Promise<string>,
   dimensions: () => Promise<import('@violet-map/core/domain').DimensionMap>,
 ) {
@@ -69,12 +69,5 @@ export function createTopMapSource(
     verifyArtifact(ref, bytes);
     return bytes;
   }
-  async function getWorldCapabilities(world: string) {
-    const manifest = await getTopMapManifest(world);
-    const dimensions = Object.fromEntries(
-      Object.entries(manifest?.dimensions ?? {}).map(([id, value]) => [id, { hasTopMap: value.hasTopMap }]),
-    );
-    return { world, dimensions, hasTopMap: Object.values(dimensions).some((d) => d.hasTopMap) };
-  }
-  return { getTopMapManifest, readTopMapTile, getWorldCapabilities };
+  return { getTopMapManifest, readTopMapTile };
 }

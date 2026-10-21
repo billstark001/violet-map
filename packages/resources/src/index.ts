@@ -16,3 +16,4 @@ export * from './publicTarget.js';
 export * from './singleflight.js';
 export * from './snapshotGate.js';
 export * from './sourceSnapshot.js';
+export * from './engineTypes.js';

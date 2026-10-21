@@ -1,10 +1,10 @@
 import type { RenderLayer } from '@violet-map/core/assets';
-import { type ChunkCoverage, type ChunkHashPayload, type ChunkPayload } from '@violet-map/core/contracts';
+import { type ChunkCoverage, type ChunkPayload } from '@violet-map/core/contracts';
 import type { DimensionDef } from '@violet-map/core/domain';
 import type { MeshBuffers } from '@violet-map/render';
 import { meshByteLength, SECTION_VISIBILITY_ALL } from '@violet-map/render';
 import * as THREE from 'three';
-import { fetchChunkHashes, fetchChunks, fetchChunkSourceCoverage } from '../api';
+import { resolveChunks, readChunks, fetchChunkSourceCoverage, type ResolvedChunk } from '../api';
 import { debugLog, isDebugLoggingEnabled } from '../logger';
 import { getCachedFull, getCachedLod, putCachedFull, putCachedLod, type MeshCacheKeyParts } from '../meshCache';
 import {
@@ -106,9 +106,7 @@ export interface ChunkEntryDiagnosticSnapshot {
   cx: number;
   cz: number;
   state: ChunkState;
-  source: ChunkEntry['source'];
-  sourceHash: string | null;
-  nbtHash: string | null;
+  contentDigest: string | null;
   biome: string;
   surfaceY: number;
   displayed: ChunkEntry['displayed'];
@@ -257,9 +255,8 @@ interface ChunkEntry extends ChunkSchedulerEntry {
   meshBytes: number;
   biome: string;
   surfaceY: number;
-  sourceHash: string | null;
-  nbtHash: string | null;
-  source: 'region' | 'chunk' | null;
+  contentDigest: string | null;
+  resolution?: ResolvedChunk;
 }
 
 export interface ChunkManagerOptions {
@@ -544,9 +541,7 @@ export class ChunkManager {
           cx: entry.cx,
           cz: entry.cz,
           state: entry.state,
-          source: entry.source,
-          sourceHash: entry.sourceHash,
-          nbtHash: entry.nbtHash,
+          contentDigest: entry.contentDigest,
           biome: entry.biome,
           surfaceY: entry.surfaceY,
           displayed: entry.displayed,
@@ -756,9 +751,7 @@ export class ChunkManager {
       meshBytes: 0,
       biome: 'minecraft:plains',
       surfaceY: 64,
-      sourceHash: null,
-      nbtHash: null,
-      source: null,
+      contentDigest: null,
       lastWantedAt: now,
       lastTier: 6,
       lastScore: Infinity,
@@ -941,7 +934,7 @@ export class ChunkManager {
   }
 
   private cacheParts(e: ChunkEntry): MeshCacheBaseParts {
-    const contentHash = this.contentHash(e);
+    const contentHash = e.contentDigest;
     if (!contentHash) throw new Error(`missing content hash for mesh cache key: ${e.key}`);
     return {
       world: `${this.opts.sourceScope}:${this.opts.world}`,
@@ -951,14 +944,6 @@ export class ChunkManager {
       cz: e.cz,
       contentKey: contentHash,
     };
-  }
-
-  private contentHash(e: ChunkEntry): string | null {
-    return e.nbtHash ?? e.sourceHash;
-  }
-
-  private payloadContentHash(payload: Pick<ChunkHashPayload, 'hash' | 'fileHash' | 'nbtHash'>): string | null {
-    return payload.nbtHash ?? null;
   }
 
   private invalidatePendingMeshes(e: ChunkEntry) {
@@ -1012,7 +997,7 @@ export class ChunkManager {
   }
 
   private neighborhoodCacheParts(e: ChunkEntry): CachePartsResult | null {
-    if (!this.contentHash(e)) return null;
+    if (!e.contentDigest) return null;
     const parts: string[] = [];
     let stable = true;
     for (let dz = -1; dz <= 1; dz++) {
@@ -1022,7 +1007,7 @@ export class ChunkManager {
           parts.push('unknown');
           stable = false;
         } else if (n.state === 'absent' || n.state === 'error') parts.push('missing');
-        else if (n.state === 'stored' && this.contentHash(n)) parts.push(`hash:${this.contentHash(n)}`);
+        else if (n.state === 'stored' && n.contentDigest) parts.push(`hash:${n.contentDigest}`);
         else {
           parts.push('unknown');
           stable = false;
@@ -1146,7 +1131,7 @@ export class ChunkManager {
       this.requeueMesh(e, 'lod', step, 4);
       return false;
     }
-    if (!this.contentHash(e)) {
+    if (!e.contentDigest) {
       this.queueHash(e.key);
       return false;
     }
@@ -1429,9 +1414,8 @@ export class ChunkManager {
   ) {
     e.state = state;
     if (clearSource) {
-      e.sourceHash = null;
-      e.nbtHash = null;
-      e.source = null;
+      e.contentDigest = null;
+      e.resolution = undefined;
     }
     this.clearReadyFlags(e);
     this.invalidatePendingMeshes(e);
@@ -1453,7 +1437,7 @@ export class ChunkManager {
     if (e.state !== 'stored') return;
     if (e.displayed !== 'lod' || e.lastTargetStep === 1 || e.dirty) return;
     if (e.displayedLodStep < this.lodReleaseStep) return;
-    if (e.pendingFull || e.pendingLod || !this.contentHash(e)) return;
+    if (e.pendingFull || e.pendingLod || !e.contentDigest) return;
     this.releaseWorkerData(e);
   }
 
@@ -1464,7 +1448,7 @@ export class ChunkManager {
     // replacement. Releasing it here forced an unnecessary fetch before every
     // far full -> LOD transition.
     if (e.lastTargetStep !== 1) return;
-    if (e.pendingFull || e.pendingLod || !this.contentHash(e)) return;
+    if (e.pendingFull || e.pendingLod || !e.contentDigest) return;
     this.releaseWorkerData(e);
   }
 
@@ -1478,7 +1462,7 @@ export class ChunkManager {
   private releaseWorkerData(e: ChunkEntry): boolean {
     if (e.state !== 'stored') return false;
     if (performance.now() < e.workerKeepUntil) return false;
-    if (e.pendingFull || e.pendingLod || !this.contentHash(e)) return false;
+    if (e.pendingFull || e.pendingLod || !e.contentDigest) return false;
     this.broadcast({ type: 'drop', key: e.key });
     e.workerReadyMask = 0;
     e.state = 'hashed';
@@ -1510,7 +1494,7 @@ export class ChunkManager {
     const budget = this.maxWorkerResidentColumns();
     if (resident.length <= budget) return;
     const victims = resident
-      .filter((e) => !e.pendingFull && !e.pendingLod && this.displaySatisfiesLastTarget(e) && !!this.contentHash(e))
+      .filter((e) => !e.pendingFull && !e.pendingLod && this.displaySatisfiesLastTarget(e) && !!e.contentDigest)
       .sort((a, b) => b.lastTier - a.lastTier || a.lastWantedAt - b.lastWantedAt || b.lastScore - a.lastScore);
     let count = resident.length;
     for (const e of victims) {
@@ -1529,7 +1513,7 @@ export class ChunkManager {
   }
 
   async refreshResources() {
-    const rows = await fetchChunkHashes(
+    const rows = await resolveChunks(
       this.opts.world,
       this.opts.dimension,
       [...this.chunks.values()].map((e) => ({ cx: e.cx, cz: e.cz })),
@@ -1543,32 +1527,31 @@ export class ChunkManager {
         this.markUnavailable(entry, 'absent', true);
         continue;
       }
-      if (row.nbtHash !== this.contentHash(entry)) {
+      entry.resolution = row;
+      if (row.contentDigest !== entry.contentDigest) {
         this.resetAfterSourceChange(entry);
-        entry.nbtHash = row.nbtHash ?? null;
-        entry.sourceHash = row.nbtHash ?? null;
+        entry.contentDigest = row.contentDigest ?? null;
         entry.state = 'hashed';
         this.queueFetch(entry.key);
       }
     }
     await this.loadChunkSourceCoverage();
   }
-  private handleFetchedHash(payload: ChunkHashPayload) {
+  private handleFetchedResolution(payload: ResolvedChunk) {
     const key = this.key(payload.cx, payload.cz);
     const e = this.chunks.get(key);
     if (!e || (e.state !== 'checking' && e.state !== 'hashed' && e.state !== 'fetching')) return;
-    if (!payload.hash || payload.missing) {
+    if (payload.missing) {
       this.markUnavailable(e, 'absent', true);
       return;
     }
-    const oldContentHash = this.contentHash(e);
-    const newContentHash = this.payloadContentHash(payload);
+    const oldContentHash = e.contentDigest;
+    const newContentHash = payload.contentDigest ?? null;
     if (oldContentHash && newContentHash && oldContentHash !== newContentHash) {
       this.resetAfterSourceChange(e);
     }
-    e.sourceHash = payload.hash;
-    e.nbtHash = payload.nbtHash ?? null;
-    e.source = payload.source ?? null;
+    e.contentDigest = payload.contentDigest ?? null;
+    e.resolution = payload;
     if (e.state !== 'fetching') e.state = 'hashed';
   }
 
@@ -1583,7 +1566,7 @@ export class ChunkManager {
     const opId = this.beginActiveOperation('hashFetch', `${entries.length} hashes`, this.hashFetchProfile);
     try {
       const seen = new Set<string>();
-      const payloads = await fetchChunkHashes(
+      const payloads = await resolveChunks(
         this.opts.world,
         this.opts.dimension,
         entries.map((e) => ({ cx: e.cx, cz: e.cz })),
@@ -1593,8 +1576,8 @@ export class ChunkManager {
       let missing = 0;
       for (const payload of payloads) {
         seen.add(this.key(payload.cx, payload.cz));
-        if (!payload.hash || payload.missing) missing++;
-        this.handleFetchedHash(payload);
+        if (payload.missing) missing++;
+        this.handleFetchedResolution(payload);
       }
       for (const e of entries) {
         if (!seen.has(this.key(e.cx, e.cz)) && e.state === 'checking') this.markUnavailable(e, 'absent', true);
@@ -1625,19 +1608,16 @@ export class ChunkManager {
       this.markUnavailable(e, 'absent', true);
       return;
     }
-    const sourceHash = payload.nbtHash ?? null;
-    const contentHash = this.payloadContentHash(payload);
+    const contentHash = payload.contentDigest ?? null;
     if (!contentHash) {
       this.markUnavailable(e, 'error', false, false);
       return;
     }
-    const oldContentHash = this.contentHash(e);
+    const oldContentHash = e.contentDigest;
     if (oldContentHash && oldContentHash !== contentHash) {
       this.resetAfterSourceChange(e);
     }
-    e.sourceHash = sourceHash ?? contentHash;
-    e.nbtHash = payload.nbtHash ?? null;
-    e.source = payload.source ?? e.source;
+    e.contentDigest = payload.contentDigest ?? null;
     e.state = 'decoding';
     e.workerReadyMask = 0;
     this.chunkBytesFetched += payload.data.byteLength;
@@ -1663,10 +1643,19 @@ export class ChunkManager {
     const opId = this.beginActiveOperation('chunkFetch', `${entries.length} chunks`, this.chunkFetchProfile);
     try {
       const seen = new Set<string>();
-      const payloads = await fetchChunks(
-        this.opts.world,
-        this.opts.dimension,
-        entries.map((e) => ({ cx: e.cx, cz: e.cz })),
+      const expired = entries.filter((e) => !e.resolution || e.resolution.validUntil <= Date.now());
+      if (expired.length) {
+        const refreshed = await resolveChunks(
+          this.opts.world,
+          this.opts.dimension,
+          expired.map((e) => ({ cx: e.cx, cz: e.cz })),
+          this.requests.signal,
+        );
+        if (this.disposed) return;
+        for (const row of refreshed) this.handleFetchedResolution(row);
+      }
+      const payloads = await readChunks(
+        entries.filter((e) => e.state === 'fetching').map((e) => e.resolution!),
         this.requests.signal,
       );
       if (this.disposed) return;

@@ -1,9 +1,10 @@
 import { artifactResponse } from '../resourceHttp.js';
+import { readRequestJson } from '../httpBody.js';
 import { resourceFailure } from '../resourceErrors.js';
 import type { RouteContext } from './context.js';
 
 export function mountAssets(context: RouteContext) {
-  const { app, MAX_ATLAS_TEXTURES, MAX_ATLAS_REQUEST_BYTES, readLimitedBody } = context;
+  const { app, MAX_ATLAS_TEXTURES, MAX_ATLAS_REQUEST_BYTES } = context;
   app.get('/api/assets/bundle', async (c) => {
     try {
       const body = await context.resources.businessResource({ kind: 'asset-bundle' });
@@ -13,15 +14,9 @@ export function mountAssets(context: RouteContext) {
     }
   });
   app.post('/api/assets/atlas', async (c) => {
-    const bytes = await readLimitedBody(c.req.raw, MAX_ATLAS_REQUEST_BYTES);
-    if (!bytes) return c.json({ error: 'request body too large' }, 413);
-    let body: { ids?: unknown };
-    try {
-      body = JSON.parse(new TextDecoder().decode(bytes)) as { ids?: unknown };
-    } catch {
-      return c.json({ error: 'invalid JSON' }, 400);
-    }
-    if (!Array.isArray(body.ids)) return c.json({ error: 'ids must be an array' }, 400);
+    const body = await readRequestJson(c, MAX_ATLAS_REQUEST_BYTES);
+    if (!body || typeof body !== 'object' || !('ids' in body) || !Array.isArray(body.ids))
+      return c.json({ error: 'ids must be an array' }, 400);
     if (body.ids.length > MAX_ATLAS_TEXTURES)
       return c.json({ error: `at most ${MAX_ATLAS_TEXTURES} texture ids are allowed` }, 413);
     const ids: string[] = [];

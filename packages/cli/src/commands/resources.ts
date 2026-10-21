@@ -79,26 +79,26 @@ export async function resourceCommand(
   try {
     switch (operation) {
       case 'prepare': {
-        const manifest = await services.resources.prepare();
+        const manifest = await services.resources.publication.prepare();
         return await preparedResult(manifest);
       }
       case 'publish':
-        return await services.resources.publish(
+        return await services.resources.publication.publish(
           options.expectedHead === 'none' ? null : options.expectedHead,
           prepared,
         );
       case 'status':
         return await services.resources.status();
       case 'verify':
-        return await services.resources.verify();
+        return await services.resources.publication.verify();
       case 'gc':
-        return await services.resources.gc();
+        return await services.resources.publication.gc();
       case 'recover':
-        return await services.resources.recover(true);
+        return await services.resources.publication.recover(true);
       case 'reindex':
         return {
           originals: services.content ? await services.content.verifyRetainedMedia() : 0,
-          actions: await services.resources.reindex(),
+          actions: await services.resources.publication.reindex(),
         };
     }
   } finally {

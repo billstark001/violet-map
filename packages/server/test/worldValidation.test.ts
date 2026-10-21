@@ -29,14 +29,14 @@ test('invalid world names and create inputs fail before any backend access', asy
   };
   const config = loadServerConfig({ env: { DEPLOYMENT_PROFILE: 'public' }, cwd: '/tmp' });
   const top = createTopMapService(storage, config);
-  const world = createWorldStore(storage, config);
+  const world = createWorldStore(storage, config.minecraft.version);
   for (const name of ['.', '..', 'a/b', '']) {
     for (const operation of [
       () => world.deleteWorld(name),
       () => world.createWorld(name),
       () => world.worldManifest(name),
       () => world.saveWorldFile(name, 'file', new Uint8Array()),
-      () => world.getChunkMetadata(name, 'overworld', 0, 0),
+      () => world.inspectChunks(name, 'overworld', [{ cx: 0, cz: 0 }]).then((rows) => rows[0] ?? null),
       () => world.deleteChunks(name, 'overworld', []),
       () => top.getTopMapManifest(name),
     ])

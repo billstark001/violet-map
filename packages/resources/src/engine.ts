@@ -1,4 +1,8 @@
-import { collectTextureIds } from '@violet-map/core/assets';
+import type { ResourceEngineConfig, ResourceEngineMounts, DynamicSources, ContentSource } from './engineTypes.js';
+import { resourceJsonBytes, projectionKey } from './engineSupport.js';
+import { ResourceGenerator } from './generator.js';
+import { ResourceViewSessions, type View } from './viewSessions.js';
+import { ResourcePublisher } from './publisher.js';
 import { LruCache } from '@violet-map/core/cache';
 import type {
   AtlasDocument,
@@ -8,12 +12,9 @@ import type {
   WorldCapabilities,
   WorldInfo,
 } from '@violet-map/core/contracts';
-import { isWorldName } from '@violet-map/core/domain';
 import type { OverlayManifest } from '@violet-map/core/overlays';
 import {
   canonicalJson,
-  mediaArtifact,
-  parseArtifactRef,
   parseResourceSelector,
   ResourceError,
   type ArtifactRef,
@@ -25,112 +26,33 @@ import {
   type ResourceViewHead,
 } from '@violet-map/core/resources';
 import { ContentAddressedStorage, publicObjectKey, sha256 } from '@violet-map/storage';
-import { createHash, randomUUID } from 'node:crypto';
-import type { AssetPack } from './assetPack.js';
-import type { ArtifactRead, BlobRepository, PreparedResource } from './blobRepository.js';
+import { createHash } from 'node:crypto';
+import type { BlobRepository } from './blobRepository.js';
 import { ByteBudget } from './budget.js';
 import { ResourceDelivery } from './delivery.js';
-import { collectPublicationGarbage } from './gc.js';
 import type { InvalidationCoordinator } from './invalidation.js';
-import { actionKey } from './keys.js';
-import { parsePublicationManifest, regionPage, selectorKey, type PublicationStore } from './publication.js';
+import { selectorKey, type PublicationStore } from './publication.js';
 import type { PublicTarget } from './publicTarget.js';
 import { Singleflight } from './singleflight.js';
 import { SnapshotGate, type SnapshotToken } from './snapshotGate.js';
 import { BoundedSource } from './sourceSnapshot.js';
 
-export interface ResourceEngineConfig {
-  resources: {
-    roles: ('serve' | 'publish')[];
-    cache: { metadataBytes: number };
-    work: { handoffMs: number };
-    source: { scope: string; consistency: 'snapshot' | 'bounded'; revalidateMs: number };
-    publication: { debounceMs: number; maxDelayMs: number; retainedMs: number };
-    delivery: { mode: 'server' | 'public'; publicBaseUrl: string | null };
-  };
-  sourceIdentity: string;
-}
-
-export interface ResourceEngineMounts {
-  metrics?(): unknown;
-  worlds?: import('@violet-map/core/storage').ObjectReader;
-  resourceTarget?: import('@violet-map/core/storage').ObjectReader;
-}
-
-export interface GameDataSource {
-  buildBlockInfo(): Promise<import('@violet-map/core/assets').BlockInfoMap>;
-  readBiomes(): Promise<import('@violet-map/core/domain').BiomeMap>;
-  readDimensions(): Promise<import('@violet-map/core/domain').DimensionMap>;
-}
-
-export interface TopMapSource {
-  getTopMapManifest(world: string): Promise<import('@violet-map/core/formats/top-map').TopMapManifest | null>;
-  readTopMapTile(world: string, dim: string, rx: number, rz: number): Promise<Uint8Array | null>;
-}
-
-export interface ContentSource {
-  openPublicMedia(
-    mapId: string,
-    dimension: string,
-    assetId: string,
-    versionId: string,
-  ): Promise<{
-    version: import('@violet-map/core/overlays').MediaVersion;
-    read(range?: { start: number; end: number }): Promise<ArtifactRead>;
-  }>;
-  snapshot(mapId: string, dimension: string): Promise<import('@violet-map/core/overlays').OverlaySnapshot>;
-  listMaps(): Promise<import('@violet-map/core/overlays').MapDocument[]>;
-}
-
-export interface DynamicSources {
-  assets: AssetPack;
-  worldStore: Pick<
-    import('./sources/worldChunks.js').WorldSource,
-    'listWorlds' | 'listChunkSourceCoverage' | 'getChunkNbtWithMeta' | 'invalidateStoredFile'
-  >;
-  topMap: TopMapSource;
-  gameData: GameDataSource;
-}
-
-interface View {
-  head: ResourceViewHead;
-  createdAt: number;
-  expiresAt?: number;
-  world?: string;
-  publication?: PublicationManifest;
-}
-
-const bytesJson = (value: unknown) => new TextEncoder().encode(canonicalJson(JSON.parse(JSON.stringify(value))));
-
-const projectionKey = (world: string, dimension: string) => canonicalJson([world, dimension]);
-
 const family = (s: ResourceSelector): ResourceKind => (s.kind === 'atlas' ? 'atlas-manifest' : s.kind);
 
 export class ResourceEngine {
+  private readonly generator: ResourceGenerator;
+  private readonly sessions: ResourceViewSessions;
+  readonly publication: ResourcePublisher;
   private bounded?: BoundedSource;
   private observationTimer?: ReturnType<typeof setTimeout>;
   private closed = false;
-  private publicationTimer?: ReturnType<typeof setTimeout>;
-  private dirtySince = 0;
-  private readonly bootId = randomUUID();
-  private readonly operations = new Singleflight(16);
-  private readonly views = new Map<string, View>();
+  private readonly operations: Singleflight;
   private readonly members = new Map<string, { entry?: PublicationEntry; validUntil: number; release(): void }>();
   private readonly memberMetadata: ByteBudget;
   private readonly pages: LruCache<string, import('@violet-map/core/resources').RegionResourcePage>;
-  private readonly textureSets = new Map<string, { ids: string[]; until: number; release(): void }>();
-  private readonly generationLeases = new WeakMap<PublicationEntry, () => void>();
-  private previousPublication?: PublicationManifest;
   private readonly sourceGate = new SnapshotGate();
   private root?: { generation: number; digest: string; entries: PublicationEntry[] };
   private readonly delivery: ResourceDelivery;
-  readonly state = {
-    publication: 'ready' as 'ready' | 'pending' | 'failed',
-    error: undefined as string | undefined,
-    sourceObservedAt: 0,
-    publicationLagMs: 0,
-    requiresSourceSnapshot: false,
-  };
   constructor(
     readonly config: ResourceEngineConfig,
     readonly mounts: ResourceEngineMounts,
@@ -141,9 +63,49 @@ export class ResourceEngine {
     private readonly dynamic: DynamicSources | undefined,
     private readonly content: ContentSource | undefined,
   ) {
+    // Publication and render-root coordination can enclose one admitted generator.
+    // Reserve their two slots separately from the repository's actual task limit.
+    this.operations = new Singleflight(Math.min(Number.MAX_SAFE_INTEGER, config.resources.work.maxTasks + 2));
     const budget = config.resources.cache.metadataBytes;
     this.memberMetadata = new ByteBudget(Math.floor(budget / 4));
-    this.pages = new LruCache({ maxEntries: 16, maxWeight: budget / 4, weightOf: (p) => bytesJson(p).byteLength * 4 });
+    this.pages = new LruCache({
+      maxEntries: 16,
+      maxWeight: budget / 4,
+      weightOf: (p) => resourceJsonBytes(p).byteLength * 4,
+    });
+    this.generator = new ResourceGenerator(
+      repository,
+      dynamic,
+      content,
+      this.sourceGate,
+      this.operations,
+      this.memberMetadata,
+    );
+    this.sessions = new ResourceViewSessions(
+      config,
+      mounts,
+      coordinator,
+      store,
+      this.sourceGate,
+      (token) => this.renderRoot(token),
+      (entry) => this.generator.discard(entry),
+    );
+    this.publication = new ResourcePublisher({
+      config,
+      mounts,
+      coordinator,
+      repository,
+      store,
+      target,
+      dynamic,
+      content,
+      sourceGate: this.sourceGate,
+      operations: this.operations,
+      generator: this.generator,
+      sessions: this.sessions,
+      renderRoot: (token, previous) => this.renderRoot(token, previous),
+      rootEntries: () => this.root?.entries ?? [],
+    });
     if (config.resources.source.consistency === 'bounded' && dynamic)
       this.bounded = new BoundedSource(
         coordinator,
@@ -152,9 +114,9 @@ export class ResourceEngine {
           try {
             const hash = createHash('sha256');
             hash.update(await dynamic.assets.sourceDigest());
-            hash.update(bytesJson(await dynamic.gameData.buildBlockInfo()));
-            hash.update(bytesJson(await dynamic.gameData.readBiomes()));
-            hash.update(bytesJson(await dynamic.gameData.readDimensions()));
+            hash.update(resourceJsonBytes(await dynamic.gameData.buildBlockInfo()));
+            hash.update(resourceJsonBytes(await dynamic.gameData.readBiomes()));
+            hash.update(resourceJsonBytes(await dynamic.gameData.readDimensions()));
             const files = await mounts.worlds!.list();
             if (files.length > Math.floor(budget / 1024))
               throw new ResourceError('RESOURCE_BUSY', 'source inventory exceeds metadata budget');
@@ -193,7 +155,7 @@ export class ResourceEngine {
     const before = this.coordinator.generation;
     try {
       await this.bounded.validate();
-      this.state.sourceObservedAt = this.bounded.sourceObservedAt;
+      this.publication.state.sourceObservedAt = this.bounded.sourceObservedAt;
       if (before !== this.coordinator.generation) {
         this.root = undefined;
         this.dynamic!.assets.clearTextureAtlasCache();
@@ -204,7 +166,7 @@ export class ResourceEngine {
         this.observationTimer = setTimeout(() => {
           this.observationTimer = undefined;
           void this.observe().catch((error) => {
-            this.state.error = error instanceof ResourceError ? error.code : 'RESOURCE_BACKEND_UNAVAILABLE';
+            this.publication.state.error = error instanceof ResourceError ? error.code : 'RESOURCE_BACKEND_UNAVAILABLE';
           });
         }, this.config.resources.source.revalidateMs);
         this.observationTimer.unref();
@@ -214,192 +176,35 @@ export class ResourceEngine {
 
   async close() {
     this.closed = true;
-    if (this.publicationTimer) clearTimeout(this.publicationTimer);
+    this.publication.close();
     if (this.observationTimer) clearTimeout(this.observationTimer);
     this.observationTimer = undefined;
     await this.operations.close();
     await this.bounded?.drain();
     for (const value of this.members.values()) value.release();
     this.members.clear();
-    for (const value of this.textureSets.values()) value.release();
-    this.textureSets.clear();
-  }
-  private schedulePublication() {
-    if (this.closed || this.state.requiresSourceSnapshot || !this.config.resources.roles.includes('publish')) return;
-    this.dirtySince ||= Date.now();
-    if (this.publicationTimer) clearTimeout(this.publicationTimer);
-    const options = this.config.resources.publication;
-    const delay = Math.max(0, Math.min(options.debounceMs, options.maxDelayMs - (Date.now() - this.dirtySince)));
-    this.publicationTimer = setTimeout(() => {
-      this.publicationTimer = undefined;
-      this.dirtySince = 0;
-      if (this.state.requiresSourceSnapshot) return;
-      void this.publish().catch(async (error) => {
-        this.state.publication = 'failed';
-        this.state.error = error instanceof ResourceError ? error.code : 'RESOURCE_BACKEND_UNAVAILABLE';
-        try {
-          await this.store?.pending('failed', this.state.error, this.state.requiresSourceSnapshot);
-        } catch {
-          this.state.error = 'RESOURCE_BACKEND_UNAVAILABLE';
-        }
-      });
-    }, delay);
-    this.publicationTimer.unref();
-  }
-  async resumePublications() {
-    if (!this.config.resources.roles.includes('publish') || !this.store) return;
-    // Reconcile even if a crash happened after a business head commit but
-    // before its pending marker. A stable closure remains a zero-write no-op.
-    const pending = await this.store.publicationState();
-    this.state.requiresSourceSnapshot = pending?.requiresSourceSnapshot === true;
-    if (pending || (await this.store.head())) {
-      this.state.publication = 'pending';
-      this.schedulePublication();
-    }
+    this.generator.close();
+    this.sessions.close();
   }
   invalidate() {
     this.coordinator.invalidate();
     this.root = undefined;
-    this.state.sourceObservedAt = Date.now();
+    this.publication.state.sourceObservedAt = Date.now();
     if (this.config.resources.roles.includes('publish') || this.config.resources.delivery.mode === 'public')
-      this.state.publication = 'pending';
+      this.publication.state.publication = 'pending';
   }
   private repo(): BlobRepository {
     if (!this.repository) throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'dynamic resource generation is disabled');
     return this.repository;
   }
-  private async sourceScope(world?: string): Promise<string> {
-    if (!world) return sha256(canonicalJson({ scope: this.config.resources.source.scope }));
-    if (!isWorldName(world)) throw new TypeError('invalid world');
-    const identity = await this.mounts.worlds?.read(`${world}/.violet-map/identity.json`);
-    let archive: string | null = null;
-    if (identity) {
-      const value = JSON.parse(new TextDecoder().decode(identity));
-      if (value.schema !== 1 || typeof value.id !== 'string')
-        throw new ResourceError('SOURCE_REVISION_UNAVAILABLE', 'invalid world archive identity');
-      archive = value.id;
-    }
-    return sha256(
-      canonicalJson({
-        scope: this.config.resources.source.scope,
-        world,
-        archive,
-        locator: archive ? null : this.config.sourceIdentity,
-      }),
-    );
-  }
   async head(world?: string): Promise<ResourceViewHead> {
     await this.observe();
-    return this.config.resources.delivery.mode === 'public'
-      ? this.snapshotHead(world)
-      : this.sourceGate.read((token) => this.snapshotHead(world, token));
+    return this.sessions.head(world);
   }
-  private async snapshotHead(world: string | undefined, token?: SnapshotToken): Promise<ResourceViewHead> {
-    if (!this.config.resources.roles.includes('serve') && !this.config.resources.roles.includes('publish'))
-      throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'resource role disabled');
-    if (this.config.resources.delivery.mode === 'public') {
-      const head = await this.store?.head();
-      if (!head) throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'no complete resource publication exists');
-      let view = this.views.get(head.publicationId);
-      if (!view) {
-        const publication = await this.store!.manifest(head);
-        view = {
-          head: {
-            schemaVersion: 1,
-            viewId: head.publicationId,
-            mode: 'public',
-            sourceScope: publication.sourceScope,
-            generation: head.revision,
-            renderRoot: publication.renderRoot,
-            publicationId: head.publicationId,
-          },
-          publication,
-          createdAt: Date.now(),
-        };
-        this.retainView(head.publicationId, { ...view, publication: undefined });
-      }
-      if (world) {
-        if (!isWorldName(world)) throw new TypeError('invalid world');
-        const publication = view.publication ?? (await this.store!.manifest(head));
-        return {
-          ...view.head,
-          sourceScope:
-            publication.sourceScopes[world] ??
-            (() => {
-              throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'world is not part of this publication');
-            })(),
-        };
-      }
-      return view.head;
-    }
-    const root = await this.renderRoot(token);
-    for (const entry of root.entries) this.discardPreparedBytes(entry);
-    const sourceScope = await this.sourceScope(world);
-    const viewId = sha256(
-      canonicalJson({
-        boot: this.bootId,
-        sourceScope,
-        generation: this.coordinator.generation,
-        renderRoot: root.digest,
-        session: Math.floor(Date.now() / 86400000),
-      }),
-    );
-    const head: ResourceViewHead = {
-      schemaVersion: 1,
-      viewId,
-      mode: 'server',
-      sourceScope,
-      generation: this.coordinator.generation,
-      renderRoot: root.digest,
-    };
-    this.retainView(viewId, { head, world, createdAt: Date.now() });
-    return head;
+  private async renderRoot(token?: SnapshotToken, previous?: PublicationManifest) {
+    return this.sourceGate.read((snapshot) => this.renderRootSnapshot(snapshot, previous), token);
   }
-  private retainView(id: string, view: View) {
-    const existing = this.views.get(id);
-    if (existing) {
-      existing.expiresAt = Date.now() + this.config.resources.work.handoffMs;
-      return;
-    }
-    view.expiresAt = Date.now() + this.config.resources.work.handoffMs;
-    for (const [key, value] of this.views)
-      if (Date.now() - value.createdAt > 86400000 || (value.expiresAt ?? 0) < Date.now()) this.views.delete(key);
-    const cost = (v: View) => 1024 + (v.publication ? bytesJson(v.publication).byteLength * 4 : 0);
-    const total = [...this.views.values()].reduce((sum, v) => sum + cost(v), 0);
-    if (total + cost(view) > this.config.resources.cache.metadataBytes / 8)
-      throw new ResourceError('RESOURCE_BUSY', 'active resource views exhaust metadata budget', true);
-    this.views.set(id, view);
-  }
-  private async view(viewId: string, materialized = false): Promise<View> {
-    let view = this.views.get(viewId);
-    if (this.config.resources.delivery.mode === 'public') {
-      const retained = await this.store!.retainedHead(viewId);
-      if (!retained) throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'publication is no longer retained', true);
-      const publication = await this.store!.manifest(retained);
-      return {
-        head: {
-          schemaVersion: 1,
-          viewId,
-          mode: 'public',
-          sourceScope: publication.sourceScope,
-          generation: retained.revision,
-          renderRoot: publication.renderRoot,
-          publicationId: viewId,
-        },
-        createdAt: Date.now(),
-        publication,
-      };
-    }
-    if (!view || Date.now() - view.createdAt > 86400000)
-      throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'resource view expired; refresh its head', true);
-    if (view.head.mode === 'server' && !materialized && view.head.generation !== this.coordinator.generation)
-      throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'resource source generation changed', true);
-    return view;
-  }
-  private async renderRoot(token?: SnapshotToken) {
-    return this.sourceGate.read((snapshot) => this.renderRootSnapshot(snapshot), token);
-  }
-  private async renderRootSnapshot(token: SnapshotToken) {
+  private async renderRootSnapshot(token: SnapshotToken, previous?: PublicationManifest) {
     if (!this.dynamic) throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'dynamic source services are disabled');
     if (this.root?.generation === this.coordinator.generation) return this.root;
     const generation = this.coordinator.generation;
@@ -416,9 +221,9 @@ export class ResourceEngine {
       const entries: PublicationEntry[] = [];
       try {
         for (const selector of selectors) {
-          const old = this.previousPublication?.entries.find((e) => selectorKey(e.selector) === selectorKey(selector));
+          const old = previous?.entries.find((e) => selectorKey(e.selector) === selectorKey(selector));
           if (old) await this.repo().rememberAction(old.actionKey, old.artifact);
-          const entry = await this.generate(selector, generation, token);
+          const entry = await this.generator.generate(selector, generation, token);
           if (!entry && selector.kind === 'texture') continue;
           if (!entry) throw new ResourceError('RESOURCE_BACKEND_UNAVAILABLE', 'render root resource is missing');
           entries.push(entry);
@@ -428,199 +233,10 @@ export class ResourceEngine {
         this.root = root;
         return root;
       } catch (error) {
-        for (const entry of entries) this.discardPreparedBytes(entry);
+        for (const entry of entries) this.generator.discard(entry);
         throw error;
       }
     });
-  }
-  private async generate(
-    selector: ResourceSelector,
-    generation: number,
-    token?: SnapshotToken,
-  ): Promise<PublicationEntry | null> {
-    if (token)
-      return this.sourceGate.read(
-        (snapshot) =>
-          this.operations.run('snapshot-generate:' + token.id + ':' + generation + selectorKey(selector), () =>
-            this.generateSnapshot(selector, generation, snapshot),
-          ),
-        token,
-      );
-    return this.operations.run('generate:' + generation + selectorKey(selector), () =>
-      this.sourceGate.read((snapshot) => this.generateSnapshot(selector, generation, snapshot)),
-    );
-  }
-  private async generateSnapshot(
-    selector: ResourceSelector,
-    generation: number,
-    _token: SnapshotToken,
-  ): Promise<PublicationEntry | null> {
-    const repo = this.repo();
-    const dynamic = this.dynamic;
-    if (selector.kind === 'overlay-media') {
-      if (!this.content) throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'content reads are disabled');
-      const { version } = await this.content.openPublicMedia(
-        selector.mapId,
-        selector.dimension,
-        selector.assetId,
-        selector.versionId,
-      );
-      const artifact = mediaArtifact(version);
-      return {
-        selector,
-        artifact,
-        actionKey: actionKey({
-          generator: 'overlay-media',
-          version: 1,
-          format: artifact.format,
-          params: {},
-          dependencies: [{ role: 'original', digest: artifact.digest }],
-        }),
-      };
-    }
-    if (!dynamic) throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'resource source services are disabled');
-    let extra: Partial<PublicationEntry> = {};
-    const maxBytes =
-      selector.kind === 'atlas'
-        ? Math.min(32 * 1024 ** 2, repo.handoff.budget.capacity)
-        : Math.min(16 * 1024 ** 2, repo.handoff.budget.capacity);
-    // These bounds cover source reads, decoding and output buffers. A smaller
-    // configured work budget must reject before preparation allocates them.
-    const workBytes = ['atlas', 'chunk', 'top-map-tile'].includes(selector.kind) ? 128 * 1024 ** 2 : 64 * 1024 ** 2;
-    const result = await repo.build(
-      selectorKey(selector),
-      generation,
-      maxBytes,
-      workBytes,
-      async () => {
-        if (selector.kind === 'atlas') {
-          const supplied = this.textureSets.get(selector.textureSetId);
-          if (selector.textureSetId !== 'default' && !supplied)
-            throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'explicit atlas texture set expired', true);
-          const bundle = await dynamic.assets.buildAssetBundle();
-          const blocks = await dynamic.gameData.buildBlockInfo();
-          const prepared = await dynamic.assets.prepareTextureAtlas(supplied?.ids ?? collectTextureIds(bundle, blocks));
-          return {
-            actionKey: prepared.key,
-            generation,
-            mediaType: 'application/json',
-            format: 'atlas-manifest-v1',
-            maxArtifacts: 2,
-            maxBytes,
-            workBytes,
-            related(bytes) {
-              const d = JSON.parse(new TextDecoder().decode(bytes)) as AtlasDocument;
-              return [parseArtifactRef(d.image)];
-            },
-            async generate(signal) {
-              signal.throwIfAborted();
-              const result = await prepared.generate();
-              const bytes = bytesJson(result.manifest);
-              return { bytes, related: [{ bytes: result.png, mediaType: 'image/png', format: 'png' }] };
-            },
-          };
-        }
-        let input: Uint8Array;
-        let format: string;
-        let mediaType: string;
-        let dependencies: { role: string; digest: string }[] = [];
-        let encodeInput: (() => Uint8Array) | undefined;
-        if (selector.kind === 'chunk') {
-          const chunk = await dynamic.worldStore.getChunkNbtWithMeta(
-            selector.world,
-            selector.dimension,
-            selector.cx,
-            selector.cz,
-          );
-          if (!chunk) return null;
-          if (chunk.data.byteLength + (chunk.entities?.byteLength ?? 0) > Math.max(0, maxBytes - 96))
-            throw new ResourceError('RESOURCE_BUSY', 'chunk cannot fit the declared MessagePack output budget');
-          const { prepareChunkArtifact } = await import('./chunkArtifact.js');
-          const prepared = prepareChunkArtifact({
-            cx: selector.cx,
-            cz: selector.cz,
-            data: chunk.data,
-            ...(chunk.entities ? { entities: chunk.entities } : {}),
-          });
-          dependencies = prepared.dependencies;
-          extra = {
-            terrainHash: prepared.terrainHash,
-            nbtHash: prepared.nbtHash,
-            ...(prepared.entityHash ? { entityHash: prepared.entityHash } : {}),
-          };
-          input = new Uint8Array();
-          encodeInput = prepared.generate;
-          format = 'chunk-msgpack-v1';
-          mediaType = 'application/msgpack';
-        } else if (selector.kind === 'texture') {
-          const texture = await dynamic.assets.readTextureFile(selector.id);
-          if (!texture) return null;
-          input = texture.bytes;
-          format = 'png';
-          mediaType = 'image/png';
-        } else if (selector.kind === 'asset-bundle') {
-          input = bytesJson(await dynamic.assets.buildAssetBundle());
-          format = 'asset-bundle-json-v1';
-          mediaType = 'application/json';
-        } else if (selector.kind === 'game-data') {
-          const value =
-            selector.name === 'blocks'
-              ? await dynamic.gameData.buildBlockInfo()
-              : selector.name === 'biomes'
-                ? await dynamic.gameData.readBiomes()
-                : await dynamic.gameData.readDimensions();
-          input = bytesJson(value);
-          format = 'game-data-json-v1';
-          mediaType = 'application/json';
-        } else {
-          const tile = await dynamic.topMap.readTopMapTile(
-            selector.world,
-            selector.dimension,
-            selector.rx,
-            selector.rz,
-          );
-          if (!tile) return null;
-          input = tile;
-          format = 'topmap-msgpack-v6';
-          mediaType = 'application/msgpack';
-        }
-        if (!dependencies.length) dependencies = [{ role: 'input', digest: sha256(input) }];
-        const key = actionKey({
-          generator: selector.kind,
-          version: 1,
-          format,
-          params:
-            selector.kind === 'chunk'
-              ? { dimension: selector.dimension, cx: selector.cx, cz: selector.cz }
-              : selector.kind === 'game-data'
-                ? { name: selector.name }
-                : {},
-          dependencies,
-        });
-        const fixed = input;
-        return {
-          actionKey: key,
-          generation,
-          mediaType,
-          format,
-          maxBytes,
-          workBytes,
-          async generate(signal) {
-            signal.throwIfAborted();
-            return encodeInput ? encodeInput() : fixed;
-          },
-        } satisfies PreparedResource;
-      },
-      selector.kind === 'atlas' ? 2 : 1,
-    );
-    if (!result) return null;
-    const entry: PublicationEntry = { selector, artifact: result.artifact, actionKey: result.actionKey, ...extra };
-    this.generationLeases.set(entry, result.release);
-    if (selector.kind === 'atlas') {
-      const atlasData = JSON.parse(new TextDecoder().decode(repo.open(result.artifact))) as AtlasDocument;
-      entry.image = parseArtifactRef(atlasData.image);
-    }
-    return entry;
   }
   private async publishedEntry(view: View, selector: ResourceSelector): Promise<PublicationEntry | undefined> {
     const manifest = view.publication!;
@@ -659,9 +275,9 @@ export class ResourceEngine {
         entry.artifact,
         view.head.mode === 'public',
       ),
-      ...(entry.nbtHash ? { nbtHash: entry.nbtHash } : {}),
-      ...(entry.terrainHash ? { terrainHash: entry.terrainHash } : {}),
-      ...(entry.entityHash ? { entityHash: entry.entityHash } : {}),
+      ...(entry.contentDigest ? { contentDigest: entry.contentDigest } : {}),
+      ...(entry.terrainDigest ? { terrainDigest: entry.terrainDigest } : {}),
+      ...(entry.entityDigest ? { entityDigest: entry.entityDigest } : {}),
     };
   }
   private reserveMember(key: string, selector: ResourceSelector) {
@@ -686,7 +302,7 @@ export class ResourceEngine {
   async resolve(viewId: string, selectors: ResourceSelector[]) {
     await this.observe();
     if (selectors.length > 128) throw new RangeError('at most 128 resource selectors are allowed');
-    const view = await this.view(viewId);
+    const view = await this.sessions.get(viewId);
     const resources: ResolvedResource[] = [];
     const issued: ArtifactRef[] = [];
     let validUntil = Date.now() + this.config.resources.work.handoffMs;
@@ -710,7 +326,7 @@ export class ResourceEngine {
             entry = known;
           else {
             try {
-              entry = (await this.generate(selector, view.head.generation)) ?? undefined;
+              entry = (await this.generator.generate(selector, view.head.generation)) ?? undefined;
             } catch (error) {
               if (!slot.entry) {
                 slot.release();
@@ -739,7 +355,7 @@ export class ResourceEngine {
             }
           resources.push(this.resolved(view, entry));
         } finally {
-          this.releaseGeneration(entry);
+          this.generator.release(entry);
         }
       }
       // A batch can yield between members, including when every member is a
@@ -755,7 +371,7 @@ export class ResourceEngine {
   async open(viewId: string, kind: ResourceKind, digest: string) {
     if (this.config.resources.delivery.mode !== 'server')
       throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'application body delivery is disabled');
-    const view = await this.view(viewId, true);
+    const view = await this.sessions.get(viewId, true);
     for (const [key, record] of this.members) {
       const entry = record.entry;
       if (!entry) continue;
@@ -774,7 +390,7 @@ export class ResourceEngine {
           let replacement: PublicationEntry | null | undefined;
           try {
             if (!this.repo().lease(artifact)) {
-              replacement = await this.generate(entry.selector, view.head.generation);
+              replacement = await this.generator.generate(entry.selector, view.head.generation);
               if (
                 !replacement ||
                 replacement.artifact.digest !== entry.artifact.digest ||
@@ -792,7 +408,7 @@ export class ResourceEngine {
               transfer: lease.transfer,
             };
           } finally {
-            if (replacement) this.releaseGeneration(replacement);
+            if (replacement) this.generator.release(replacement);
           }
         },
       };
@@ -819,7 +435,7 @@ export class ResourceEngine {
     };
   }
   async overlays(mapId: string, dimension: string, viewId: string): Promise<OverlayManifest> {
-    const view = await this.view(viewId);
+    const view = await this.sessions.get(viewId);
     const snapshot =
       view.head.mode === 'public'
         ? view.publication!.overlays.find((m) => m.mapId === mapId && m.dimension === dimension)
@@ -842,19 +458,7 @@ export class ResourceEngine {
       throw new TypeError('invalid explicit atlas set');
     let textureSetId = 'default';
     if (view.mode === 'server') {
-      const normalized = [...new Set(ids)].sort();
-      textureSetId = sha256(canonicalJson(normalized));
-      for (const [key, value] of this.textureSets)
-        if (value.until < Date.now()) {
-          value.release();
-          this.textureSets.delete(key);
-        }
-      if (!this.textureSets.has(textureSetId))
-        this.textureSets.set(textureSetId, {
-          ids: normalized,
-          until: Date.now() + this.config.resources.work.handoffMs,
-          release: this.memberMetadata.reserve(1024 + bytesJson(normalized).byteLength * 4),
-        });
+      textureSetId = this.generator.registerTextureSet(ids, this.config.resources.work.handoffMs);
     }
     const result = (await this.resolve(view.viewId, [{ kind: 'atlas', textureSetId }])).resources[0];
     if (!('manifest' in result)) throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'atlas unavailable');
@@ -880,14 +484,27 @@ export class ResourceEngine {
     };
   }
   async worlds(): Promise<WorldInfo[]> {
-    if (this.config.resources.delivery.mode === 'server') return this.dynamic!.worldStore.listWorlds();
-    const view = await this.view((await this.head()).viewId);
+    if (this.config.resources.delivery.mode === 'server') {
+      const worlds = await this.dynamic!.worldStore.listWorlds();
+      if (!this.content) return worlds;
+      try {
+        const maps = await this.content.listMaps();
+        return worlds.map((world) => ({
+          ...world,
+          mapIds: maps.filter((map) => map.worldKey === world.id).map((map) => map.mapId),
+        }));
+      } catch {
+        // Optional overlay metadata cannot make the world inventory unavailable.
+        return worlds;
+      }
+    }
+    const view = await this.sessions.get((await this.head()).viewId);
     return view.publication!.worlds;
   }
   private async projection<T>(world: string, viewId: string | undefined, read: (view: View) => Promise<T>): Promise<T> {
     const id = viewId ?? (await this.head(world)).viewId;
     const run = async () => {
-      const view = await this.view(id);
+      const view = await this.sessions.get(id);
       if (view.world && view.world !== world) throw new TypeError('projection belongs to a different world');
       const result = await read(view);
       if (view.head.mode === 'server' && view.head.generation !== this.coordinator.generation)
@@ -931,22 +548,22 @@ export class ResourceEngine {
     return this.sourceGate.write(async () => {
       if (domain === 'source') {
         this.invalidate();
-        this.state.requiresSourceSnapshot = true;
+        this.publication.state.requiresSourceSnapshot = true;
         if (this.store && this.config.resources.roles.includes('publish'))
           await this.store.pending('pending', undefined, true);
       }
       try {
         const result = await operation();
         if (domain === 'content') {
-          this.state.publication = 'pending';
+          this.publication.state.publication = 'pending';
           if (this.store && this.config.resources.roles.includes('publish')) {
             try {
-              await this.store.pending('pending', undefined, this.state.requiresSourceSnapshot);
+              await this.store.pending('pending', undefined, this.publication.state.requiresSourceSnapshot);
             } catch {
-              this.state.error = 'RESOURCE_BACKEND_UNAVAILABLE';
+              this.publication.state.error = 'RESOURCE_BACKEND_UNAVAILABLE';
             }
           }
-          this.schedulePublication();
+          this.publication.schedule();
         }
         return result;
       } finally {
@@ -954,368 +571,9 @@ export class ResourceEngine {
       }
     });
   }
-  private async publishEntry(entry: PublicationEntry, token: SnapshotToken) {
-    if (!this.target) throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'publication target is not configured');
-    let restored: PublicationEntry | null | undefined;
-    try {
-      if (
-        entry.selector.kind !== 'overlay-media' &&
-        (!this.repo().lease(entry.artifact) || (entry.image && !this.repo().lease(entry.image)))
-      ) {
-        restored = await this.generate(entry.selector, this.coordinator.generation, token);
-        if (
-          !restored ||
-          restored.artifact.digest !== entry.artifact.digest ||
-          restored.image?.digest !== entry.image?.digest
-        )
-          throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'fixed publication action changed its output');
-      }
-      const refs = [entry.artifact, ...(entry.image ? [entry.image] : [])];
-      if (entry.selector.kind === 'overlay-media') {
-        const s = entry.selector;
-        const media = await this.content!.openPublicMedia(s.mapId, s.dimension, s.assetId, s.versionId);
-        const lease = await media.read();
-        try {
-          await this.target.ensure(entry.artifact, lease.bytes);
-          await this.target.verify(entry.artifact);
-        } finally {
-          lease.release();
-        }
-        return;
-      }
-      for (const ref of refs) {
-        const lease = await this.repo().acquire(ref, false);
-        try {
-          await this.target.ensure(ref, lease.bytes);
-          await this.target.verify(ref);
-        } finally {
-          lease.release();
-        }
-      }
-    } finally {
-      this.releaseGeneration(entry);
-      if (restored) this.releaseGeneration(restored);
-    }
-  }
-  async publish(
-    expectedHead?: string | null,
-    prepared?: PublicationManifest,
-  ): Promise<import('@violet-map/core/resources').PublicationHead> {
-    const expectedManifest =
-      prepared === undefined ? undefined : sha256(canonicalJson(parsePublicationManifest(prepared)));
-    if (expectedManifest && sha256(canonicalJson(await this.prepare())) !== expectedManifest) {
-      this.state.publication = 'failed';
-      this.state.error = 'SOURCE_SNAPSHOT_CHANGED';
-      throw new ResourceError(
-        'SOURCE_SNAPSHOT_CHANGED',
-        'current source differs from the reviewed prepared publication',
-      );
-    }
-    return (await this.buildPublication(
-      expectedHead,
-      false,
-      expectedManifest,
-    )) as import('@violet-map/core/resources').PublicationHead;
-  }
-  async prepare(): Promise<PublicationManifest> {
-    return (await this.buildPublication(undefined, true)) as PublicationManifest;
-  }
-  private releaseGeneration(entry: PublicationEntry) {
-    this.generationLeases.get(entry)?.();
-    this.generationLeases.delete(entry);
-  }
-  private discardPreparedBytes(entry: PublicationEntry) {
-    this.releaseGeneration(entry);
-    for (const ref of [entry.artifact, ...(entry.image ? [entry.image] : [])])
-      this.repo().handoff.releaseUnclaimed(ref.digest);
-  }
-  private async buildPublication(
-    expectedHead: string | null | undefined,
-    prepareOnly: boolean,
-    expectedManifest?: string,
-  ) {
-    if (!this.config.resources.roles.includes('publish') || !this.store || !this.target || !this.dynamic)
-      throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'publish role is disabled');
-    if (this.config.resources.source.consistency !== 'snapshot')
-      throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'publications require a controlled snapshot source');
-    return this.sourceGate.write((token) =>
-      this.operations.run('publication', async () => {
-        const started = Date.now();
-        this.state.publication = 'pending';
-        this.state.error = undefined;
-        const previous = await this.store!.head();
-        const expected = expectedHead === undefined ? (previous?.publicationId ?? null) : expectedHead;
-        if ((previous?.publicationId ?? null) !== expected)
-          throw new ResourceError('PUBLICATION_CONFLICT', 'expected publication head changed');
-        this.previousPublication = previous ? await this.store!.manifest(previous) : undefined;
-        const generation = this.coordinator.generation;
-        try {
-          const root = await this.renderRoot(token);
-          const worlds = await this.dynamic!.worldStore.listWorlds();
-          const manifest: PublicationManifest = {
-            schemaVersion: 1,
-            sourceScope: await this.sourceScope(),
-            archiveIds: {},
-            sourceScopes: {},
-            renderRoot: root.digest,
-            worlds,
-            entries: [...root.entries],
-            regions: [],
-            coverage: {},
-            topMaps: {},
-            overlays: [],
-          };
-          const metadata = new ByteBudget(Math.floor(this.config.resources.cache.metadataBytes / 4));
-          const track = (value: unknown) => metadata.reserve(256 + bytesJson(value).byteLength * 4);
-          track(manifest);
-          for (const entry of root.entries) {
-            if (prepareOnly) this.discardPreparedBytes(entry);
-            else await this.publishEntry(entry, token);
-          }
-          for (const id of await this.dynamic!.assets.textureIds()) {
-            if (manifest.entries.some((e) => e.selector.kind === 'texture' && e.selector.id === id)) continue;
-            const selector: ResourceSelector = { kind: 'texture', id };
-            const old = this.previousPublication?.entries.find(
-              (e) => selectorKey(e.selector) === selectorKey(selector),
-            );
-            if (old) await this.repo().rememberAction(old.actionKey, old.artifact);
-            const entry = await this.generate(selector, generation, token);
-            if (entry) {
-              if (prepareOnly) this.discardPreparedBytes(entry);
-              else await this.publishEntry(entry, token);
-              track(entry);
-              manifest.entries.push(entry);
-            }
-          }
-          for (const world of worlds) {
-            manifest.sourceScopes[world.id] = await this.sourceScope(world.id);
-            const identity = await this.mounts.worlds!.read(`${world.id}/.violet-map/identity.json`);
-            if (identity) {
-              const value = JSON.parse(new TextDecoder().decode(identity));
-              if (value.schema !== 1 || typeof value.id !== 'string')
-                throw new ResourceError('SOURCE_REVISION_UNAVAILABLE', 'invalid archive identity');
-              manifest.archiveIds[world.id] = value.id;
-            }
-            for (const dimension of world.dimensions) {
-              const coverage = await this.dynamic!.worldStore.listChunkSourceCoverage(world.id, dimension);
-              if (bytesJson(coverage).byteLength * 4 > this.config.resources.cache.metadataBytes / 4)
-                throw new ResourceError('RESOURCE_BUSY', 'world coverage exceeds publication metadata budget');
-              manifest.coverage[projectionKey(world.id, dimension)] = coverage;
-              track(coverage);
-              const coordinates = new Map<string, { rx: number; rz: number }>();
-              for (const r of coverage.regions) coordinates.set(`${r.x},${r.z}`, { rx: r.x, rz: r.z });
-              for (const c of coverage.chunks) {
-                const rx = Math.floor(c.cx / 32),
-                  rz = Math.floor(c.cz / 32);
-                coordinates.set(`${rx},${rz}`, { rx, rz });
-              }
-              for (const { rx, rz } of [...coordinates.values()].sort((a, b) => a.rx - b.rx || a.rz - b.rz)) {
-                const oldRegion = this.previousPublication?.regions.find(
-                  (r) => r.world === world.id && r.dimension === dimension && r.rx === rx && r.rz === rz,
-                );
-                const oldPage = oldRegion ? await this.store!.page(oldRegion.artifact) : undefined;
-                const mask = coverage.regions.find((r) => r.x === rx && r.z === rz)?.mask;
-                const bits = mask ? new Uint8Array(Buffer.from(mask, 'base64')) : new Uint8Array(128);
-                if (bits.byteLength !== 128)
-                  throw new ResourceError('SOURCE_REVISION_UNAVAILABLE', 'invalid region coverage mask');
-                const selected = new Set<number>();
-                for (let i = 0; i < 1024; i++) if (bits[i >> 3] & (1 << (i & 7))) selected.add(i);
-                for (const c of coverage.chunks)
-                  if (Math.floor(c.cx / 32) === rx && Math.floor(c.cz / 32) === rz)
-                    selected.add((c.cx & 31) + (c.cz & 31) * 32);
-                const chunks: PublicationEntry[] = [];
-                for (const i of [...selected].sort((a, b) => a - b)) {
-                  const selector: ResourceSelector = {
-                    kind: 'chunk',
-                    world: world.id,
-                    dimension,
-                    cx: rx * 32 + (i & 31),
-                    cz: rz * 32 + (i >> 5),
-                  };
-                  const old = oldPage?.chunks.find((e) => selectorKey(e.selector) === selectorKey(selector));
-                  if (old) await this.repo().rememberAction(old.actionKey, old.artifact);
-                  const entry = await this.generate(selector, generation, token);
-                  if (entry) {
-                    if (prepareOnly) this.discardPreparedBytes(entry);
-                    else await this.publishEntry(entry, token);
-                    chunks.push(entry);
-                  }
-                }
-                const page = regionPage(world.id, dimension, rx, rz, chunks);
-                if (!prepareOnly) await this.store!.ensureIndex(page.artifact, page.bytes);
-                const region = { world: world.id, dimension, rx, rz, artifact: page.artifact };
-                track(region);
-                manifest.regions.push(region);
-              }
-              const topData = (await this.dynamic!.topMap.getTopMapManifest(world.id))?.dimensions[dimension];
-              const topMap = topData ? { ...topData, world: world.id, dimension } : null;
-              if (topMap) {
-                track(topMap);
-                manifest.topMaps[projectionKey(world.id, dimension)] = topMap;
-                for (const region of topMap.topMap?.regions ?? []) {
-                  const selector: ResourceSelector = {
-                    kind: 'top-map-tile',
-                    world: world.id,
-                    dimension,
-                    rx: region.x,
-                    rz: region.z,
-                  };
-                  const old = this.previousPublication?.entries.find(
-                    (e) => selectorKey(e.selector) === selectorKey(selector),
-                  );
-                  if (old) await this.repo().rememberAction(old.actionKey, old.artifact);
-                  const entry = await this.generate(selector, generation, token);
-                  if (!entry) throw new ResourceError('TOPMAP_REBAKE_REQUIRED', 'baked tile is missing');
-                  if (prepareOnly) this.discardPreparedBytes(entry);
-                  else await this.publishEntry(entry, token);
-                  track(entry);
-                  manifest.entries.push(entry);
-                }
-              }
-            }
-          }
-          if (this.content)
-            for (const map of await this.content.listMaps())
-              for (const dimension of [
-                ...new Set(map.bindings.filter((b) => b.enabled).map((b) => b.dimension)),
-              ].sort()) {
-                const snapshot = await this.content.snapshot(map.mapId, dimension);
-                track(snapshot);
-                manifest.overlays.push(snapshot);
-                const bindingWorld = worlds.find((w) => w.id === map.worldKey);
-                if (bindingWorld) bindingWorld.mapIds = [...new Set([...(bindingWorld.mapIds ?? []), map.mapId])];
-                for (const version of snapshot.media) {
-                  const entry = await this.generate(
-                    {
-                      kind: 'overlay-media',
-                      mapId: map.mapId,
-                      dimension,
-                      assetId: version.assetId,
-                      versionId: version.versionId,
-                    },
-                    generation,
-                    token,
-                  );
-                  if (!entry) throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'bound media is missing');
-                  if (!prepareOnly) await this.publishEntry(entry, token);
-                  track(entry);
-                  manifest.entries.push(entry);
-                }
-              }
-          manifest.entries.sort((a, b) => selectorKey(a.selector).localeCompare(selectorKey(b.selector)));
-          manifest.overlays.sort((a, b) => a.mapId.localeCompare(b.mapId) || a.dimension.localeCompare(b.dimension));
-          if (prepareOnly) {
-            this.state.publication = 'pending';
-            return manifest;
-          }
-          if (expectedManifest && sha256(canonicalJson(manifest)) !== expectedManifest)
-            throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'source changed after prepared publication validation');
-          const verify = async () => {
-            for (const entry of manifest.entries)
-              for (const ref of [entry.artifact, ...(entry.image ? [entry.image] : [])])
-                if (!(await this.target!.exists(ref)))
-                  throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'publication closure contains a missing object');
-            for (const region of manifest.regions) {
-              const page = await this.store!.page(region.artifact);
-              for (const entry of page.chunks)
-                if (!(await this.target!.exists(entry.artifact)))
-                  throw new ResourceError(
-                    'RESOURCE_NOT_PUBLISHED',
-                    'publication region closure contains a missing object',
-                  );
-            }
-          };
-          const head = await this.store!.commit(
-            manifest,
-            expected,
-            async () => {
-              this.coordinator.assert(generation);
-            },
-            verify,
-          );
-          try {
-            await this.store!.clearPending();
-          } catch {
-            this.state.error = 'RESOURCE_BACKEND_UNAVAILABLE';
-          }
-          this.state.publication = 'ready';
-          this.state.requiresSourceSnapshot = false;
-          this.state.publicationLagMs = Date.now() - started;
-          return head;
-        } catch (error) {
-          this.state.publication = 'failed';
-          this.state.error = error instanceof ResourceError ? error.code : 'RESOURCE_BACKEND_UNAVAILABLE';
-          throw error;
-        } finally {
-          this.previousPublication = undefined;
-          for (const entry of this.root?.entries ?? []) this.discardPreparedBytes(entry);
-        }
-      }),
-    );
-  }
-  private async verifyManifest(manifest: PublicationManifest) {
-    if (!this.store || !this.target)
-      throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'publication target is not configured');
-    let objects = 0;
-    const verify = async (ref: ArtifactRef) => {
-      await this.target!.verify(ref);
-      objects++;
-    };
-    for (const entry of manifest.entries) {
-      await verify(entry.artifact);
-      if (entry.image) await verify(entry.image);
-    }
-    for (const region of manifest.regions)
-      for (const entry of (await this.store.page(region.artifact)).chunks) await verify(entry.artifact);
-    return { objects };
-  }
-  async verify() {
-    const head = await this.store?.head();
-    if (!head) throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'no publication exists');
-    return { publicationId: head.publicationId, ...(await this.verifyManifest(await this.store!.manifest(head))) };
-  }
-  async reindex() {
-    const head = await this.store?.head();
-    if (!head) return 0;
-    if (!this.repository)
-      throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'select an explicit action index to reindex');
-    const manifest = await this.store!.manifest(head);
-    let actions = 0;
-    const record = async (entry: PublicationEntry) => {
-      if (!(await this.target?.exists(entry.artifact)))
-        throw new ResourceError('RESOURCE_BACKEND_UNAVAILABLE', 'reindex requires the complete authoritative closure');
-      await this.repository!.rememberAction(entry.actionKey, entry.artifact);
-      actions++;
-    };
-    for (const entry of manifest.entries) await record(entry);
-    for (const region of manifest.regions)
-      for (const entry of (await this.store!.page(region.artifact)).chunks) await record(entry);
-    return actions;
-  }
-  async recover(quiesced: boolean) {
-    if (!quiesced) throw new TypeError('recovery requires explicit confirmation that all other writers are stopped');
-    if (!this.store || !this.config.resources.roles.includes('publish'))
-      throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'publish role is disabled');
-    return this.sourceGate.write(async () => {
-      await this.store!.recoverQuiesced();
-      return this.store!.recoverPrepared(async (manifest) => {
-        await this.verifyManifest(manifest);
-      });
-    });
-  }
-  async gc() {
-    if (!this.store || !this.target || !this.config.resources.roles.includes('publish'))
-      throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'publish role is disabled');
-    return this.sourceGate.write(() =>
-      collectPublicationGarbage(this.store!, this.target!, {
-        metadataBytes: this.config.resources.cache.metadataBytes,
-        retainedMs: this.config.resources.publication.retainedMs,
-      }),
-    );
-  }
   async status() {
     return {
-      ...this.state,
+      ...this.publication.state,
       storage: this.mounts.metrics?.() ?? [],
       mode: this.config.resources.delivery.mode,
       roles: this.config.resources.roles,

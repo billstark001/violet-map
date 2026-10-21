@@ -46,7 +46,7 @@ export function resourceConfiguration(settings: ReturnType<typeof configurationS
     ['memoryBytes', 'metadataBytes', 'local', 'sharedMount', 'sharedBytes', 'index', 'writeBytes'],
     'cache',
   );
-  const work = obj(root.work, ['memoryBytes', 'handoffBytes', 'handoffMs', 'workspace'], 'work');
+  const work = obj(root.work, ['memoryBytes', 'handoffBytes', 'handoffMs', 'maxTasks', 'workspace'], 'work');
   const source = obj(root.source, ['consistency', 'revalidateMs', 'scope'], 'source');
   const delivery = obj(root.delivery, ['mode', 'targetMount', 'publicBaseUrl', 'httpPublisher'], 'delivery');
   const publication = obj(root.publication, ['storeMount', 'debounceMs', 'maxDelayMs', 'retainedMs'], 'publication');
@@ -159,6 +159,7 @@ export function resourceConfiguration(settings: ReturnType<typeof configurationS
       writeBytes: integer(read(cache, 'writeBytes', 'RESOURCES_CACHE_WRITE_BYTES', 64 * 1024 ** 2), 0, 'writeBytes'),
     },
     work: {
+      maxTasks: integer(read(work, 'maxTasks', 'RESOURCES_WORK_MAX_TASKS', 16), 1, 'maxTasks'),
       memoryBytes: integer(
         read(work, 'memoryBytes', 'RESOURCES_WORK_MEMORY_BYTES', 128 * 1024 ** 2),
         1,

@@ -1,10 +1,13 @@
 import type { Context } from 'hono';
 import { ResourceError } from '@violet-map/core/resources';
 import { ContentValidationError } from '@violet-map/core/overlays';
+import { RequestBodyError } from './httpBody.js';
 import { ContentError } from './content.js';
 
 /** Stable errors redact backend details without selecting another source or driver. */
 export function resourceFailure(error: Error, c: Context) {
+  if (error instanceof RequestBodyError)
+    return c.json({ code: 'INVALID_INPUT', message: error.message, retryable: false }, error.status);
   if (error instanceof ContentError)
     return c.json({ code: error.code, message: error.message, retryable: error.status === 503 }, error.status);
   if (error instanceof ContentValidationError)

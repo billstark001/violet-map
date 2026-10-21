@@ -22,7 +22,7 @@ test('service instances keep world, manifest, and game data caches independent',
     const storage = new LocalStorage(path.join(root, name, 'worlds'));
     const data = createGameDataService(config);
     const topMap = createTopMapService(storage, config, data);
-    return { storage, data, topMap, worlds: createWorldStore(storage, config) };
+    return { storage, data, topMap, worlds: createWorldStore(storage, config.minecraft.version) };
   };
   const first = make('first'),
     second = make('second');
@@ -43,8 +43,8 @@ test('service instances keep world, manifest, and game data caches independent',
     );
   await first.storage.write('same/.violet-map/top-map/manifest.json', manifest(true));
   await second.storage.write('same/.violet-map/top-map/manifest.json', manifest(false));
-  await assert.rejects(first.topMap.getWorldCapabilities('same'), { code: 'TOPMAP_REBAKE_REQUIRED' });
-  assert.equal((await second.topMap.getWorldCapabilities('same')).hasTopMap, false);
+  await assert.rejects(first.topMap.getTopMapManifest('same'), { code: 'TOPMAP_REBAKE_REQUIRED' });
+  assert.equal((await second.topMap.getTopMapManifest('same'))!.dimensions['minecraft:overworld'].hasTopMap, false);
 });
 
 // Imports above must work even without any database or HTTP initialization.

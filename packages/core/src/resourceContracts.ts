@@ -150,9 +150,9 @@ export function parseResolvedResource(value: unknown): import('./resourceTypes.j
     'resource',
     'manifest',
     'image',
-    'nbtHash',
-    'terrainHash',
-    'entityHash',
+    'contentDigest',
+    'terrainDigest',
+    'entityDigest',
   ]);
   const selector = parseResourceSelector(item.selector);
   if (item.missing === true) {
@@ -189,9 +189,9 @@ export function parseResolvedResource(value: unknown): import('./resourceTypes.j
     return {
       selector,
       resource,
-      nbtHash: digest(item.nbtHash),
-      terrainHash: digest(item.terrainHash),
-      ...(item.entityHash !== undefined ? { entityHash: digest(item.entityHash) } : {}),
+      contentDigest: digest(item.contentDigest),
+      terrainDigest: digest(item.terrainDigest),
+      ...(item.entityDigest !== undefined ? { entityDigest: digest(item.entityDigest) } : {}),
     };
   }
   const expected: Record<string, [string, string]> = {

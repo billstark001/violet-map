@@ -1,5 +1,9 @@
+import { contentFailure } from '../contentErrors.js';
+import { validateWorldName } from '../worldValidation.js';
+import { isDimensionId } from '@violet-map/core/domain';
 import { resourceFailure } from '../resourceErrors.js';
-import { readLimitedBody } from '@violet-map/core/http';
+import { readRequestJson } from '../httpBody.js';
+import { ContentValidationError } from '@violet-map/core/overlays';
 import { parseResourceSelector, type ResourceKind } from '@violet-map/core/resources';
 import { sha256 } from '@violet-map/storage';
 import { parsePublicationManifest } from '@violet-map/resources';
@@ -21,15 +25,7 @@ export function mountResources(app: Hono, config: ServerConfig, services: AppSer
       return c.body(body, 200, { 'content-type': 'application/json', etag: etag, 'cache-control': 'no-cache' });
     });
     routes.post('/api/resources/resolve', async (c) => {
-      const bytes = await readLimitedBody(c.req.raw, config.limits.chunkRequestBytes);
-      if (!bytes)
-        return c.json({ code: 'INVALID_INPUT', message: 'resource request exceeds limits', retryable: false }, 413);
-      let value: unknown;
-      try {
-        value = JSON.parse(new TextDecoder().decode(bytes));
-      } catch {
-        throw new TypeError('invalid resource JSON');
-      }
+      const value = await readRequestJson(c, config.limits.chunkRequestBytes);
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('invalid resolve request');
       const body = value as Record<string, unknown>;
       if (
@@ -39,7 +35,8 @@ export function mountResources(app: Hono, config: ServerConfig, services: AppSer
         body.selectors.length > 128
       )
         throw new TypeError('resolve requires viewId and at most 128 selectors');
-      return c.json(await resources.resolve(body.viewId, body.selectors.map(parseResourceSelector)), 200, {
+      const resolved = await resources.resolve(body.viewId, body.selectors.map(parseResourceSelector));
+      return c.json(resolved, 200, {
         'cache-control': 'no-store',
       });
     });
@@ -53,13 +50,40 @@ export function mountResources(app: Hono, config: ServerConfig, services: AppSer
         return artifactResponse(c, object.artifact, object.read);
       });
   }
+  if ((config.features.contentReads && services.content) || config.resources.delivery.mode === 'public')
+    routes.get('/api/maps/:id/overlays', async (c) => {
+      try {
+        const dimension = c.req.query('dimension'),
+          viewId = c.req.query('viewId');
+        // This documented business endpoint keeps its content API validation envelope.
+        if (!dimension || !viewId || c.req.query('delivery') !== undefined) {
+          const error = new ContentValidationError(
+            !dimension
+              ? 'dimension is required'
+              : !viewId
+                ? 'viewId is required'
+                : 'delivery was removed; resource mode is selected by the server',
+          );
+          throw error;
+        }
+        const body = JSON.stringify(await resources.overlays(c.req.param('id'), dimension, viewId));
+        const etag = `"${sha256(body)}"`;
+        c.header('etag', etag);
+        c.header('cache-control', 'no-cache');
+        if (c.req.header('if-none-match') === etag) return c.body(null, 304);
+        return c.body(body, 200, { 'content-type': 'application/json' });
+      } catch (error) {
+        return contentFailure(error as Error, c);
+      }
+    });
   if (config.features.adminApi) {
     routes.use('/api/admin/resources/*', services.authorization.requireRole('ci'));
     if (config.resources.roles.includes('publish'))
       routes.post('/api/admin/resources/publications', async (c) => {
-        const bytes = await readLimitedBody(c.req.raw, Math.floor(config.resources.cache.metadataBytes / 4) + 4096);
-        if (!bytes) throw new RangeError('publication request exceeds limits');
-        const body = JSON.parse(new TextDecoder().decode(bytes));
+        const body = (await readRequestJson(c, Math.floor(config.resources.cache.metadataBytes / 4) + 4096)) as Record<
+          string,
+          unknown
+        >;
         if (
           !body ||
           typeof body !== 'object' ||
@@ -70,20 +94,20 @@ export function mountResources(app: Hono, config: ServerConfig, services: AppSer
         )
           throw new TypeError('publication requires expectedHead');
         return c.json(
-          await resources.publish(
+          await resources.publication.publish(
             body.expectedHead,
             body.prepared === undefined ? undefined : parsePublicationManifest(body.prepared),
           ),
         );
       });
     if (config.resources.roles.includes('publish')) {
-      routes.post('/api/admin/resources/prepare', async (c) => c.json(await resources.prepare()));
-      routes.post('/api/admin/resources/verify', async (c) => c.json(await resources.verify()));
-      routes.post('/api/admin/resources/gc', async (c) => c.json(await resources.gc()));
+      routes.post('/api/admin/resources/prepare', async (c) => c.json(await resources.publication.prepare()));
+      routes.post('/api/admin/resources/verify', async (c) => c.json(await resources.publication.verify()));
+      routes.post('/api/admin/resources/gc', async (c) => c.json(await resources.publication.gc()));
       routes.post('/api/admin/resources/reindex', async (c) =>
         c.json({
           originals: services.content ? await services.content.verifyRetainedMedia() : 0,
-          actions: await resources.reindex(),
+          actions: await resources.publication.reindex(),
         }),
       );
     }
@@ -92,11 +116,16 @@ export function mountResources(app: Hono, config: ServerConfig, services: AppSer
   app.route('/', routes);
 }
 
-/** Public reader projections depend exclusively on the committed publication. */
-export function mountPublicationProjections(app: Hono, services: AppServices) {
+/** Business projections share the same view and snapshot rules in every delivery mode. */
+export function mountResourceProjections(app: Hono, services: AppServices) {
   const resources = services.resources;
   const routes = new Hono();
   routes.onError(resourceFailure);
+  routes.use('/api/worlds/:world/*', validateWorldName);
+  routes.use('/api/worlds/:world/:dim/*', async (c, next) => {
+    if (!isDimensionId(c.req.param('dim'))) return c.json({ error: 'invalid dimension id' }, 400);
+    await next();
+  });
   routes.get('/api/worlds', async (c) => c.json(await resources.worlds()));
   routes.get('/api/worlds/:world/capabilities', async (c) =>
     c.json(await resources.worldCapabilities(c.req.param('world'), c.req.query('viewId'))),
@@ -117,13 +146,5 @@ export function mountPublicationProjections(app: Hono, services: AppServices) {
       ? c.json(manifest)
       : c.json({ code: 'RESOURCE_NOT_PUBLISHED', message: 'top map is not published', retryable: false }, 404);
   });
-  if (!services.content)
-    routes.get('/api/maps/:id/overlays', async (c) => {
-      const dimension = c.req.query('dimension'),
-        viewId = c.req.query('viewId');
-      if (!dimension || !viewId)
-        return c.json({ code: 'INVALID_INPUT', message: 'dimension and viewId are required', retryable: false }, 400);
-      return c.json(await resources.overlays(c.req.param('id'), dimension, viewId));
-    });
   app.route('/', routes);
 }

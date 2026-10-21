@@ -7,21 +7,20 @@ import type { ObjectStorage } from '@violet-map/core/storage';
 import { decompressNbt } from '@violet-map/resources/nbt-codec';
 import { createWorldSource } from '@violet-map/resources/world-chunks';
 import { cleanStoragePath, ensureWorldIdentity, ScopedStorage } from '@violet-map/storage';
-import type { ServerConfig } from './configuration.js';
 import { createMinimalLevelDat } from './levelDat.js';
 import { isWorldDiffInput } from './worldValidation.js';
 
-export function createWorldStore(worldStorage: ObjectStorage, config: ServerConfig) {
-  const source = createWorldSource(worldStorage, config);
+export function createWorldStore(worldStorage: ObjectStorage, minecraftVersion: string) {
+  const source = createWorldSource(worldStorage, {
+    cache: { regionBytes: 0, chunkNbtBytes: 0, worldListMs: 0, metadataEntries: 0 },
+  });
   const {
     cacheStats,
     listWorlds,
     listRegions,
     listChunkSourceCoverage,
-    getChunkMetadataBatch,
-    getChunkMetadata,
-    getChunksNbtWithMetaBatch,
-    getChunkNbtWithMeta,
+    inspectChunks,
+    readChunks,
     invalidateWorldList,
     invalidateStoredFile,
     invalidatePath,
@@ -83,7 +82,7 @@ export function createWorldStore(worldStorage: ObjectStorage, config: ServerConf
     if (!(await worldStorage.stat(levelDatPath(world)))) {
       await worldStorage.write(
         levelDatPath(world),
-        createMinimalLevelDat({ levelName }, config.minecraft.version),
+        createMinimalLevelDat({ levelName }, minecraftVersion),
         'application/octet-stream',
       );
       invalidatePath(levelDatPath(world));
@@ -243,10 +242,8 @@ export function createWorldStore(worldStorage: ObjectStorage, config: ServerConf
     listWorlds,
     listRegions,
     listChunkSourceCoverage,
-    getChunkMetadataBatch,
-    getChunkMetadata,
-    getChunksNbtWithMetaBatch,
-    getChunkNbtWithMeta,
+    inspectChunks,
+    readChunks,
     saveRegionFile,
     saveChunkNbt,
     createWorld,

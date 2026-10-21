@@ -21,8 +21,6 @@ CLI profiles and state are described in [CLI configuration and credentials](cli-
 | `ASSETS_DIRS` | bundled defaults, `data/assets` | Comma-separated resource pack directories; later directories override earlier ones. |
 | `MC_VERSION` | `1.21.4` | Default version for generated data/minimal `level.dat`. |
 | `MC_DATA_VERSION` | `MC_VERSION` | `minecraft-data` version override. |
-| `REGION_CACHE_BYTES` | `268435456` | Full region cache cap. |
-| `CHUNK_NBT_CACHE_BYTES` | `134217728` | NBT cache cap. |
 
 Example:
 
@@ -87,17 +85,8 @@ These documented external settings remain supported; they are not ServerConfig c
 
 | YAML                     | Environment                  | Default      |
 | ------------------------ | ---------------------------- | ------------ |
-| cache.regionBytes        | REGION_CACHE_BYTES           | 268435456    |
-| cache.chunkNbtBytes      | CHUNK_NBT_CACHE_BYTES        | 134217728    |
-| cache.textureBytes       | TEXTURE_CACHE_BYTES          | 33554432     |
 | cache.storageStatMs      | STORAGE_STAT_CACHE_MS        | 1000         |
 | cache.storageListMs      | STORAGE_LIST_CACHE_MS        | 2000         |
-| cache.manifestMs         | MANIFEST_CACHE_MS            | 5000         |
-| cache.worldListMs        | WORLD_LIST_CACHE_MS          | 15000        |
-| limits.chunkReads        | CHUNK_READ_CONCURRENCY       | 8 (1–1024)   |
-| limits.chunkQueue        | CHUNK_READ_QUEUE             | 64 (0–65536) |
-| limits.atlasBuilds       | ATLAS_BUILD_CONCURRENCY      | 1 (1–1024)   |
-| limits.atlasQueue        | ATLAS_BUILD_QUEUE            | 16 (0–65536) |
 | limits.mediaImports      | MEDIA_IMPORT_CONCURRENCY     | 1 (1–1024)   |
 | limits.mediaQueue        | MEDIA_IMPORT_QUEUE           | 8 (0–65536)  |
 | limits.contentMutations  | CONTENT_MUTATION_CONCURRENCY | 1 (1–1024)   |
@@ -110,6 +99,10 @@ These documented external settings remain supported; they are not ServerConfig c
 Media import capacity is reserved before reading request bytes, decoding images/GLB or publishing blobs. Queued requests retain their unread stream rather than a full buffered upload; an exhausted queue returns 503 `CONTENT_BUSY` with `Retry-After: 1`. The upload byte limit remains per request, so choose active concurrency for the available memory.
 
 Metadata mutations (maps, layer documents, bindings and media deletion) have a separate capacity budget. They reserve a slot before reading JSON; queued requests keep their bodies unread and excess requests return the same retryable `CONTENT_BUSY` response. This bounds HTTP buffering, while the content service still serializes metadata publication within its single writer. Increasing HTTP concurrency does not introduce parallel metadata commits.
+
+Online body retention is configured only through `resources.cache`; active generation and task admission use `resources.work.memoryBytes` and `resources.work.maxTasks` (ENV `RESOURCES_WORK_MAX_TASKS`, default 16). Server factories explicitly disable long-lived source region/NBT/texture/world-list caches. Top-map verification retains at most 32 MiB of regions during a single generation operation, within its work budget. Independent source tools configure their typed cache options directly. Removed source cache byte/TTL settings and chunk/atlas concurrency/queue settings fail startup rather than being accepted and ignored.
+
+`cache.storageStatMs` and `cache.storageListMs` apply only to non-authoritative mounted storage metadata. World mutation mounts and publication/cache authority mounts always bypass these TTLs.
 
 Cache and byte limits are bounded by safe integers. Protocol constants such as batch sizes remain in code. Limits/caches belong to instances, so applications in the same process do not share state.
 
