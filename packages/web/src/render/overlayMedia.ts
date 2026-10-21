@@ -2,6 +2,7 @@ import type { MediaFeature, MediaVersion, OverlayMediaReference } from '@violet-
 import { parseStaticGlb } from '@violet-map/core/overlays';
 import * as THREE from 'three';
 import { downloadResource } from '../resources/download';
+import { loadBrowserImage } from '../browserImage';
 import type { DisposableOverlayResource } from './overlayResources';
 
 export interface OverlayMediaResource extends DisposableOverlayResource {
@@ -106,31 +107,7 @@ async function imageResource(
   const objectUrl = URL.createObjectURL(new Blob([buffer], { type: version.mediaType }));
   let bitmap: ImageBitmap | undefined;
   try {
-    const source = new Image();
-    source.decoding = 'async';
-    await new Promise<void>((resolve, reject) => {
-      const cleanup = () => {
-        source.onload = null;
-        source.onerror = null;
-        signal.removeEventListener('abort', cancel);
-      };
-      const cancel = () => {
-        cleanup();
-        source.src = '';
-        reject(new DOMException('overlay image aborted', 'AbortError'));
-      };
-      source.onload = () => {
-        cleanup();
-        resolve();
-      };
-      source.onerror = () => {
-        cleanup();
-        reject(new Error('media image decoding failed'));
-      };
-      signal.addEventListener('abort', cancel, { once: true });
-      if (signal.aborted) cancel();
-      else source.src = objectUrl;
-    });
+    const source = await loadBrowserImage(objectUrl, signal);
     abort(signal);
     const largest = Math.max(version.width!, version.height!),
       limit = Math.min(OVERLAY_LIMITS.mediaTexturePixels, maxTextureSize);

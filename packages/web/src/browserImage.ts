@@ -5,6 +5,7 @@ export function loadBrowserImage(url: string, signal?: AbortSignal): Promise<HTM
     signal?.throwIfAborted();
     const image = new Image();
     image.crossOrigin = 'anonymous';
+    image.decoding = 'async';
     const cleanup = () => {
       image.onload = null;
       image.onerror = null;
