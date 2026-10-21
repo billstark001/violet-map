@@ -10,10 +10,11 @@ import {
   isWorldName,
   VANILLA_DIMENSION_IDS,
 } from '@violet-map/core/domain';
-import { parseRegionFileName } from '@violet-map/core/region';
+import { parseRegionFileName, regionChunkRange, parseRegionChunkRecord } from '@violet-map/core/region';
 import { ResourceError } from '@violet-map/core/resources';
 import type { ObjectReader, StoredFileInfo } from '@violet-map/core/storage';
 import { cleanStoragePath, sha256 } from '@violet-map/storage';
+import type { ObjectScanner } from '@violet-map/storage';
 import { chunkIdentity } from '../chunkIdentity.js';
 import { decodeRegionChunk, decompressNbt } from './nbtCodec.js';
 
@@ -192,8 +193,12 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     return dimensionRegionPaths(dim).map((candidate) => candidate.replace(/(^|\/)region$/, '$1entities'));
   }
   async function prefixHasRegionFiles(prefix: string): Promise<boolean> {
-    const files = await worldStorage.list(prefix);
-    return files.some((f) => parseRegionFileName(f.path.split('/').pop() ?? '') !== null);
+    // Layout discovery needs one matching basename, not metadata for every
+    // region in the dimension. Select streaming before I/O when supported.
+    const scan = (worldStorage as ObjectReader & Partial<ObjectScanner>).scan;
+    const files = scan ? scan.call(worldStorage, prefix) : await worldStorage.list(prefix);
+    for await (const file of files) if (parseRegionFileName(file.path.split('/').pop() ?? '') !== null) return true;
+    return false;
   }
   async function regionDir(world: string, dim: string): Promise<string> {
     assertWorldName(world);
@@ -322,6 +327,38 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     } catch {
       return null;
     }
+  }
+
+  async function readRegionChunks(filePath: string, items: { meta: ChunkMetadata; index: number }[], entity = false) {
+    const header = await readRegionHeader(filePath);
+    if (!header) throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'region disappeared during read', true);
+    const expected = entity ? items[0]?.meta.entityRevision : items[0]?.meta.terrainRevision;
+    if (header.validator !== expected)
+      throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'region changed before reading its records', true);
+    const retained = regionCache.get(cleanStoragePath(filePath));
+    const bytes = retained?.validator === expected ? retained.bytes : undefined;
+    // A batch shares its header and revision checks. Decode spans in order to
+    // bound compressed/decompressed input independently of the batch length.
+    const results: Uint8Array[] = [];
+    for (const { meta } of items) {
+      const range = regionChunkRange(header.header, meta.cx & 31, meta.cz & 31);
+      if (!range) throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'declared chunk has an invalid location');
+      const span =
+        bytes?.subarray(range.start, range.start + range.length) ??
+        (await worldStorage.readRange(filePath, range.start, range.length));
+      let record;
+      try {
+        record = span && parseRegionChunkRecord(span, range.length);
+      } catch {
+        throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'declared chunk has unsupported compression');
+      }
+      if (!record) throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'declared chunk record is truncated');
+      results.push(await decodeRegionChunk(record));
+    }
+    const after = await regionFileInfo(filePath);
+    if (!after || validator(after) !== expected)
+      throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'region changed while reading its records', true);
+    return results;
   }
   function addEncodedDimension(encoded: string, dimensions: Set<string>): void {
     try {
@@ -595,15 +632,10 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     });
 
     await mapWithConcurrency([...byRegion.entries()], MAX_PARALLEL_STORAGE_READS, async ([filePath, items]) => {
-      const region = await readRegionFile(filePath);
-      if (!region) throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'region disappeared during read', true);
-      for (const { meta, index } of items) {
-        if (!meta.terrainRevision || !meta.sourcePath) continue;
-        const data = await decodeRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31);
-        if (!data)
-          throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'declared source chunk is truncated or invalid');
-        out[index] = { ...meta, data } as ChunkReadResult;
-      }
+      const data = await readRegionChunks(filePath, items);
+      items.forEach(({ meta, index }, i) => {
+        out[index] = { ...meta, data: data[i] } as ChunkReadResult;
+      });
     });
 
     const byEntityRegion = new Map<string, { meta: ChunkMetadata; index: number }[]>();
@@ -615,16 +647,10 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
       byEntityRegion.set(meta.entitySourcePath, group);
     }
     await mapWithConcurrency([...byEntityRegion.entries()], MAX_PARALLEL_STORAGE_READS, async ([filePath, items]) => {
-      const region = await readRegionFile(filePath);
-      if (!region) throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'entity region disappeared during read', true);
-      for (const { meta, index } of items) {
-        const result = out[index];
-        if (!result) continue;
-        const entities = await decodeRegionChunk(region.bytes, meta.cx & 31, meta.cz & 31);
-        if (!entities)
-          throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'declared entity chunk is truncated or invalid');
-        result.entities = entities;
-      }
+      const data = await readRegionChunks(filePath, items, true);
+      items.forEach(({ index }, i) => {
+        out[index]!.entities = data[i];
+      });
     });
 
     // Cache only after both terrain and optional entity NBT have been merged.

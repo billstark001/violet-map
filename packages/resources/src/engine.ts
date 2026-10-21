@@ -4,6 +4,8 @@ import { ResourceGenerator } from './generator.js';
 import { ResourceViewSessions, type View } from './viewSessions.js';
 import { ResourcePublisher } from './publisher.js';
 import { LruCache } from '@violet-map/core/cache';
+import { mapWithConcurrency } from '@violet-map/core/async';
+import { isWorldName } from '@violet-map/core/domain';
 import type {
   AtlasDocument,
   ChunkCoverage,
@@ -44,6 +46,7 @@ export class ResourceEngine {
   private readonly sessions: ResourceViewSessions;
   readonly publication: ResourcePublisher;
   private bounded?: BoundedSource;
+  private readonly worldObservations = new Map<string, { source: BoundedSource; lastUsed: number }>();
   private observationTimer?: ReturnType<typeof setTimeout>;
   private readonly observationController = new AbortController();
   private closed = false;
@@ -112,7 +115,7 @@ export class ResourceEngine {
         coordinator,
         async () => {
           const release = await this.repo().work.waitReserve(
-            128 * 1024 ** 2,
+            budget * 2 + 2 * 1024 ** 2,
             config.resources.work.maxTasks + 1,
             this.observationController.signal,
           );
@@ -122,30 +125,6 @@ export class ResourceEngine {
             hash.update(resourceJsonBytes(await dynamic.gameData.buildBlockInfo()));
             hash.update(resourceJsonBytes(await dynamic.gameData.readBiomes()));
             hash.update(resourceJsonBytes(await dynamic.gameData.readDimensions()));
-            const files = await mounts.worlds!.list();
-            if (files.length > Math.floor(budget / 1024))
-              throw new ResourceError('RESOURCE_BUSY', 'source inventory exceeds metadata budget');
-            for (const file of files.sort((a, b) => a.path.localeCompare(b.path))) {
-              this.observationController.signal.throwIfAborted();
-              if (
-                !/\.(mca|nbt|msgpack)$|\/(level.dat|identity.json|world.json)$|\/top-map\/manifest.json$/.test(
-                  file.path,
-                )
-              )
-                continue;
-              hash.update(canonicalJson({ key: file.path, bytes: file.size }));
-              if (file.etag && !/^W\//i.test(file.etag)) {
-                hash.update(canonicalJson({ revision: file.etag }));
-                continue;
-              }
-              for (let offset = 0; offset < file.size; offset += 1024 ** 2) {
-                const length = Math.min(1024 ** 2, file.size - offset);
-                const bytes = await mounts.worlds!.readRange(file.path, offset, length);
-                if (!bytes || bytes.byteLength !== length)
-                  throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'source changed during observation', true);
-                hash.update(bytes);
-              }
-            }
             const result = hash.digest('hex');
             return result;
           } finally {
@@ -159,26 +138,115 @@ export class ResourceEngine {
         ? new ResourceDelivery({ mode: 'public', publicBaseUrl: config.resources.delivery.publicBaseUrl! })
         : new ResourceDelivery({ mode: 'server', apiBasePath: '/api/resources' });
   }
-  private async observe() {
+  private worldObservation(world: string) {
+    if (!isWorldName(world)) throw new TypeError('invalid world');
+    let record = this.worldObservations.get(world);
+    if (!record) {
+      const limit = Math.max(1, Math.floor(this.config.resources.cache.metadataBytes / 32768));
+      if (this.worldObservations.size >= limit) {
+        const idle = [...this.worldObservations].find(([, value]) => !this.observationActive(value));
+        if (!idle) throw new ResourceError('RESOURCE_BUSY', 'active source observations exhaust metadata budget', true);
+        this.worldObservations.delete(idle[0]);
+        // Dropping an old fingerprint must expire its views and action keys;
+        // reactivation cannot silently accept bytes from an unobserved interval.
+        this.invalidate();
+      }
+      record = {
+        lastUsed: Date.now(),
+        source: new BoundedSource(
+          this.coordinator,
+          async () => {
+            const budget = this.config.resources.cache.metadataBytes;
+            const release = await this.repo().work.waitReserve(
+              budget * 2 + 2 * 1024 ** 2,
+              this.config.resources.work.maxTasks + 1,
+              this.observationController.signal,
+            );
+            try {
+              const hash = createHash('sha256');
+              const files = await this.mounts.worlds!.list(world);
+              if (files.length > Math.floor(budget / 1024))
+                throw new ResourceError('RESOURCE_BUSY', 'source inventory exceeds metadata budget');
+              for (const file of files.sort((a, b) => a.path.localeCompare(b.path))) {
+                this.observationController.signal.throwIfAborted();
+                if (
+                  !/\.(mca|nbt|msgpack)$|\/(level.dat|identity.json|world.json)$|\/top-map\/manifest.json$/.test(
+                    file.path,
+                  )
+                )
+                  continue;
+                hash.update(canonicalJson({ key: file.path, bytes: file.size }));
+                if (file.etag && !/^W\//i.test(file.etag)) {
+                  hash.update(canonicalJson({ revision: file.etag }));
+                  continue;
+                }
+                for (let offset = 0; offset < file.size; offset += 1024 ** 2) {
+                  const length = Math.min(1024 ** 2, file.size - offset);
+                  const bytes = await this.mounts.worlds!.readRange(file.path, offset, length);
+                  if (!bytes || bytes.byteLength !== length)
+                    throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'source changed during observation', true);
+                  hash.update(bytes);
+                }
+              }
+              return hash.digest('hex');
+            } finally {
+              release();
+            }
+          },
+          this.config.resources.source.revalidateMs,
+        ),
+      };
+      this.worldObservations.set(world, record);
+    }
+    record.lastUsed = Date.now();
+    return record.source;
+  }
+  private observationActive(record: { lastUsed: number }) {
+    return Date.now() - record.lastUsed <= Math.max(30000, this.config.resources.work.handoffMs);
+  }
+  private async observe(worlds: string[] = [], force = false) {
     if (this.closed) throw new ResourceError('RESOURCE_BUSY', 'resource engine is closed', true);
     if (!this.bounded) return;
     const before = this.coordinator.generation;
+    let failed = true;
     try {
-      await this.bounded.validate();
-      this.publication.state.sourceObservedAt = this.bounded.sourceObservedAt;
+      const requested = [...new Set(worlds)].map((world) => this.worldObservation(world));
+      await this.bounded.validate(force);
+      const active = force
+        ? [...this.worldObservations.values()]
+            .filter((record) => this.observationActive(record))
+            .map((record) => record.source)
+        : requested;
+      await mapWithConcurrency(active, 2, (source) => source.validate(force));
+      this.publication.state.sourceObservedAt = Math.min(
+        this.bounded.sourceObservedAt,
+        ...active.map((source) => source.sourceObservedAt),
+      );
       if (before !== this.coordinator.generation) {
         this.root = undefined;
         this.dynamic!.assets.clearTextureAtlasCache();
         for (const file of await this.mounts.worlds!.list()) this.dynamic!.worldStore.invalidateStoredFile(file.path);
       }
+      failed = false;
     } finally {
       if (!this.closed && !this.observationTimer) {
-        this.observationTimer = setTimeout(() => {
-          this.observationTimer = undefined;
-          void this.observe().catch((error) => {
-            this.publication.state.error = error instanceof ResourceError ? error.code : 'RESOURCE_BACKEND_UNAVAILABLE';
-          });
-        }, this.config.resources.source.revalidateMs);
+        this.observationTimer = setTimeout(
+          () => {
+            this.observationTimer = undefined;
+            void this.observe([], true).catch((error) => {
+              this.publication.state.error =
+                error instanceof ResourceError ? error.code : 'RESOURCE_BACKEND_UNAVAILABLE';
+            });
+          },
+          failed
+            ? this.config.resources.source.revalidateMs
+            : Math.min(
+                this.bounded.refreshDelayMs,
+                ...[...this.worldObservations.values()]
+                  .filter((record) => this.observationActive(record))
+                  .map((record) => record.source.refreshDelayMs),
+              ),
+        );
         this.observationTimer.unref();
       }
     }
@@ -191,9 +259,14 @@ export class ResourceEngine {
     if (this.observationTimer) clearTimeout(this.observationTimer);
     this.observationTimer = undefined;
     await this.operations.close();
-    await this.bounded?.drain().catch((error) => {
+    await Promise.all(
+      [this.bounded, ...[...this.worldObservations.values()].map((record) => record.source)].map((source) =>
+        source?.drain(),
+      ),
+    ).catch((error) => {
       if (error !== this.observationController.signal.reason) throw error;
     });
+    this.worldObservations.clear();
     for (const value of this.members.values()) value.release();
     this.members.clear();
     this.generator.close();
@@ -211,7 +284,7 @@ export class ResourceEngine {
     return this.repository;
   }
   async head(world?: string): Promise<ResourceViewHead> {
-    await this.observe();
+    await this.observe(world ? [world] : []);
     return this.sessions.head(world);
   }
   private async renderRoot(token?: SnapshotToken, previous?: PublicationManifest) {
@@ -313,15 +386,15 @@ export class ResourceEngine {
     return record;
   }
   async resolve(viewId: string, selectors: ResourceSelector[]) {
-    await this.observe();
     if (selectors.length > 128) throw new RangeError('at most 128 resource selectors are allowed');
+    selectors = selectors.map(parseResourceSelector);
+    await this.observe(selectors.flatMap((selector) => ('world' in selector ? [selector.world] : [])));
     const view = await this.sessions.get(viewId);
-    const resources: ResolvedResource[] = [];
+
     const issued: ArtifactRef[] = [];
     let validUntil = Date.now() + this.config.resources.work.handoffMs;
     try {
-      for (const raw of selectors) {
-        const selector = parseResourceSelector(raw);
+      const resources = await mapWithConcurrency(selectors, 2, async (selector): Promise<ResolvedResource> => {
         if (view.world && 'world' in selector && selector.world !== view.world)
           throw new TypeError('selector belongs to a different world than this resource view');
         const key = viewId + selectorKey(selector);
@@ -357,8 +430,7 @@ export class ResourceEngine {
         if (!entry) {
           if (selector.kind !== 'chunk' && selector.kind !== 'texture')
             throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'selected resource is unavailable');
-          resources.push({ selector, missing: true });
-          continue;
+          return { selector, missing: true };
         }
         try {
           if (view.head.mode === 'server' && selector.kind !== 'overlay-media')
@@ -366,11 +438,11 @@ export class ResourceEngine {
               validUntil = Math.min(validUntil, this.repo().promise(ref).validUntil);
               issued.push(ref);
             }
-          resources.push(this.resolved(view, entry));
+          return this.resolved(view, entry);
         } finally {
           this.generator.release(entry);
         }
-      }
+      });
       // A batch can yield between members, including when every member is a
       // cache hit. Never issue a mixed-generation batch after a source write.
       if (view.head.mode === 'server' && view.head.generation !== this.coordinator.generation)
@@ -515,6 +587,7 @@ export class ResourceEngine {
     return view.publication!.worlds;
   }
   private async projection<T>(world: string, viewId: string | undefined, read: (view: View) => Promise<T>): Promise<T> {
+    await this.observe([world]);
     const id = viewId ?? (await this.head(world)).viewId;
     const run = async () => {
       const view = await this.sessions.get(id);

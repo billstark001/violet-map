@@ -232,16 +232,30 @@ test('declared terrain and entity regions becoming empty during reads remain sou
         await storage.replace(terrain, savedRegion());
         if (key !== terrain) await storage.replace(key, savedRegion());
         const stat = storage.stat.bind(storage);
-        let observations = 0;
-        t.mock.method(storage, 'stat', async (filePath: string) => {
+        const read = storage.readRange.bind(storage);
+        let headerRead = false,
+          recordRead = false,
+          truncated = false;
+        t.mock.method(storage, 'readRange', async (filePath: string, start: number, length: number) => {
+          if (filePath === key && start === 0 && phase === 'header' && !truncated) {
+            truncated = true;
+            await storage.replace(key, new Uint8Array());
+          }
+          const bytes = await read(filePath, start, length);
           if (filePath === key) {
-            observations++;
-            const truncateAt = phase === 'header' ? 1 : phase === 'before-body' ? 2 : 3;
-            if (observations === truncateAt) {
-              const before = await stat(filePath);
-              await storage.replace(filePath, new Uint8Array());
-              if (phase === 'header') return before;
-            }
+            if (start === 0) headerRead = true;
+            else if (start >= 8192) recordRead = true;
+          }
+          return bytes;
+        });
+        t.mock.method(storage, 'stat', async (filePath: string) => {
+          if (
+            filePath === key &&
+            !truncated &&
+            ((phase === 'before-body' && headerRead) || (phase === 'body-restat' && recordRead))
+          ) {
+            truncated = true;
+            await storage.replace(filePath, new Uint8Array());
           }
           return stat(filePath);
         });
@@ -254,4 +268,88 @@ test('declared terrain and entity regions becoming empty during reads remain sou
       });
     }
   }
+});
+
+test('range reads bound a sparse large region to its header and requested sectors', async (t) => {
+  const { source, storage } = await sourceFixture(t);
+  const region = new Uint8Array(16 * 1024 ** 2);
+  region.set(savedRegion());
+  const view = new DataView(region.buffer);
+  view.setUint32(4, (3 << 8) | 1);
+  view.setUint32(12288, 5);
+  region[12292] = 3;
+  region.set(new Uint8Array([10, 0, 0, 1]), 12293);
+  await storage.write('world/region/r.0.0.mca', region);
+  const reads: { start: number; length: number }[] = [];
+  const read = storage.readRange.bind(storage);
+  t.mock.method(storage, 'readRange', async (key: string, start: number, length: number) => {
+    reads.push({ start, length });
+    return read(key, start, length);
+  });
+  const rows = await source.readChunks('world', 'minecraft:overworld', [
+    { cx: 0, cz: 0 },
+    { cx: 1, cz: 0 },
+  ]);
+  assert.deepEqual(
+    rows.map((r) => [...r!.data]),
+    [
+      [10, 0, 0, 0],
+      [10, 0, 0, 1],
+    ],
+  );
+  assert.ok(
+    reads.every((r) => r.length <= 4096),
+    'no complete MCA is buffered',
+  );
+  assert.equal(reads.filter((r) => r.start >= 8192).length, 2);
+  assert.ok(reads.reduce((sum, r) => sum + r.length, 0) <= 4 * 4096);
+});
+
+test('an early background observation does not block fresh reads but stale reads wait and see invalidation', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 10000 });
+  const coordinator = new InvalidationCoordinator();
+  let calls = 0;
+  const gate = deferred();
+  const source = new BoundedSource(
+    coordinator,
+    async () => {
+      if (++calls > 1) await gate.promise;
+      return sha256(new Uint8Array([calls]));
+    },
+    5000,
+  );
+  await source.validate();
+  t.mock.timers.tick(4000);
+  const background = source.validate(true);
+  await source.validate();
+  assert.equal(coordinator.generation, 0);
+  t.mock.timers.tick(1000);
+  let finished = false;
+  const stale = source.validate().then(() => {
+    finished = true;
+  });
+  await Promise.resolve();
+  assert.equal(finished, false);
+  gate.release();
+  await Promise.all([background, stale]);
+  assert.equal(coordinator.generation, 1);
+  assert.equal(calls, 2);
+});
+
+test('layout discovery stops streaming after one region instead of enumerating the dimension', async (t) => {
+  const { source, storage } = await sourceFixture(t);
+  await storage.write('world/region/r.0.0.mca', savedRegion());
+  await storage.write('world/region/r.1.0.mca', savedRegion());
+  t.mock.method(storage, 'list', async () => {
+    throw Error('layout discovery must not enumerate a whole local dimension');
+  });
+  const scan = storage.scan.bind(storage);
+  t.mock.method(storage, 'scan', async function* (prefix = '') {
+    for await (const file of scan(prefix)) {
+      yield file;
+      throw Error('layout discovery requested another region');
+    }
+  });
+  const rows = await source.readChunks('world', 'minecraft:overworld', [{ cx: 0, cz: 0 }]);
+  assert.deepEqual(rows[0]?.data, new Uint8Array([10, 0, 0, 0]));
 });

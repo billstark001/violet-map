@@ -110,7 +110,9 @@ export class ResourceGenerator {
         : Math.min(16 * 1024 ** 2, repo.handoff.budget.capacity);
     // These bounds cover source reads, decoding and output buffers. A smaller
     // configured work budget must reject before preparation allocates them.
-    const workBytes = ['atlas', 'chunk', 'top-map-tile'].includes(selector.kind) ? 128 * 1024 ** 2 : 64 * 1024 ** 2;
+    // Chunk input uses bounded sector spans, not two complete region files.
+    // 64 MiB covers compressed input, owned NBT and MessagePack/output copies.
+    const workBytes = ['atlas', 'top-map-tile'].includes(selector.kind) ? 128 * 1024 ** 2 : 64 * 1024 ** 2;
     const result = await repo.build(
       selectorKey(selector),
       generation,

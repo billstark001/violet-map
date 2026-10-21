@@ -23,15 +23,14 @@ export interface RegionChunkRecord {
   payload: Uint8Array;
 }
 
-/**
- * Locate a validated Anvil record without decoding it, allowing platform-native
- * codecs to share the same sector, length and compression validation.
- * Returns null when its location is absent or its declared record extends outside its sectors.
- * Unknown compression types throw; the payload itself has not been validated.
- */
-export function getRegionChunkRecord(region: Uint8Array, localX: number, localZ: number): RegionChunkRecord | null {
+/** Locate the sector span using only the location header. */
+export function regionChunkRange(
+  header: Uint8Array,
+  localX: number,
+  localZ: number,
+): { start: number; length: number } | null {
   if (
-    region.length < REGION_HEADER_BYTES ||
+    header.length < REGION_SECTOR_BYTES ||
     !Number.isInteger(localX) ||
     !Number.isInteger(localZ) ||
     localX < 0 ||
@@ -40,23 +39,38 @@ export function getRegionChunkRecord(region: Uint8Array, localX: number, localZ:
     localZ >= REGION_SIDE_CHUNKS
   )
     return null;
-  const view = new DataView(region.buffer, region.byteOffset, region.byteLength);
-  const idx = localX + localZ * REGION_SIDE_CHUNKS;
-  const loc = view.getUint32(idx * 4);
-  const sectorOffset = loc >>> 8;
-  const sectorCount = loc & 0xff;
-  if (sectorOffset < 2 || sectorCount === 0) return null;
-  const base = sectorOffset * REGION_SECTOR_BYTES;
-  if (base + 5 > region.length) return null;
-  const length = view.getUint32(base);
-  if (length < 1 || length > sectorCount * REGION_SECTOR_BYTES - 4 || base + 4 + length > region.length) {
-    return null;
-  }
-  const compression = view.getUint8(base + 4);
+  const loc = new DataView(header.buffer, header.byteOffset, header.byteLength).getUint32(
+    (localX + localZ * REGION_SIDE_CHUNKS) * 4,
+  );
+  const offset = loc >>> 8;
+  const sectors = loc & 0xff;
+  return offset >= 2 && sectors > 0
+    ? { start: offset * REGION_SECTOR_BYTES, length: sectors * REGION_SECTOR_BYTES }
+    : null;
+}
+
+/** Validate a record span, including its declared sector bound, without decoding NBT. */
+export function parseRegionChunkRecord(bytes: Uint8Array, sectorBytes: number): RegionChunkRecord | null {
+  if (bytes.length < 5) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const length = view.getUint32(0);
+  if (length < 1 || length > sectorBytes - 4 || 4 + length > bytes.length) return null;
+  const compression = bytes[4];
   if (compression !== 1 && compression !== 2 && compression !== 3)
     throw new Error(`Unknown region compression type ${compression}`);
-  const payload = region.subarray(base + 5, base + 4 + length);
-  return { compression, payload };
+  return { compression, payload: bytes.subarray(5, 4 + length) };
+}
+
+/**
+ * Locate a validated Anvil record without decoding it, allowing platform-native
+ * codecs to share the same sector, length and compression validation.
+ * Returns null when its location is absent or its declared record extends outside its sectors.
+ * Unknown compression types throw; the payload itself has not been validated.
+ */
+export function getRegionChunkRecord(region: Uint8Array, localX: number, localZ: number): RegionChunkRecord | null {
+  if (region.length < REGION_HEADER_BYTES) return null;
+  const range = regionChunkRange(region, localX, localZ);
+  return range ? parseRegionChunkRecord(region.subarray(range.start, range.start + range.length), range.length) : null;
 }
 
 /** Return owned decompressed NBT, or null for an absent/truncated Anvil record.

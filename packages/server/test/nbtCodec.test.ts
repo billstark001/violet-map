@@ -1,5 +1,5 @@
 import { decompress } from '@violet-map/core/nbt';
-import { getRegionChunk } from '@violet-map/core/region';
+import { getRegionChunk, getRegionChunkRecord } from '@violet-map/core/region';
 import { decodeRegionChunk, decompressNbt } from '@violet-map/resources/nbt-codec';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -26,15 +26,15 @@ test('native Anvil decoder shares validation and returns owned bytes for all for
     view.setUint32(8192, payload.length + 1);
     region[8196] = index + 1;
     region.set(payload, 8197);
-    const output = await decodeRegionChunk(region, 0, 0);
+    const output = await decodeRegionChunk(getRegionChunkRecord(region, 0, 0)!);
     assert.deepEqual(output, getRegionChunk(region, 0, 0));
     assert.notEqual(output!.buffer, backing.buffer);
     assert.equal(output!.buffer.byteLength, raw.byteLength);
-    assert.equal(await decodeRegionChunk(region, 1, 0), null);
+    assert.equal(getRegionChunkRecord(region, 1, 0), null);
     view.setUint32(8192, 4093);
-    assert.equal(await decodeRegionChunk(region, 0, 0), null);
+    assert.equal(getRegionChunkRecord(region, 0, 0), null);
     view.setUint32(8192, payload.length + 1);
     region[8196] = 99;
-    await assert.rejects(decodeRegionChunk(region, 0, 0), /Unknown region compression type/);
+    assert.throws(() => getRegionChunkRecord(region, 0, 0), /Unknown region compression type/);
   }
 });

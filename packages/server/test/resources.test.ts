@@ -69,6 +69,69 @@ test('bounded world observations avoid validated body reads and hash bytes when 
   assert.notEqual(after.generation, before.generation);
 });
 
+test('bounded observation rejects insufficient work memory before scanning source inventory', async (t) => {
+  const root = await rootFixture(t);
+  const config = loadServerConfig({
+    env: {
+      DEPLOYMENT_PROFILE: 'public',
+      DATA_DIR: root,
+      WORLDS_DIR: path.join(root, 'worlds'),
+      RESOURCES_SOURCE_CONSISTENCY: 'bounded',
+      RESOURCES_WORK_MEMORY_BYTES: '1',
+    },
+    cwd: root,
+  });
+  const services = await createServices(config);
+  t.after(() => services.close());
+  const list = t.mock.method(services.mounts.worlds!, 'list', async () => {
+    throw new Error('observation allocated before admission');
+  });
+  await assert.rejects(services.resources.head('world'), { code: 'RESOURCE_BUSY' });
+  assert.equal(list.mock.callCount(), 0);
+});
+
+test('bounded world observations scan requested scopes and detect changes on reactivation', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 10000 });
+  const root = await rootFixture(t);
+  const config = loadServerConfig({
+    env: {
+      DEPLOYMENT_PROFILE: 'public',
+      DATA_DIR: root,
+      WORLDS_DIR: path.join(root, 'worlds'),
+      RESOURCES_SOURCE_CONSISTENCY: 'bounded',
+    },
+    cwd: root,
+  });
+  const services = await createServices(config);
+  t.after(() => services.close());
+  const storage = services.mounts.worlds!;
+  await storage.write('first/level.dat', new Uint8Array([1]));
+  await storage.write('second/level.dat', new Uint8Array([1]));
+  const list = storage.list.bind(storage);
+  const prefixes: (string | undefined)[] = [];
+  t.mock.method(storage, 'list', async (prefix?: string) => {
+    prefixes.push(prefix);
+    return list(prefix);
+  });
+  const first = await services.resources.head('first');
+  await services.resources.head('second');
+  assert.deepEqual(prefixes, ['first', 'second']);
+  prefixes.length = 0;
+  // A world can be inactive for longer than the observation freshness window.
+  t.mock.timers.tick(60000);
+  await fs.writeFile(path.join(root, 'worlds/second/level.dat'), new Uint8Array([2]));
+  const unchanged = await services.resources.head('first');
+  assert.equal(unchanged.generation, first.generation, 'an unrelated world does not trigger request-path scans');
+  assert.deepEqual(prefixes, ['first']);
+  const changed = await services.resources.head('second');
+  assert.ok(changed.generation > unchanged.generation, 'reactivation validates the retained fingerprint');
+  assert.deepEqual(
+    prefixes,
+    ['first', 'second', undefined],
+    'a detected change still invalidates shared source caches',
+  );
+});
+
 test('dynamic zero retention resolves and GETs deterministic chunks; source writes expire views and HEAD reads no body', async (t) => {
   const root = await rootFixture(t);
   const config = loadServerConfig({

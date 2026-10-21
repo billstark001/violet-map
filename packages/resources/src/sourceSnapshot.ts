@@ -48,6 +48,7 @@ export class BoundedSource {
   private observed?: string;
   sourceObservedAt = 0;
   private pending?: Promise<void>;
+  private observationMs = 0;
   constructor(
     private readonly coordinator: InvalidationCoordinator,
     private readonly observe: () => Promise<string>,
@@ -59,16 +60,23 @@ export class BoundedSource {
   async drain() {
     await this.pending;
   }
+  /** Start background work early enough that ordinary reads normally stay
+   * inside the configured freshness window while the next scan is in flight. */
+  get refreshDelayMs() {
+    return Math.max(1, this.revalidateMs - this.observationMs - 250 - (Date.now() - this.lastCheck));
+  }
   async validate(force = false) {
+    if (!force && this.observed !== undefined && Date.now() - this.lastCheck < this.revalidateMs) return;
     if (this.pending) return this.pending;
-    if (!force && Date.now() - this.lastCheck < this.revalidateMs) return;
     const pending = (async () => {
+      const started = Date.now();
       const digest = await this.observe();
       if (!/^[a-f0-9]{64}$/.test(digest))
         throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'invalid source observation');
       if (this.observed !== undefined && digest !== this.observed) this.coordinator.invalidate();
       this.observed = digest;
       this.lastCheck = Date.now();
+      this.observationMs = this.lastCheck - started;
       this.sourceObservedAt = this.lastCheck;
     })();
     this.pending = pending;
