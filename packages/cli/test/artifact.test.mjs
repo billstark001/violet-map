@@ -30,9 +30,18 @@ test('relocated CLI works without render/storage/server, TS sources, tsx, or nat
       for (const dependency of Object.keys(metadata.dependencies)) {
         const dependencyPath = path.join(destination, 'node_modules', dependency);
         await fs.mkdir(path.dirname(dependencyPath), { recursive: true });
-        await fs.symlink(await fs.realpath(new URL(`node_modules/${dependency}`, core)), dependencyPath, 'dir');
+        await fs.symlink(
+          await fs.realpath(new URL(`node_modules/${dependency}`, core)),
+          dependencyPath,
+          process.platform === 'win32' ? 'junction' : 'dir',
+        );
       }
-    } else await fs.symlink(await fs.realpath(new URL(`../node_modules/${name}`, import.meta.url)), destination, 'dir');
+    } else
+      await fs.symlink(
+        await fs.realpath(new URL(`../node_modules/${name}`, import.meta.url)),
+        destination,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
   }
   const env = { ...process.env, NODE_OPTIONS: '', NODE_PATH: '' };
   for (const key of Object.keys(env)) if (/^(VIOLET_|DATABASE_|DATA_DIR$|ROOT_|S3_|AWS_)/.test(key)) delete env[key];
@@ -244,7 +253,11 @@ test('relocated CLI works without render/storage/server, TS sources, tsx, or nat
       if (dependency.startsWith('@violet-map/')) continue;
       const nested = path.join(destination, 'node_modules', dependency);
       await fs.mkdir(path.dirname(nested), { recursive: true });
-      await fs.symlink(await fs.realpath(new URL(`node_modules/${dependency}`, source)), nested, 'dir');
+      await fs.symlink(
+        await fs.realpath(new URL(`node_modules/${dependency}`, source)),
+        nested,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
     }
     return destination;
   }

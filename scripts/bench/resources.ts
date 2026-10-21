@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { deflateSync, inflateSync } from 'node:zlib';
 import { LruCache } from '../../packages/core/src/cache.js';
 import { BlobRepository, InvalidationCoordinator, MemoryActionIndex } from '../../packages/resources/src/index.js';
@@ -179,18 +180,15 @@ if (process.argv[2] === '--worker') {
   const worker = async (args: unknown[]) => {
     const result = await execute(
       process.execPath,
-      [
-        '--import',
-        'tsx',
-        '--conditions=development',
-        new URL(import.meta.url).pathname,
-        '--worker',
-        JSON.stringify(args),
-      ],
+      ['--import', 'tsx', '--conditions=development', fileURLToPath(import.meta.url), '--worker', JSON.stringify(args)],
       { timeout: 60000, maxBuffer: 1024 ** 2 },
     );
     return JSON.parse(result.stdout);
   };
+  if (process.argv.includes('--smoke')) {
+    console.log(JSON.stringify(await worker(['scan', 'zero', 0, 0])));
+    process.exit(0);
+  }
   for (const name of fixture.traces) {
     for (const capacity of fixture.capacities)
       for (const strategy of fixture.strategies) {

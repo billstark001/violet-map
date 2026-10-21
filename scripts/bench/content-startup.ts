@@ -7,12 +7,13 @@ const project = fileURLToPath(new URL('../../', import.meta.url));
 const moduleUrl = new URL('../../packages/server/src/content.ts', import.meta.url).href;
 const script = `
   import { createRequire } from 'node:module';
+  import path from 'node:path';
   const started = performance.now();
   await import(${JSON.stringify(moduleUrl)});
   const elapsed = performance.now() - started;
   globalThis.gc();
   const require = createRequire(import.meta.url);
-  console.log(JSON.stringify({ importMs: elapsed, memory: process.memoryUsage(), sharpLoaded: Object.keys(require.cache).some(path => path.includes('/@img/sharp-') || path.includes('/sharp/')) }));
+  console.log(JSON.stringify({ importMs: elapsed, memory: process.memoryUsage(), sharpLoaded: Object.keys(require.cache).map(file => file.split(path.sep).join('/')).some(file => file.includes('/@img/sharp-') || file.includes('/sharp/')) }));
 `;
 const samples: { importMs: number; memory: NodeJS.MemoryUsage; sharpLoaded: boolean }[] = [];
 

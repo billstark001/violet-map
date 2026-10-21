@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 
@@ -20,7 +20,7 @@ export function invoke(
       [
         '--conditions=development',
         '--import',
-        require.resolve('tsx'),
+        pathToFileURL(require.resolve('tsx')).href,
         fileURLToPath(new URL('../src/cli.ts', import.meta.url)),
         '--cli-home',
         options.home,

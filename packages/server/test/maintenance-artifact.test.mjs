@@ -17,7 +17,11 @@ test('built maintenance runs from a relocated artifact with production dependenc
   for (const name of ['@electric-sql/pglite', 'drizzle-orm', 'pg', 'yaml']) {
     const target = path.join(root, 'node_modules', name);
     await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.symlink(await fs.realpath(new URL(`../node_modules/${name}`, import.meta.url)), target, 'dir');
+    await fs.symlink(
+      await fs.realpath(new URL(`../node_modules/${name}`, import.meta.url)),
+      target,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
   }
   const args = [path.join(root, 'dist/src/db/maintenance.js')];
   const options = {

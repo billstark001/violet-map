@@ -19,7 +19,7 @@ function files(dir) {
       entry.isDirectory()
         ? files(path.join(dir, entry.name))
         : /\.tsx?$/.test(entry.name)
-          ? [path.join(dir, entry.name)]
+          ? [path.join(dir, entry.name).split(path.sep).join('/')]
           : [],
     );
 }
@@ -45,7 +45,11 @@ for (const [owner, dependencies] of Object.entries(allowed)) {
         const target =
           name.match(/^@violet-map\/([^/]+)/)?.[1] ??
           (name.startsWith('.')
-            ? path.resolve(path.dirname(file), name).match(/\/packages\/([^/]+)\//)?.[1]
+            ? path
+                .resolve(path.dirname(file), name)
+                .split(path.sep)
+                .join('/')
+                .match(/\/packages\/([^/]+)\//)?.[1]
             : undefined);
         if (target && target !== owner && !dependencies.includes(target)) fail(`forbidden dependency ${name}`);
         if (owner === 'cli' && ['render', 'storage', 'server', 'resources'].includes(target)) {
