@@ -11,3 +11,9 @@ export function execute(
   options: ExecFileOptions & { encoding: 'buffer' | null },
 ): Promise<{ stdout: Buffer; stderr: Buffer }>;
 export function stopProcess(child: ChildProcess, timeoutMs?: number): Promise<void>;
+export function waitForProcessOutput(
+  child: ChildProcess,
+  pattern: RegExp,
+  label: string,
+  timeoutMs?: number,
+): Promise<RegExpMatchArray>;

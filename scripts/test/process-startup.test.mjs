@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { test } from 'node:test';
-import { waitForProcessOutput } from '../acceptance/helpers/process-startup.ts';
+import { stopProcess, waitForProcessOutput } from '../helpers/process.mjs';
 
 function child(t, script) {
   const process = spawn(globalThis.process.execPath, ['--input-type=module', '-e', script], {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  t.after(() => process.kill('SIGTERM'));
+  t.after(() => stopProcess(process));
   return process;
 }
 

@@ -138,7 +138,7 @@ export function loadServerConfig(options: ConfigurationOptions = {}) {
     features,
     resources,
     server: {
-      port: number('PORT', 3300, 1, 65535, 'port', 'server.port'),
+      port: number('PORT', 3300, 0, 65535, 'port', 'server.port'),
       cors: { origins },
       staticDir: string('STATIC_DIR', '', 'server.staticDir')
         ? filePath('STATIC_DIR', '', 'server.staticDir')

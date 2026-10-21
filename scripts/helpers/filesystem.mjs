@@ -8,6 +8,7 @@ export function isWithinDirectory(root, candidate) {
 
 /** Canonicalize existing ancestors without creating the requested destination. */
 export async function canonicalPath(file) {
+  file = path.resolve(file);
   try {
     return await fs.realpath(file);
   } catch (error) {

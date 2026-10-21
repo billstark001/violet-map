@@ -66,7 +66,9 @@ try {
     httpServer!.once('error', reject);
     httpServer!.once('listening', resolve);
   });
-  console.log('[violet-map] server on :' + config.server.port);
+  const address = httpServer.address();
+  if (!address || typeof address === 'string') throw new Error('HTTP server has no TCP address');
+  console.log('[violet-map] server on :' + address.port);
 } catch (error) {
   await services.close();
   throw error;

@@ -1,10 +1,9 @@
-import { waitForProcessOutput } from './process-startup.js';
+import { waitForProcessOutput, stopProcess } from '../../helpers/process.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { serve } from '@hono/node-server';
-import { stopProcess } from '../../helpers/process.mjs';
 
 export const project = fileURLToPath(new URL('../../../', import.meta.url));
 export const closeServer = (server: ReturnType<typeof serve>) =>

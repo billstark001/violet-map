@@ -1,6 +1,5 @@
-import { execute, stopProcess } from '../helpers/process.mjs';
+import { execute, stopProcess, waitForProcessOutput } from '../helpers/process.mjs';
 import { chromiumExecutablePath } from '../helpers/browser.mjs';
-import { waitForProcessOutput } from './helpers/process-startup.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import fs from 'node:fs/promises';

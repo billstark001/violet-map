@@ -19,6 +19,8 @@ test('filesystem containment handles drive roots, sibling names and directory al
   assert.equal(isWithinDirectory(source, await canonicalPath(target)), true);
   assert.equal(isWithinDirectory(source, path.join(root, 'source-sibling')), false);
   assert.equal(isWithinDirectory(path.parse(root).root, root), true);
+  const missing = path.join(process.cwd(), 'missing-platform-fixture', 'nested');
+  assert.equal(await canonicalPath(path.relative(process.cwd(), missing)), missing);
   await assert.rejects(fs.stat(path.join(source, 'missing')), { code: 'ENOENT' });
 });
 
@@ -50,6 +52,7 @@ test('supervised Node processes finish graceful IPC cleanup before their parent 
     import fs from 'node:fs/promises';
     async function shutdown() {
       await fs.writeFile(process.argv[1], 'released');
+      process.stdout.write('x'.repeat(100000));
       process.disconnect();
     }
     process.on('SIGTERM', shutdown);
@@ -64,7 +67,14 @@ test('supervised Node processes finish graceful IPC cleanup before their parent 
   );
   t.after(() => stopProcess(child));
   await once(child, 'message');
-  await stopProcess(child);
+  let outputBytes = 0;
+  child.stdout.on('data', (bytes) => {
+    outputBytes += bytes.length;
+  });
+  const stopped = stopProcess(child);
+  assert.equal(stopProcess(child), stopped, 'concurrent shutdown callers share one operation');
+  await stopped;
+  assert.equal(outputBytes, 100000, 'shutdown waits for stdio to drain');
   assert.equal(child.exitCode, 0);
   assert.equal(await fs.readFile(marker, 'utf8'), 'released');
   await stopProcess(child);

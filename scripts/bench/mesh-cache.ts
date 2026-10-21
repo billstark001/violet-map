@@ -1,6 +1,5 @@
 import { chromiumExecutablePath } from '../helpers/browser.mjs';
-import { stopProcess } from '../helpers/process.mjs';
-import { waitForProcessOutput } from '../acceptance/helpers/process-startup.js';
+import { stopProcess, waitForProcessOutput } from '../helpers/process.mjs';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';

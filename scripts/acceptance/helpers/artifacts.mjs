@@ -3,8 +3,7 @@ import { spawn } from 'node:child_process';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { stopProcess } from '../../helpers/process.mjs';
-export { execute } from '../../helpers/process.mjs';
+import { stopProcess, waitForProcessOutput } from '../../helpers/process.mjs';
 export const project = fileURLToPath(new URL('../../../', import.meta.url));
 export const cleanEnv = { ...process.env, NODE_OPTIONS: '', NODE_PATH: '' };
 for (const key of Object.keys(cleanEnv))
@@ -23,7 +22,8 @@ async function freePort() {
   return port;
 }
 export async function boot(artifact, env, cwd, { legacySignals = false } = {}) {
-  const port = await freePort();
+  // Archived artifacts predate ephemeral-port configuration. Keep that fixture policy here.
+  const port = legacySignals ? await freePort() : 0;
   const preload =
     process.platform === 'win32' && legacySignals
       ? ['--import', new URL('./legacy-signals.mjs', import.meta.url).href]
@@ -34,37 +34,24 @@ export async function boot(artifact, env, cwd, { legacySignals = false } = {}) {
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   let output = '';
-  child.stdout.on('data', (bytes) => {
-    output += bytes;
-  });
-  child.stderr.on('data', (bytes) => {
-    output += bytes;
-  });
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(output || 'startup timeout'));
-    }, 20_000);
-    child.once('exit', () => {
-      clearTimeout(timer);
-      reject(new Error(output));
-    });
-    child.once('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.stdout.on('data', (bytes) => {
-      if (String(bytes).includes('server on')) {
-        clearTimeout(timer);
-        resolve();
-      }
-    });
-  });
+  const capture = (bytes) => {
+    output = (output + String(bytes)).slice(-65536);
+  };
+  child.stdout.on('data', capture);
+  child.stderr.on('data', capture);
+  let marker;
+  try {
+    marker = await waitForProcessOutput(child, /server on :(\d+)(?=\s)/, 'server artifact', 20_000);
+  } catch (error) {
+    await stopProcess(child);
+    throw error;
+  }
   return {
-    url: `http://127.0.0.1:${port}`,
+    url: `http://127.0.0.1:${marker[1]}`,
     async close() {
-      if (child.exitCode !== null || child.signalCode !== null) return;
       await stopProcess(child);
+      child.stdout.off('data', capture);
+      child.stderr.off('data', capture);
       assert.equal(child.exitCode, 0, output);
     },
   };

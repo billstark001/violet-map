@@ -7,7 +7,8 @@ import { pathToFileURL } from 'node:url';
 import { isWithinDirectory } from '../helpers/filesystem.mjs';
 import { test } from 'node:test';
 
-import { execute, project, cleanEnv, boot } from './helpers/artifacts.mjs';
+import { execute } from '../helpers/process.mjs';
+import { project, cleanEnv, boot } from './helpers/artifacts.mjs';
 
 test('server production deployment is self-contained; public/sync/full and startup failure release resources', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-production-'));

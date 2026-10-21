@@ -8,7 +8,7 @@ CLI profiles and state are described in [CLI configuration and credentials](cli-
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `PORT` | `3300` | API port. |
+| `PORT` | `3300` | API port; `0` asks the OS to allocate an available port. |
 | `WORLDS_DIR` | `data/worlds` | Local world directory. |
 | `DATA_DIR` | `data` | Runtime data directory, including default PGlite data. |
 | `DATABASE_URL` | unset | PostgreSQL connection string; enables PostgreSQL instead of PGlite. |
@@ -81,7 +81,7 @@ Auth defaults to users when users is enabled, static when users is disabled unde
 | mcVersion      | minecraft.version     | MC_VERSION      |
 | mcDataVersion  | minecraft.dataVersion | MC_DATA_VERSION |
 
-These documented external settings remain supported; they are not ServerConfig code aliases. Two names supplied by the same YAML file must agree even if ENV overrides them. Booleans must be YAML booleans or ENV true/false/1/0. Numbers must be safe integers in their allowed range; empty strings, fractions and malformed values are rejected. Port is 1–65535. Zero disables cache capacity/TTL or queuing where listed below; active-work limits and request byte limits must be positive.
+These documented external settings remain supported; they are not ServerConfig code aliases. Two names supplied by the same YAML file must agree even if ENV overrides them. Booleans must be YAML booleans or ENV true/false/1/0. Numbers must be safe integers in their allowed range; empty strings, fractions and malformed values are rejected. Port is 0–65535; 0 asks the OS to allocate a free port, which the startup message reports. Zero disables cache capacity/TTL or queuing where listed below; active-work limits and request byte limits must be positive.
 
 | YAML                     | Environment                  | Default      |
 | ------------------------ | ---------------------------- | ------------ |

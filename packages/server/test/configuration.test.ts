@@ -8,10 +8,11 @@ import { loadServerConfig, readAdminConfig } from '../src/configuration.js';
 test('configuration validates values, names, secrets, and authentication combinations', () => {
   const load = (env: NodeJS.ProcessEnv) => loadServerConfig({ env, cwd: '/tmp' });
   assert.equal(load({}).deployment.profile, 'full');
+  assert.equal(load({ PORT: '0' }).server.port, 0);
   assert.equal(load({ DEPLOYMENT_PROFILE: 'public' }).features.adminApi, false);
   assert.equal(load({ DEPLOYMENT_PROFILE: 'sync', STATIC_API_TOKEN: 'test' }).auth.mode, 'static');
   for (const value of ['', 'no', '2']) assert.throws(() => load({ USERS_ENABLED: value }), /boolean/);
-  for (const value of ['', 'bad', '0', '65536', '1.2']) assert.throws(() => load({ PORT: value }), /integer/);
+  for (const value of ['', 'bad', '-1', '65536', '1.2']) assert.throws(() => load({ PORT: value }), /integer/);
   assert.throws(() => load({ REGION_CACHE_BYTES: '0' }), /not an online server cache setting/);
   assert.equal(load({}).resources.work.maxTasks, 16);
   assert.equal(load({ RESOURCES_WORK_MAX_TASKS: '2' }).resources.work.maxTasks, 2);

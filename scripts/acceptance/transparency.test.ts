@@ -1,4 +1,4 @@
-import { execute, stopProcess } from '../helpers/process.mjs';
+import { execute, stopProcess, waitForProcessOutput } from '../helpers/process.mjs';
 import { chromiumExecutablePath } from '../helpers/browser.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -8,7 +8,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { chromium } from 'playwright';
-import { waitForProcessOutput } from './helpers/process-startup';
 import { OIT_MAX_PIXELS, OIT_BYTES_PER_PIXEL } from '../../packages/web/src/render/oitShaders';
 import type {} from '../../packages/web/test/transparency-browser';
 
