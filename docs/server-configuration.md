@@ -102,6 +102,8 @@ Metadata mutations (maps, layer documents, bindings and media deletion) have a s
 
 Online body retention is configured only through `resources.cache`; active generation and task admission use `resources.work.memoryBytes` and `resources.work.maxTasks` (ENV `RESOURCES_WORK_MAX_TASKS`, default 16). Server factories explicitly disable long-lived source region/NBT/texture/world-list caches. Top-map verification retains at most 32 MiB of regions during a single generation operation, within its work budget. Independent source tools configure their typed cache options directly. Removed source cache byte/TTL settings and chunk/atlas concurrency/queue settings fail startup rather than being accepted and ignored.
 
+Chunk generation reads bounded region sectors and reserves 64 MiB per active task. Atlas and top-map tasks reserve 128 MiB. Source observation reserves memory according to the configured metadata budget instead of occupying a 128 MiB generation slot. Increasing task count alone does not increase the memory budget. See [loading performance verification](loading-performance.md) for browser residency, recovery and sustained-load checks.
+
 `cache.storageStatMs` and `cache.storageListMs` apply only to non-authoritative mounted storage metadata. World mutation mounts and publication/cache authority mounts always bypass these TTLs.
 
 Cache and byte limits are bounded by safe integers. Protocol constants such as batch sizes remain in code. Limits/caches belong to instances, so applications in the same process do not share state.

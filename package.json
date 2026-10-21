@@ -36,6 +36,7 @@
     "test:resources:browser": "tsx --conditions=development --test scripts/acceptance/resource-delivery.test.ts",
     "test:resources:roles": "tsx --no-cache --conditions=development --test packages/server/test/resourceRoles.test.ts",
     "bench:resources": "tsx --conditions=development scripts/bench/resources.ts",
+    "bench:loading": "node scripts/bench/chunk-loading.mjs",
     "test:resources:backends": "docker build -f scripts/acceptance/Dockerfile.minio -t violet-acceptance-minio:source-2025-10-15 . && node --test scripts/acceptance/resources-backends.test.mjs",
     "bench:resources:baseline": "tsx --conditions=development scripts/bench/resources-baseline.ts"
   },
