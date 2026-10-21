@@ -15,6 +15,18 @@ function isMissingPath(error: unknown): boolean {
   return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
+/** Node cannot flush directory handles on Windows. File contents are still
+ * synced before publication; POSIX also flushes the directory entry changes. */
+async function syncDirectory(directory: string): Promise<void> {
+  if (process.platform === 'win32') return;
+  const handle = await fs.open(directory, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
 /** Adopt an exclusive filesystem allocation; trim pooled or short-read views so
  * one retained object never pins unrelated pool bytes or an unused read tail. */
 function ownedFileBytes(bytes: Uint8Array): Uint8Array {
@@ -100,12 +112,7 @@ export class LocalStorage implements ObjectStorage {
         await handle.close();
       }
       await fs.rename(temporary, file);
-      const parent = await fs.open(path.dirname(file), 'r');
-      try {
-        await parent.sync();
-      } finally {
-        await parent.close();
-      }
+      await syncDirectory(path.dirname(file));
     } finally {
       await fs.rm(temporary, { force: true });
     }
@@ -146,12 +153,7 @@ export class LocalStorage implements ObjectStorage {
             )
               throw new Error('immutable object HTTP metadata conflict');
           }
-          const metadataParent = await fs.open(path.dirname(metadataFile), 'r');
-          try {
-            await metadataParent.sync();
-          } finally {
-            await metadataParent.close();
-          }
+          await syncDirectory(path.dirname(metadataFile));
         } finally {
           await fs.rm(metadataTemporary, { force: true });
         }
@@ -162,12 +164,7 @@ export class LocalStorage implements ObjectStorage {
         if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
         throw error;
       }
-      const parent = await fs.open(directory, 'r');
-      try {
-        await parent.sync();
-      } finally {
-        await parent.close();
-      }
+      await syncDirectory(directory);
       return true;
     } finally {
       await handle.close();
@@ -203,12 +200,7 @@ export class LocalStorage implements ObjectStorage {
         await handle.close();
       }
       await fs.rename(temporary, file);
-      const parent = await fs.open(directory, 'r');
-      try {
-        await parent.sync();
-      } finally {
-        await parent.close();
-      }
+      await syncDirectory(directory);
       return true;
     } finally {
       await fs.rm(temporary, { force: true });

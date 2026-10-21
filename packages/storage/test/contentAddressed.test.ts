@@ -64,3 +64,33 @@ test('conditional local documents preserve the committed head on stale token and
   });
   assert.deepEqual((await local.readDocument('head.json'))!.bytes, next);
 });
+
+test('local publication rejects file sync failures before visibility and cleans up temporary files and locks', async (t) => {
+  for (const operation of ['replace', 'create', 'compareExchange'] as const) {
+    await t.test(operation, async (t) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-sync-failure-'));
+      t.after(() => fs.rm(root, { recursive: true, force: true }));
+      const local = new LocalStorage(root);
+      const open = fs.open;
+      const failure = Object.assign(new Error('file sync failed'), { code: 'EIO' });
+      t.mock.method(fs, 'open', async (...args: Parameters<typeof open>) => {
+        const handle = await open(...args);
+        t.mock.method(handle, 'sync', async () => {
+          throw failure;
+        });
+        return handle;
+      });
+      const bytes = new Uint8Array([1, 2, 3]);
+      await assert.rejects(
+        operation === 'replace'
+          ? local.replace('object', bytes)
+          : operation === 'create'
+            ? local.create('object', bytes, { contentType: 'application/octet-stream' })
+            : local.compareExchange('object', null, bytes),
+        (error) => error === failure,
+      );
+      assert.equal(await local.read('object'), null);
+      assert.deepEqual(await fs.readdir(root), []);
+    });
+  }
+});

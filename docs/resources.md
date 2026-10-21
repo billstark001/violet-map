@@ -12,6 +12,8 @@ The memory, local and shared derived caches permit zero bytes. Missing local cac
 
 Local caches have one exclusive writer. Shared cache readers do not create locks, upload or evict remote files; only the publisher fills and prunes that cache. A crashed owner requires an explicitly quiesced recovery, never an expiring lease takeover. Never share a SQLite cache between independent writers.
 
+Local atomic and conditional writes flush file contents before making them visible. POSIX also flushes the containing directory after publication. Node does not support directory flushing on Windows, so Windows retains atomic visibility and file-content flushing but does not provide the same directory-entry durability guarantee after power loss.
+
 World identity, content metadata, retained media originals, publication manifests, index pages, prepared records and backup pins are authoritative data. Cache resize/GC never deletes original media. Public GC marks complete current, retained, prepared and pinned closures; old publications remain at least 7 days and orphans at least 24 hours. Browser publication sessions are at most 24 hours. Public URLs are not a revocation mechanism.
 
 ## Sources and formats
