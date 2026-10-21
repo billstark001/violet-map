@@ -50,10 +50,20 @@ export function DiagnosticsPanel() {
                 active: value.activeMeshTasks,
               })}
             </span>
+            <span className={controls.badge} data-color={value.errorChunks ? 'amber' : 'gray'}>
+              {t('recoveryStats', {
+                cache: value.cacheLookups,
+                retry: value.retryingChunks,
+                errors: value.errorChunks,
+              })}
+            </span>
           </>
         )}
         {detail === 'detailed' && (
           <>
+            <span className={controls.badge} data-color="gray">
+              {t('workerMemoryEstimate', { value: formatBytes(value.estimatedWorkerBytes) })}
+            </span>
             <span className={controls.badge} data-color="purple">
               {t('profileFetch', { hash: formatMs(value.hashFetchMsAvg), chunk: formatMs(value.chunkFetchMsAvg) })}
             </span>
@@ -65,7 +75,7 @@ export function DiagnosticsPanel() {
               })}
             </span>
             <span className={controls.badge} data-color="cyan">
-              {t('chunkBytesFetched', { value: formatBytes(value.chunkBytesFetched) })}
+              {t('chunkBytesDecoded', { value: formatBytes(value.chunkBytesDecoded) })}
             </span>
             <span className={controls.badge} data-color="blue">
               {t('cacheEntries', { value: cacheStats.value.entries })}

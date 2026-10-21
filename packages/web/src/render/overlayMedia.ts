@@ -1,7 +1,7 @@
 import type { MediaFeature, MediaVersion, OverlayMediaReference } from '@violet-map/core/overlays';
 import { parseStaticGlb } from '@violet-map/core/overlays';
 import * as THREE from 'three';
-import { downloadResource } from '../resources/download';
+import { resourceDownloader } from '../resources/download';
 import { loadBrowserImage } from '../browserImage';
 import type { DisposableOverlayResource } from './overlayResources';
 
@@ -190,7 +190,7 @@ export async function loadOverlayMedia(
   maxTextureSize: number,
 ): Promise<OverlayMediaResource> {
   const { version } = reference;
-  const buffer = (await downloadResource(reference.resource, signal)).buffer;
+  const buffer = (await resourceDownloader.download(reference.resource, signal)).buffer;
   abort(signal);
   if (version.mediaType !== 'model/gltf-binary') return imageResource(buffer, version, signal, maxTextureSize);
   parseStaticGlb(new Uint8Array(buffer));

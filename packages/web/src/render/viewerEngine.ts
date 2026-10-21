@@ -1037,6 +1037,7 @@ function renderFrame({ engine, manager, latestStats, props, capabilities, state 
 function createWorldManager(engine: Engine, props: ViewerOptions): ChunkManager {
   const dimDef = dimensionDefinition(engine.dimensions, props.dimension);
   return new ChunkManager(engine.scene, engine.materials, engine.initPayload, {
+    renderRoot: resourceClient.current(props.world)!.renderRoot,
     world: props.world,
     sourceScope: resourceClient.current(props.world)!.sourceScope,
     dimension: props.dimension,

@@ -35,3 +35,42 @@ test('chunk cleanup retains chunks referenced by the active disk', () => {
   assert.equal(tracker.getHeight(0, 0), 1);
   assert.equal(tracker.getHeight(100, 100), 1);
 });
+
+test('selected rankings agree with complete rankings without allocating unused result sets', () => {
+  const tracker = new CameraGridTracker({ k: 1, m: 8 });
+  tracker.updateCamera(0, origin);
+  tracker.setPrecision(0, 0, 1);
+  const selection = { importance: 'top', gap: 'top' } as const;
+  const selected = tracker.advanceTime(1, 10, selection);
+  const complete = tracker.query(10);
+  assert.deepEqual(selected.importance.top, complete.importance.top);
+  assert.deepEqual(selected.gap.top, complete.gap.top);
+  assert.deepEqual(selected.importance.bottom, []);
+  assert.deepEqual(selected.satisfaction, { top: [], bottom: [] });
+  assert.deepEqual(selected.gap.bottom, []);
+  const stationary = tracker.updateCamera(2, origin, 10, selection);
+  const direct = tracker.query(10);
+  assert.deepEqual(stationary.gap.top, direct.gap.top);
+});
+
+test('unchanged precision does not recompute satisfaction or add another overshoot', () => {
+  let evaluations = 0;
+  const tracker = new CameraGridTracker({
+    k: 1,
+    m: 2,
+    precisionToSatisfaction: (value) => {
+      evaluations++;
+      return value;
+    },
+    neighborSatisfactionPenaltyByCount: [0, 0, 0, 0, 0, 0, 0, 0, 0],
+  });
+  tracker.updateCamera(0, origin);
+  tracker.setPrecision(0, 0, 0.5);
+  const before = tracker.getCellSnapshot(0, 0);
+  evaluations = 0;
+  for (let i = 0; i < 100; i++) tracker.setPrecision(0, 0, 0.5);
+  assert.equal(evaluations, 0);
+  const after = tracker.getCellSnapshot(0, 0);
+  assert.equal(after.bump, before.bump);
+  assert.equal(after.satisfaction, before.satisfaction);
+});

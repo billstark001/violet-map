@@ -13,7 +13,7 @@ interface RenderKeyResources {
   foliageMap: Uint8Array | null;
 }
 
-const MESH_CACHE_SCHEMA = 'mesh-v18-shared-tints-canonical-json';
+const MESH_CACHE_SCHEMA = 'mesh-v19-complete-neighborhood';
 
 /** Include every resource that affects mesh colors, geometry or baked lighting.
  * Object key order is irrelevant; this is a cache identity, not an integrity hash. */

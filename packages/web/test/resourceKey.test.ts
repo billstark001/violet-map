@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import 'fake-indexeddb/auto';
 import { buildRenderKey } from '../src/render/resourceKey.js';
-import { clearMeshCache, getCachedFull, putCachedFull, setMeshCacheEnabled } from '../src/meshCache.js';
+import { clearMeshCache, getCachedMesh, putCachedMesh, setMeshCacheEnabled } from '../src/meshCache.js';
 
 const resources: Parameters<typeof buildRenderKey>[0] = {
   atlasKey: 'atlas',
@@ -19,11 +19,19 @@ test('biome and dimension edits miss stale persistent meshes while reordered JSO
   await clearMeshCache();
   t.after(() => clearMeshCache());
   const renderKey = buildRenderKey(resources);
-  assert.ok(renderKey.startsWith('mesh-v18-shared-tints-canonical-json:'));
+  assert.ok(renderKey.startsWith('mesh-v19-complete-neighborhood:'));
   assert.equal(buildRenderKey({ ...resources, bundle: { blockstates: {}, models: {} } }), renderKey);
-  const parts = { world: 'world', dimension: 'overworld', renderKey, cx: 0, cz: 0, contentKey: 'same-nbt' };
-  await putCachedFull(parts, []);
-  assert.deepEqual(await getCachedFull(parts), []);
+  const parts = {
+    world: 'world',
+    dimension: 'overworld',
+    renderKey,
+    cx: 0,
+    cz: 0,
+    contentKey: 'same-nbt',
+    mode: 'full' as const,
+  };
+  await putCachedMesh(parts, { mode: 'full', sections: [] });
+  assert.deepEqual(await getCachedMesh(parts), { mode: 'full', sections: [] });
   const changed = structuredClone(resources);
   changed.biomes.default.effects.water_color = 0xff00ff;
   const changedDimension = structuredClone(resources);
@@ -31,7 +39,7 @@ test('biome and dimension edits miss stale persistent meshes while reordered JSO
   for (const next of [changed, changedDimension]) {
     const nextKey = buildRenderKey(next);
     assert.notEqual(nextKey, renderKey);
-    assert.equal(await getCachedFull({ ...parts, renderKey: nextKey }), null);
+    assert.equal(await getCachedMesh({ ...parts, renderKey: nextKey }), undefined);
   }
 });
 

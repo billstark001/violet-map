@@ -21,7 +21,7 @@ import {
   type ResourceViewHead,
 } from '@violet-map/core/resources';
 import { resourceClient } from './resources/client';
-import { downloadResource } from './resources/download';
+import { resourceDownloader } from './resources/download';
 import { apiFetch } from './runtime';
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
@@ -42,7 +42,7 @@ async function resourceJson<T>(selector: ResourceSelector, signal?: AbortSignal)
   if (!('resource' in result)) throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'JSON resource is missing');
   if (!['asset-bundle-json-v1', 'game-data-json-v1'].includes(result.resource.artifact.format))
     throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'unknown JSON resource format');
-  const bytes = await downloadResource(result.resource, signal);
+  const bytes = await resourceDownloader.download(result.resource, signal);
   resourceClient.assertCurrent(head);
   return JSON.parse(new TextDecoder().decode(bytes)) as T;
 }
@@ -95,7 +95,8 @@ export async function resolveChunks(
         dimension: dim,
         head,
         validUntil: batch.validUntil,
-        ...coordinates[index],
+        cx: coordinates[index].cx,
+        cz: coordinates[index].cz,
       };
       if ('missing' in result) out.push({ ...selected, missing: true });
       else if ('resource' in result && result.contentDigest && result.terrainDigest)
@@ -113,46 +114,78 @@ export async function resolveChunks(
   return out;
 }
 
-/** Read exactly the resolved references; an expired lease must be resolved again explicitly. */
-export async function readChunks(chunks: ResolvedChunk[], signal?: AbortSignal): Promise<ChunkPayload[]> {
+export type ChunkReadOutcome = { cx: number; cz: number } & (
+  | { payload: ChunkPayload; resolution: ResolvedChunk }
+  | { error: unknown }
+);
+
+/** Read each selected chunk independently. Renew an expiring delivery lease
+ * within the same view; callers decide when to retry other failures. */
+export async function readChunks(chunks: ResolvedChunk[], signal?: AbortSignal): Promise<ChunkReadOutcome[]> {
   signal?.throwIfAborted();
-  for (const chunk of chunks) {
-    resourceClient.assertCurrent(chunk.head, chunk.world);
-    if (chunk.validUntil <= Date.now())
-      throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'chunk resolution expired', true);
-  }
-  const payloads = await mapWithConcurrency(chunks, 4, async (chunk) => {
-    if (chunk.missing) return { cx: chunk.cx, cz: chunk.cz, missing: true };
-    resourceClient.assertCurrent(chunk.head, chunk.world);
-    if (chunk.validUntil <= Date.now())
-      throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'chunk resolution expired before body admission', true);
-    const payload = decode(await downloadResource(chunk.resource, signal)) as {
-      schemaVersion?: number;
-      cx: number;
-      cz: number;
-      data: Uint8Array;
-      entities?: Uint8Array;
-    };
-    if (
-      payload.schemaVersion !== 1 ||
-      payload.cx !== chunk.cx ||
-      payload.cz !== chunk.cz ||
-      !(payload.data instanceof Uint8Array) ||
-      (payload.entities !== undefined && !(payload.entities instanceof Uint8Array))
-    )
-      throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'invalid chunk resource payload');
-    return {
-      cx: payload.cx,
-      cz: payload.cz,
-      data: payload.data,
-      ...(payload.entities ? { entities: payload.entities } : {}),
-      contentDigest: chunk.contentDigest,
-      terrainDigest: chunk.terrainDigest,
-      ...(chunk.entityDigest ? { entityDigest: chunk.entityDigest } : {}),
-    };
+  return mapWithConcurrency(chunks, 4, async (original): Promise<ChunkReadOutcome> => {
+    let chunk = original;
+    try {
+      for (let attempt = 0; ; attempt++) {
+        resourceClient.assertCurrent(original.head, original.world);
+        if (chunk.validUntil <= Date.now() + 1000) {
+          chunk = (await resolveChunks(chunk.world, chunk.dimension, [chunk], signal))[0];
+          resourceClient.assertCurrent(original.head, original.world);
+        }
+        try {
+          if (chunk.missing)
+            return {
+              cx: chunk.cx,
+              cz: chunk.cz,
+              resolution: chunk,
+              payload: { cx: chunk.cx, cz: chunk.cz, missing: true },
+            };
+          const payload = await readChunkBody(chunk, signal);
+          resourceClient.assertCurrent(original.head, original.world);
+          return { cx: chunk.cx, cz: chunk.cz, resolution: chunk, payload };
+        } catch (error) {
+          if (attempt >= 1 || !(error instanceof ResourceError) || error.code !== 'RESOURCE_VIEW_EXPIRED') throw error;
+          chunk = { ...chunk, validUntil: 0 };
+        }
+      }
+    } catch (error) {
+      signal?.throwIfAborted();
+      return { cx: original.cx, cz: original.cz, error };
+    }
   });
-  for (const chunk of chunks) resourceClient.assertCurrent(chunk.head, chunk.world);
-  return payloads;
+}
+
+async function readChunkBody(
+  chunk: Extract<ResolvedChunk, { resource: ResourceRef }>,
+  signal?: AbortSignal,
+): Promise<ChunkPayload> {
+  resourceClient.assertCurrent(chunk.head, chunk.world);
+  if (chunk.validUntil <= Date.now())
+    throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'chunk resolution expired before body admission', true);
+  const payload = decode(await resourceDownloader.download(chunk.resource, signal)) as {
+    schemaVersion?: number;
+    cx: number;
+    cz: number;
+    data: Uint8Array;
+    entities?: Uint8Array;
+  };
+  if (
+    payload.schemaVersion !== 1 ||
+    payload.cx !== chunk.cx ||
+    payload.cz !== chunk.cz ||
+    !(payload.data instanceof Uint8Array) ||
+    (payload.entities !== undefined && !(payload.entities instanceof Uint8Array))
+  )
+    throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'invalid chunk resource payload');
+  return {
+    cx: payload.cx,
+    cz: payload.cz,
+    data: payload.data,
+    ...(payload.entities ? { entities: payload.entities } : {}),
+    contentDigest: chunk.contentDigest,
+    terrainDigest: chunk.terrainDigest,
+    ...(chunk.entityDigest ? { entityDigest: chunk.entityDigest } : {}),
+  };
 }
 
 export async function fetchTextureAtlas(ids: string[], signal?: AbortSignal): Promise<TextureAtlasManifest> {
@@ -165,7 +198,7 @@ export async function fetchTextureAtlas(ids: string[], signal?: AbortSignal): Pr
   )
     throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'invalid atlas resource');
   const document = JSON.parse(
-    new TextDecoder().decode(await downloadResource(result.manifest, signal)),
+    new TextDecoder().decode(await resourceDownloader.download(result.manifest, signal)),
   ) as AtlasDocument;
   resourceClient.assertCurrent(head);
   if (
@@ -255,7 +288,7 @@ export async function fetchTopMapTile(
   const result = resources[0];
   if (!('resource' in result) || result.resource.artifact.format !== 'topmap-msgpack-v6')
     throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'invalid top map resource');
-  const payload = decode(await downloadResource(result.resource, signal)) as TopMapTilePayload;
+  const payload = decode(await resourceDownloader.download(result.resource, signal)) as TopMapTilePayload;
   resourceClient.assertCurrent(head, world);
   return payload;
 }

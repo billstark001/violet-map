@@ -158,6 +158,7 @@ interface CriticalCell {
 }
 
 export interface ChunkSchedulerEntry {
+  retryAt?: number;
   key: string;
   cx: number;
   cz: number;
@@ -300,8 +301,12 @@ export interface ChunkProfileStats {
   workerCount: number;
   activeMeshTasks: number;
   workerChunkCopies: number;
+  estimatedWorkerBytes: number;
+  cacheLookups: number;
+  errorChunks: number;
+  retryingChunks: number;
   displayedMeshBytes: number;
-  chunkBytesFetched: number;
+  chunkBytesDecoded: number;
   diagnostics: ChunkDiagnosticEvent[];
   hashFetchMsAvg: number;
   chunkFetchMsAvg: number;
@@ -377,8 +382,12 @@ const EMPTY_PROFILE_STATS: ChunkProfileStats = {
   workerCount: 0,
   activeMeshTasks: 0,
   workerChunkCopies: 0,
+  estimatedWorkerBytes: 0,
+  cacheLookups: 0,
+  errorChunks: 0,
+  retryingChunks: 0,
   displayedMeshBytes: 0,
-  chunkBytesFetched: 0,
+  chunkBytesDecoded: 0,
   diagnostics: [],
   hashFetchMsAvg: 0,
   chunkFetchMsAvg: 0,
@@ -620,13 +629,6 @@ function precisionForStep(step: number): number {
   if (normalized === 2) return 0.58;
   if (normalized === 4) return 0.34;
   return 0.2;
-}
-
-function stepForPrecisionTarget(precision: number): LodStep {
-  if (precision >= 0.72) return 1;
-  if (precision >= 0.44) return 2;
-  if (precision >= 0.24) return 4;
-  return 8;
 }
 
 function normalizeTimeMs(now: number): number {
@@ -940,7 +942,7 @@ export class ChunkScheduler {
       );
     }
 
-    const reranking = this.tracker?.query(cfg.maxCandidates, nowSeconds) ?? ranking;
+    const reranking = this.tracker?.query(cfg.maxCandidates, nowSeconds, { importance: 'top', gap: 'top' }) ?? ranking;
     const criticalRankedCells = this.snapshotCriticalCells(criticalCells, nowSeconds);
     const nearPresenceRankedCells = this.snapshotCriticalCells(nearPresenceCells, nowSeconds);
     // Completed full meshes have negative gaps and normally disappear from the
@@ -955,12 +957,31 @@ export class ChunkScheduler {
       reranking.gap.top,
       reranking.importance.top,
     );
+    // Admission is based on camera demand, independently of completion/gap.
+    // Evicting completed cells to admit ever more unsatisfied cells makes a
+    // stationary, capacity-limited view cycle forever.
+    const admitted = new Set<string>();
+    for (const cell of [...criticalCells, ...nearPresenceCells])
+      if (input.cellInfoFor?.(cell.i, cell.j)?.hasChunkSource !== false) admitted.add(input.keyFor(cell.i, cell.j));
+    const admissionOrder = rankedCells
+      .map((cell) => {
+        const key = input.keyFor(cell.i, cell.j);
+        const entry = input.entryFor(key);
+        return { cell, key, demand: cell.importance + (entry && entry.displayed !== 'none' ? 0.02 : 0) };
+      })
+      .sort((a, b) => b.demand - a.demand || a.cell.i - b.cell.i || a.cell.j - b.cell.j);
+    for (const { cell, key } of admissionOrder) {
+      if (admitted.size >= cfg.maxTrackedChunks) break;
+      if (input.cellInfoFor?.(cell.i, cell.j)?.hasChunkSource === false) continue;
+      admitted.add(key);
+    }
     const keepKeys = this.activeDiskKeys(pose, cfg, input.keyFor);
-    const protectedKeys = new Set<string>([...criticalKeys, ...nearPresenceKeys]);
+    const protectedKeys = new Set<string>(admitted);
     const candidates: ChunkCandidate[] = [];
 
     for (const cell of rankedCells) {
       const key = input.keyFor(cell.i, cell.j);
+      if (!admitted.has(key)) continue;
       const entry = input.entryFor(key);
       const info = input.cellInfoFor?.(cell.i, cell.j) ?? null;
       const critical = criticalKeys.has(key);
@@ -1040,10 +1061,10 @@ export class ChunkScheduler {
       const seedTime = Math.max(0, nowSeconds - TRACKER_SEED_SECONDS);
       tracker.updateCamera(seedTime, pose, 0);
       this.trackerSeeded = true;
-      return tracker.advanceTime(nowSeconds, cfg.maxCandidates);
+      return tracker.advanceTime(nowSeconds, cfg.maxCandidates, { importance: 'top', gap: 'top' });
     }
 
-    return tracker.updateCamera(nowSeconds, pose, cfg.maxCandidates);
+    return tracker.updateCamera(nowSeconds, pose, cfg.maxCandidates, { importance: 'top', gap: 'top' });
   }
 
   private criticalCellsForPose(
@@ -1188,7 +1209,7 @@ export class ChunkScheduler {
       return { removeMesh: false };
     }
 
-    if (entry.state === 'hashed' || entry.state === 'fetching') {
+    if (entry.state === 'fetching') {
       if (!this.displaySatisfiesTarget(entry, candidate.targetStep)) this.enqueueFetch(candidate.key);
       return { removeMesh: false };
     }
@@ -1201,7 +1222,13 @@ export class ChunkScheduler {
     const batchSize = this.shouldLoadMore(input)
       ? this.ioBatchSize(HASH_BATCH_SIZE, input)
       : BLOCKED_RENDER_HASH_BATCH_SIZE;
-    return this.nextIoBatch(this.hashQueue, batchSize, (entry) => entry?.state === 'checking', input.entryFor);
+    return this.nextIoBatch(
+      this.hashQueue,
+      batchSize,
+      (entry) => entry?.state === 'checking',
+      input.entryFor,
+      input.now,
+    );
   }
 
   private nextFetchBatch(input: SchedulerWorkInput): string[] {
@@ -1214,6 +1241,7 @@ export class ChunkScheduler {
       batchSize,
       (entry) => entry?.state === 'hashed' || entry?.state === 'fetching',
       input.entryFor,
+      input.now,
     );
   }
 
@@ -1229,7 +1257,7 @@ export class ChunkScheduler {
     for (const task of this.meshQueue.values()) {
       const queueKey = priorityKey(task);
       const entry = entryFor(task.key);
-      if (!entry || entry.state !== 'stored') {
+      if (!entry || (entry.state !== 'stored' && entry.state !== 'hashed')) {
         this.meshQueue.delete(queueKey);
         continue;
       }
@@ -1247,7 +1275,7 @@ export class ChunkScheduler {
 
     for (const entry of entries) {
       if (selectedKeys.has(entry.key) || this.meshOnCooldown(entry.key, now)) continue;
-      if (entry.state !== 'stored') continue;
+      if (entry.state !== 'stored' && entry.state !== 'hashed') continue;
       const task = this.desiredMeshTaskForEntry(entry, now);
       if (!task) continue;
       if (!best || this.compareMeshTaskPriority(task, best) < 0) {
@@ -1266,6 +1294,7 @@ export class ChunkScheduler {
     batchSize: number,
     entryIsValid: (entry: ChunkSchedulerEntry | null) => boolean,
     entryFor: (key: string) => ChunkSchedulerEntry | null,
+    now: number,
   ): string[] {
     const out: string[] = [];
     const keys = [...queue].sort((a, b) => this.compareQueuedKeys(a, b));
@@ -1277,6 +1306,7 @@ export class ChunkScheduler {
         queue.delete(key);
         continue;
       }
+      if ((entry?.retryAt ?? 0) > now) continue;
       queue.delete(key);
       out.push(key);
     }
@@ -1336,6 +1366,7 @@ export class ChunkScheduler {
   }
 
   private desiredMeshTaskForEntry(entry: ChunkSchedulerEntry, now: number): MeshTask | null {
+    if (entry.pendingFull || entry.pendingLod) return null;
     const record = this.recordFor(entry);
     if (!record || now - record.lastWantedAt > IO_QUEUE_RETENTION_MS) return null;
     const priority = this.priorityByKey.get(entry.key) ?? {
@@ -1358,6 +1389,7 @@ export class ChunkScheduler {
   }
 
   private shouldStartMeshTask(task: MeshTask, entry: ChunkSchedulerEntry, now: number): boolean {
+    if (entry.pendingFull || entry.pendingLod) return false;
     if (!this.priorityFresh(entry, now)) return false;
     const target = this.lastTargetStep(entry);
 
@@ -1403,7 +1435,11 @@ export class ChunkScheduler {
         continue;
       }
       const entry = entryFor(task.key);
-      if (!entry || entry.state !== 'stored' || !this.shouldStartMeshTask(task, entry, now)) {
+      if (
+        !entry ||
+        (entry.state !== 'stored' && entry.state !== 'hashed') ||
+        !this.shouldStartMeshTask(task, entry, now)
+      ) {
         this.meshQueue.delete(queueKey);
       }
     }
@@ -1613,11 +1649,11 @@ export class ChunkScheduler {
       this.enqueueHash(entry.key);
       return;
     }
-    if (entry.state === 'hashed' || entry.state === 'fetching') {
+    if (entry.state === 'fetching') {
       this.enqueueFetch(entry.key);
       return;
     }
-    if (entry.state !== 'stored') return;
+    if (entry.state !== 'stored' && entry.state !== 'hashed') return;
     this.enqueueMeshTask({
       key: entry.key,
       kind: targetStep === 1 ? 'full' : 'lod',
@@ -1830,21 +1866,32 @@ export class ChunkScheduler {
   private precisionForCell(entry: ChunkSchedulerEntry | null, info: SchedulerCellInfo | null): number {
     if (info?.hasChunkSource === false) return 1;
     if (!entry) return Number.isFinite(info?.topMapSurfaceY) ? TOP_MAP_PRECISION : EMPTY_PRECISION;
-    if (entry.state === 'absent' || entry.state === 'error') {
+    if (entry.state === 'absent') {
       return 1;
     }
+    if (entry.state === 'error') return 0;
     if (entry.displayed === 'full') return 1;
     if (entry.displayed === 'lod') return precisionForStep(entry.displayedLodStep);
     if (entry.dirty) return 0;
     return Number.isFinite(info?.topMapSurfaceY) ? TOP_MAP_PRECISION : EMPTY_PRECISION;
   }
 
-  private targetStepForCell(cell: RankedCell, _entry: ChunkSchedulerEntry | null): LodStep {
+  private targetStepForCell(cell: RankedCell, entry: ChunkSchedulerEntry | null): LodStep {
     if (this.lodDisabled()) return 1;
     // Satisfaction is the precision already on screen, not fresh demand. Using
     // it here made every completed full mesh permanently target step 1.
-    const desiredPrecision = Math.max(cell.importance, Math.max(0, cell.gap));
-    return stepForPrecisionTarget(desiredPrecision);
+    // Gap ranks pending work, but changes as our own/neighbors' meshes arrive.
+    // It must not feed back into demanded detail. Separate upgrade/downgrade
+    // thresholds keep attention near a boundary from flipping LOD repeatedly.
+    const previous = entry?.lastTargetStep ?? 8;
+    const thresholds = [
+      [1, 0.72],
+      [2, 0.44],
+      [4, 0.24],
+    ] as const;
+    for (const [step, threshold] of thresholds)
+      if (cell.importance >= threshold * (previous <= step ? 0.9 : 1.1)) return step;
+    return 8;
   }
 
   private shouldScheduleCell(
@@ -2125,7 +2172,8 @@ export class ChunkScheduler {
     if (entry.dirty) return 0;
     if (entry.displayed === 'full') return 1;
     if (entry.displayed === 'lod') return precisionForStep(entry.displayedLodStep);
-    if (entry.state === 'absent' || entry.state === 'error') return 1;
+    if (entry.state === 'absent') return 1;
+    if (entry.state === 'error') return 0;
     return 0;
   }
 

@@ -50,6 +50,10 @@ export interface RankingResult {
   gap: RankingPair;
 }
 
+export type RankingSelection = Partial<Record<'importance' | 'satisfaction' | 'gap', 'top' | 'both'>>;
+
+const ALL_RANKINGS: RankingSelection = { importance: 'both', satisfaction: 'both', gap: 'both' };
+
 export interface CellSnapshot {
   i: number;
   j: number;
@@ -493,7 +497,7 @@ export class CameraGridTracker {
    * Then the active disk is rebuilt around the new pose.
    * Returned rankings describe the disk around the new pose at exactly time t.
    */
-  updateCamera(t: number, pose: Pose, n = 0): RankingResult {
+  updateCamera(t: number, pose: Pose, n = 0, selection: RankingSelection = ALL_RANKINGS): RankingResult {
     assertFiniteNumber(t, 't');
     validatePose(pose);
     assertNonNegativeInteger(n, 'n');
@@ -502,28 +506,31 @@ export class CameraGridTracker {
       throw new RangeError(`camera time must be non-decreasing: got ${t}, previous ${this.lastT}`);
     }
 
-    this.buildDisk(this.scratch, pose.p.x, pose.p.z, t);
+    const moved = !this.lastPose || this.lastPose.p.x !== pose.p.x || this.lastPose.p.z !== pose.p.z;
+    if (moved) this.buildDisk(this.scratch, pose.p.x, pose.p.z, t);
 
     if (this.lastPose !== null && t > this.lastT) {
       this.applyCameraInterval(this.active, this.lastT, t, this.lastPose);
     }
 
-    const oldActive = this.active;
-    this.active = this.scratch;
-    this.scratch = oldActive;
-    this.scratch.clear();
+    if (moved) {
+      const oldActive = this.active;
+      this.active = this.scratch;
+      this.scratch = oldActive;
+      this.scratch.clear();
+    }
 
     this.lastPose = clonePose(pose);
     this.lastT = t;
 
-    return this.queryActiveSet(this.active, t, n);
+    return this.queryActiveSet(this.active, t, n, selection);
   }
 
   /**
    * Advance time without changing camera pose. Useful if queries happen between
    * camera samples and the current pose should keep contributing importance.
    */
-  advanceTime(t: number, n = 0): RankingResult {
+  advanceTime(t: number, n = 0, selection: RankingSelection = ALL_RANKINGS): RankingResult {
     assertFiniteNumber(t, 't');
     assertNonNegativeInteger(n, 'n');
 
@@ -539,14 +546,14 @@ export class CameraGridTracker {
       this.lastT = t;
     }
 
-    return this.queryActiveSet(this.active, t, n);
+    return this.queryActiveSet(this.active, t, n, selection);
   }
 
   /** Query rankings over the current active disk without adding more viewing time. */
-  query(n: number, t = this.lastT): RankingResult {
+  query(n: number, t = this.lastT, selection: RankingSelection = ALL_RANKINGS): RankingResult {
     assertFiniteNumber(t, 't');
     assertNonNegativeInteger(n, 'n');
-    return this.queryActiveSet(this.active, t, n);
+    return this.queryActiveSet(this.active, t, n, selection);
   }
 
   setHeight(i: number, j: number, height: number, t = this.lastT): void {
@@ -557,6 +564,7 @@ export class CameraGridTracker {
     if (height < 0) throw new RangeError(`height must be >= 0, got ${height}`);
 
     const { chunk, index } = this.grid.getOrCreateCell(i, j, t);
+
     chunk.height[index] = height;
   }
 
@@ -581,6 +589,8 @@ export class CameraGridTracker {
     assertFiniteNumber(t, 't');
 
     const { chunk, index } = this.grid.getOrCreateCell(i, j, t);
+
+    if (chunk.precision[index] === precision) return;
 
     const oldBase = this.clampSatisfaction(this.cfg.precisionToSatisfaction(chunk.precision[index]));
     const newBase = this.clampSatisfaction(this.cfg.precisionToSatisfaction(precision));
@@ -729,13 +739,13 @@ export class CameraGridTracker {
     }
   }
 
-  private queryActiveSet(active: ActiveSet, t: number, n: number): RankingResult {
-    const topImportance = new BoundedRankHeap(n, 'largest');
-    const bottomImportance = new BoundedRankHeap(n, 'smallest');
-    const topSatisfaction = new BoundedRankHeap(n, 'largest');
-    const bottomSatisfaction = new BoundedRankHeap(n, 'smallest');
-    const topGap = new BoundedRankHeap(n, 'largest');
-    const bottomGap = new BoundedRankHeap(n, 'smallest');
+  private queryActiveSet(active: ActiveSet, t: number, n: number, selection: RankingSelection): RankingResult {
+    const topImportance = new BoundedRankHeap(selection.importance ? n : 0, 'largest');
+    const bottomImportance = new BoundedRankHeap(selection.importance === 'both' ? n : 0, 'smallest');
+    const topSatisfaction = new BoundedRankHeap(selection.satisfaction ? n : 0, 'largest');
+    const bottomSatisfaction = new BoundedRankHeap(selection.satisfaction === 'both' ? n : 0, 'smallest');
+    const topGap = new BoundedRankHeap(selection.gap ? n : 0, 'largest');
+    const bottomGap = new BoundedRankHeap(selection.gap === 'both' ? n : 0, 'smallest');
 
     for (let pos = 0; pos < active.length; pos++) {
       const chunk = active.chunks[pos];

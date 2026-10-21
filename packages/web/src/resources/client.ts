@@ -220,7 +220,7 @@ export class ResourceClient {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ viewId: head.viewId, selectors: selectors.map(parseResourceSelector) }),
-      signal,
+      signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(30000)]),
     });
     if (!response.ok) {
       const error = await this.error(response);

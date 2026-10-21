@@ -29,7 +29,7 @@ try {
     const result = await page.evaluate(
       async ({ rounds }) => {
         const modulePath = '/src/meshCache.ts';
-        const { clearMeshCache, getCachedFull, putCachedFull, setMeshCacheEnabled } = (await import(
+        const { clearMeshCache, getCachedMesh, putCachedMesh, setMeshCacheEnabled } = (await import(
           modulePath
         )) as typeof import('../../packages/web/src/meshCache.js');
         const summaries = [];
@@ -40,6 +40,7 @@ try {
           cx: 0,
           cz: 0,
           contentKey: 'benchmark',
+          mode: 'full' as const,
         };
         const percentile = (values: number[], p: number) =>
           values.toSorted((a, b) => a - b)[Math.min(values.length - 1, Math.floor(values.length * p))];
@@ -58,7 +59,7 @@ try {
             },
           ];
           await clearMeshCache();
-          await putCachedFull(parts, sections);
+          await putCachedMesh(parts, { mode: 'full', sections });
           for (const mode of ['cold-idb', 'warm-memory']) {
             const samples = [];
             for (let i = 0; i < rounds + 10; i++) {
@@ -67,8 +68,8 @@ try {
                 setMeshCacheEnabled(true);
               }
               const start = performance.now();
-              const hit = await getCachedFull(parts);
-              if (hit?.[0]?.layers.opaque?.positions.byteLength !== bytes)
+              const hit = await getCachedMesh(parts);
+              if (hit?.mode !== 'full' || hit.sections[0]?.layers.opaque?.positions.byteLength !== bytes)
                 throw new Error('invalid benchmark cache hit');
               if (i >= 10) samples.push(performance.now() - start);
             }

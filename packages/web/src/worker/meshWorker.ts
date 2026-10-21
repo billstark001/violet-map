@@ -311,16 +311,23 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
         post({
           type: 'chunkReady',
           key: msg.key,
+          contentDigest: msg.contentDigest,
           biome: col.getBiome(8, surfaceY, 8),
           surfaceY,
           profile: {
             chunkBytes: msg.chunk.byteLength,
             parseMs: performance.now() - started,
             storedColumns: columns.size,
+            // Include lazy index/light expansion and retained entity compounds.
+            // This is a conservative resident estimate, not wire/NBT size.
+            estimatedColumnBytes:
+              (col.maxSectionY - col.minSectionY + 1) * 16384 +
+              (msg.chunk.byteLength + (msg.entities?.byteLength ?? 0)) * 4 +
+              2048,
           },
         });
       } catch (e) {
-        post({ type: 'chunkError', key: msg.key, error: errorMessage(e) });
+        post({ type: 'chunkError', key: msg.key, contentDigest: msg.contentDigest, error: errorMessage(e) });
       }
       break;
     }

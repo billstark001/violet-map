@@ -25,8 +25,10 @@ test('unavailable IndexedDB falls back to worker meshing for both full and LOD t
       });
       const manager = Object.assign(Object.create(ChunkManager.prototype), {
         chunks: new Map([[entry.key, entry]]),
+        meshJobs: new Map(),
         activeMeshTasks: 0,
         versionCounter: 0,
+        workers: [{}],
         fullCacheMisses: 0,
         lodCacheMisses: 0,
         disposed: false,
@@ -47,7 +49,7 @@ test('unavailable IndexedDB falls back to worker meshing for both full and LOD t
         startWorkerMeshing: (_entry: unknown, task: string, _step: number, version: number) =>
           resolve({ kind: task, version }),
       });
-      assert.equal(kind === 'full' ? manager.requestFull(entry) : manager.requestLod(entry, 2), true);
+      assert.equal(manager.requestMesh(entry, kind, kind === 'full' ? 1 : 2), true);
       const worker = await Promise.race([
         started,
         new Promise<never>((_, reject) => {
@@ -56,7 +58,7 @@ test('unavailable IndexedDB falls back to worker meshing for both full and LOD t
         }),
       ]);
       assert.deepEqual(worker, { kind, version: 1 });
-      assert.equal(manager.activeMeshTasks, 1, 'the reserved task slot passes to the worker');
+      assert.equal(manager.activeMeshTasks, 0, 'cache lookup never reserves a worker execution slot');
     }
   } finally {
     if (previous) Object.defineProperty(globalThis, 'indexedDB', previous);
@@ -174,6 +176,7 @@ test('disposing a manager cancels pending IO and ignores even an unabortable lat
         hashTimer: null,
         fetchTimer: null,
         deferredMeshTimers: new Map(),
+        meshJobs: new Map(),
         inFlightMeshVersions: new Set(),
         versionWorker: new Map(),
         meshDiagnosticByVersion: new Map(),
@@ -194,4 +197,218 @@ test('disposing a manager cancels pending IO and ignores even an unabortable lat
       assert.equal(manager.fetchTimer, null);
     }
   }
+});
+
+test('reloaded identical columns do not invalidate neighbors, and stale worker replies cannot change readiness', () => {
+  const key = (cx: number) => chunkKey('world', 'minecraft:overworld', cx, 0);
+  const center = {
+    key: key(0),
+    cx: 0,
+    cz: 0,
+    state: 'decoding',
+    contentDigest: 'same',
+    workerReadyMask: 0,
+    estimatedColumnBytes: 0,
+  };
+  const neighbor = {
+    key: key(1),
+    cx: 1,
+    cz: 0,
+    displayed: 'full',
+    state: 'stored',
+    dirty: false,
+    dirtyToken: 0,
+    lastTier: 6,
+    lastScore: 0,
+  };
+  const manager = Object.assign(Object.create(ChunkManager.prototype), {
+    opts: { world: 'world', dimension: 'minecraft:overworld' },
+    chunks: new Map([
+      [center.key, center],
+      [neighbor.key, neighbor],
+    ]),
+    workers: [{}, {}],
+    recordCompletedOperation() {},
+    scheduler: { notify() {} },
+    flushMeshQueue() {},
+    reportStats() {},
+  });
+  const ready = (contentDigest: string, index: number) =>
+    manager.handleMessage(
+      { type: 'chunkReady', key: center.key, contentDigest, surfaceY: 64, biome: 'minecraft:plains' },
+      index,
+    );
+  ready('same', 0);
+  ready('same', 1);
+  assert.equal(neighbor.dirtyToken, 1);
+  center.state = 'decoding';
+  center.workerReadyMask = 0;
+  neighbor.dirty = false;
+  ready('same', 0);
+  ready('same', 1);
+  assert.equal(neighbor.dirtyToken, 1, 're-residency alone is not a content change');
+  center.state = 'decoding';
+  center.workerReadyMask = 0;
+  center.contentDigest = 'changed';
+  ready('same', 0);
+  assert.equal(center.workerReadyMask, 0);
+  ready('changed', 0);
+  ready('changed', 1);
+  assert.equal(neighbor.dirtyToken, 2);
+});
+
+test('active neighborhood pins prevent eviction and settle exactly once', async () => {
+  const dependency = {
+    key: 'dependency',
+    state: 'stored',
+    contentDigest: 'same',
+    workerKeepUntil: 0,
+    workerPins: 1,
+    workerReadyMask: 1,
+  };
+  const drops: unknown[] = [];
+  const manager = Object.assign(Object.create(ChunkManager.prototype), {
+    meshJobs: new Map([[1, { dependencies: [dependency] }]]),
+    inFlightMeshVersions: new Set([1]),
+    versionWorker: new Map([[1, 0]]),
+    activeMeshTasks: 1,
+    workerLoads: [1],
+    meshFlushScheduled: false,
+    disposed: false,
+    broadcast(message: unknown) {
+      drops.push(message);
+    },
+    flushMeshQueue() {},
+  });
+  assert.equal(manager.releaseWorkerData(dependency), false);
+  manager.finishActiveMesh(1);
+  manager.finishActiveMesh(1);
+  await Promise.resolve();
+  assert.equal(dependency.workerPins, 0);
+  assert.equal(manager.activeMeshTasks, 0);
+  assert.deepEqual(manager.workerLoads, [0]);
+  assert.equal(manager.releaseWorkerData(dependency), true);
+  assert.equal(dependency.state, 'hashed');
+  assert.equal(drops.length, 1);
+});
+
+test('a known neighborhood hits cached geometry before restoring any worker columns', async () => {
+  await import('fake-indexeddb/auto');
+  const { putCachedMesh, clearMeshCache, setMeshCacheEnabled } = await import('../src/meshCache.js');
+  setMeshCacheEnabled(true);
+  await clearMeshCache();
+  const entries = Array.from({ length: 9 }, (_, i) => {
+    const cx = (i % 3) - 1,
+      cz = Math.floor(i / 3) - 1;
+    return {
+      key: chunkKey('world', 'minecraft:overworld', cx, cz),
+      cx,
+      cz,
+      state: 'hashed',
+      contentDigest: 'unchanged',
+      pendingFull: false,
+      pendingLod: false,
+      dirtyToken: 0,
+      dirty: true,
+    };
+  });
+  const center = entries[4];
+  let displays = 0;
+  const manager = Object.assign(Object.create(ChunkManager.prototype), {
+    chunks: new Map(entries.map((e) => [e.key, e])),
+    opts: { sourceScope: 'scope', world: 'world', dimension: 'minecraft:overworld', renderKey: 'r' },
+    workers: [{}],
+    meshJobs: new Map(),
+    versionCounter: 0,
+    inFlightMeshVersions: new Set(),
+    versionWorker: new Map(),
+    activeMeshTasks: 0,
+    fullCacheHits: 0,
+    disposed: false,
+    shouldApplyMeshResult: () => true,
+    flushMeshQueue() {},
+    ensureNeighborhoodWorkerData() {
+      throw Error('cached geometry must not require resident NBT');
+    },
+    displayFull() {
+      displays++;
+    },
+  });
+  const cache = manager.neighborhoodCacheParts(center);
+  assert.equal(cache.stable, true, 'digests stay known when columns are evicted');
+  await putCachedMesh({ ...cache.parts, mode: 'full', step: 0 }, { mode: 'full', sections: [] });
+  assert.equal(manager.requestMesh(center, 'full', 1), true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(displays, 1);
+  assert.equal(manager.meshJobs.size, 0);
+  assert.equal(manager.activeMeshTasks, 0);
+  await clearMeshCache();
+});
+
+test('transient IO backs off without discarding displayed terrain; a worker deadline initiates recovery', async () => {
+  const { ResourceError } = await import('@violet-map/core/resources');
+  const entry = { key: 'chunk', contentDigest: 'known', retryAttempts: 0, state: 'fetching', displayed: 'full' };
+  let queued = 0;
+  const manager = Object.assign(Object.create(ChunkManager.prototype), {
+    activity: { retries: 0 },
+    queueFetch() {
+      queued++;
+    },
+    meshJobs: new Map(),
+    chunks: new Map(),
+    disposed: false,
+    recoverWorkers() {
+      queued++;
+    },
+  });
+  manager.retryIo(entry, new ResourceError('RESOURCE_BUSY', 'busy', true));
+  assert.equal(entry.state, 'hashed');
+  assert.equal(entry.displayed, 'full');
+  assert.equal(entry.retryAttempts, 1);
+  assert.equal(queued, 1);
+  manager.meshJobs.set(1, { phase: 'worker', startedAt: performance.now() - 30001 });
+  manager.checkWorkerHealth();
+  assert.equal(queued, 2);
+});
+
+test('known neighbors are restored before first display and cancelled read admission remains retryable', () => {
+  const center = {
+    key: chunkKey('world', 'minecraft:overworld', 0, 0),
+    cx: 0,
+    cz: 0,
+    state: 'stored',
+    lastScore: 0,
+    lastTier: 0,
+  };
+  const neighbor = {
+    ...center,
+    key: chunkKey('world', 'minecraft:overworld', 1, 0),
+    cx: 1,
+    state: 'hashed',
+    displayed: 'none',
+    contentDigest: 'known',
+    workerKeepUntil: 0,
+  };
+  const queued: string[] = [];
+  const manager = Object.assign(Object.create(ChunkManager.prototype), {
+    opts: { world: 'world', dimension: 'minecraft:overworld' },
+    chunks: new Map([
+      [center.key, center],
+      [neighbor.key, neighbor],
+    ]),
+    scheduler: {
+      notify(event: { key: string }) {
+        queued.push(event.key);
+      },
+    },
+    scheduleIoFlush() {},
+  });
+  assert.equal(manager.ensureNeighborhoodWorkerData(center, performance.now()), false);
+  assert.deepEqual(queued, [neighbor.key]);
+  // Admission may disappear when the camera changes before a body request
+  // starts. The next mesh attempt must be able to request its dependency again.
+  queued.length = 0;
+  assert.equal(manager.ensureNeighborhoodWorkerData(center, performance.now()), false);
+  assert.deepEqual(queued, [neighbor.key]);
+  assert.equal(neighbor.state, 'hashed');
 });

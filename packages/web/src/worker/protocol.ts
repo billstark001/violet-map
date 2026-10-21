@@ -20,6 +20,7 @@ export type WorkerRequest =
   | {
       type: 'chunk';
       key: string;
+      contentDigest: string;
       cx: number;
       cz: number;
       dimension: DimensionDef;
@@ -40,6 +41,7 @@ export interface WorkerChunkProfile {
   chunkBytes: number;
   parseMs: number;
   storedColumns: number;
+  estimatedColumnBytes: number;
 }
 
 export interface WorkerMeshProfile {
@@ -51,8 +53,15 @@ export interface WorkerMeshProfile {
 }
 
 export type WorkerResponse =
-  | { type: 'chunkReady'; key: string; biome: string; surfaceY: number; profile?: WorkerChunkProfile }
-  | { type: 'chunkError'; key: string; error: string }
+  | {
+      type: 'chunkReady';
+      key: string;
+      contentDigest: string;
+      biome: string;
+      surfaceY: number;
+      profile?: WorkerChunkProfile;
+    }
+  | { type: 'chunkError'; key: string; contentDigest: string; error: string }
   | { type: 'meshError'; key: string; version: number; kind: 'full' | 'lod'; error: string }
   | { type: 'meshResult'; key: string; version: number; sections: SectionMeshMsg[]; profile?: WorkerMeshProfile }
   | {

@@ -52,8 +52,13 @@ export class ResourceDownloader {
         const downloadSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]);
         const response = await fetch(url, { signal: downloadSignal, credentials: 'omit', redirect: 'error' });
         if (!response.ok) {
+          const status = response.status;
           await response.body?.cancel();
-          throw new ResourceError('RESOURCE_BACKEND_UNAVAILABLE', `${ref.kind}: HTTP ${response.status}`, true);
+          throw new ResourceError(
+            status === 409 ? 'RESOURCE_VIEW_EXPIRED' : 'RESOURCE_BACKEND_UNAVAILABLE',
+            `${ref.kind}: HTTP ${status}`,
+            status >= 500 || status === 409 || status === 429,
+          );
         }
         if (response.headers.get('content-type')?.split(';')[0] !== ref.artifact.mediaType) {
           await response.body?.cancel();
@@ -101,6 +106,3 @@ export class ResourceDownloader {
 }
 
 export const resourceDownloader = new ResourceDownloader();
-
-export const downloadResource = (reference: ResourceRef, signal?: AbortSignal) =>
-  resourceDownloader.download(reference, signal);

@@ -1,7 +1,7 @@
 import { type AtlasIndex, type TextureAlphaMap } from '@violet-map/core/assets';
 import { fetchTexture, fetchTextureAtlas } from './api';
 import { loadBrowserImage } from './browserImage';
-import { downloadResource } from './resources/download';
+import { resourceDownloader } from './resources/download';
 
 export interface BuiltAtlas {
   cacheKey: string;
@@ -86,7 +86,7 @@ export async function resourceImage(
   reference: import('@violet-map/core/resources').ResourceRef,
   signal?: AbortSignal,
 ): Promise<HTMLImageElement> {
-  const bytes = await downloadResource(reference, signal);
+  const bytes = await resourceDownloader.download(reference, signal);
   const url = URL.createObjectURL(new Blob([bytes], { type: reference.artifact.mediaType }));
   try {
     return await loadBrowserImage(url, signal);
