@@ -1,3 +1,4 @@
+import { readRequestJson } from '../httpBody.js';
 import { bodyLimit } from 'hono/body-limit';
 import { isDimensionId, isWorldName } from '@violet-map/core/domain';
 import { isWorldCreateInput } from '../worldValidation.js';
@@ -48,37 +49,21 @@ export function mountWorldWrite(context: RouteContext) {
       return c.json({ ok: true });
     },
   );
-  app.post(
-    '/api/admin/worlds',
-    requireRole(REQUIRED_ROLE.worlds),
-    bodyLimit({ maxSize: config.limits.uploadBytes }),
-    async (c) => {
-      const dimension = c.req.param('dim');
-      if (dimension && !isDimensionId(dimension)) return c.json({ error: 'invalid dimension id' }, 400);
-      const body: unknown = await c.req.json().catch(() => null);
-      if (!isWorldCreateInput(body) || !isWorldName(body.world))
-        return c.json({ error: 'invalid world creation input' }, 400);
-      return c.json(await createWorld(body.world, body.dimensions, body.levelName));
-    },
-  );
-  app.post(
-    '/api/admin/worlds/:world/create',
-    requireRole(REQUIRED_ROLE.worlds),
-    bodyLimit({ maxSize: config.limits.uploadBytes }),
-    async (c) => {
-      const dimension = c.req.param('dim');
-      if (dimension && !isDimensionId(dimension)) return c.json({ error: 'invalid dimension id' }, 400);
-      const raw = await c.req.text();
-      let body: unknown = {};
-      try {
-        if (raw.trim()) body = JSON.parse(raw);
-      } catch {
-        return c.json({ error: 'invalid JSON' }, 400);
-      }
-      if (!isWorldCreateInput(body)) return c.json({ error: 'invalid world creation input' }, 400);
-      return c.json(await createWorld(c.req.param('world'), body.dimensions, body.levelName));
-    },
-  );
+  app.post('/api/admin/worlds', requireRole(REQUIRED_ROLE.worlds), async (c) => {
+    const dimension = c.req.param('dim');
+    if (dimension && !isDimensionId(dimension)) return c.json({ error: 'invalid dimension id' }, 400);
+    const body: unknown = await readRequestJson(c, config.limits.uploadBytes);
+    if (!isWorldCreateInput(body) || !isWorldName(body.world))
+      return c.json({ error: 'invalid world creation input' }, 400);
+    return c.json(await createWorld(body.world, body.dimensions, body.levelName));
+  });
+  app.post('/api/admin/worlds/:world/create', requireRole(REQUIRED_ROLE.worlds), async (c) => {
+    const dimension = c.req.param('dim');
+    if (dimension && !isDimensionId(dimension)) return c.json({ error: 'invalid dimension id' }, 400);
+    const body = await readRequestJson(c, config.limits.uploadBytes, { allowEmpty: true });
+    if (!isWorldCreateInput(body)) return c.json({ error: 'invalid world creation input' }, 400);
+    return c.json(await createWorld(c.req.param('world'), body.dimensions, body.levelName));
+  });
   app.put(
     '/api/admin/worlds/:world/files/*',
     requireRole(REQUIRED_ROLE.worlds),
@@ -122,19 +107,14 @@ export function mountWorldWrite(context: RouteContext) {
       return c.json(await deleteRegion(c.req.param('world'), c.req.param('dim'), rx, rz));
     },
   );
-  app.delete(
-    '/api/admin/worlds/:world/:dim/chunks',
-    requireRole(REQUIRED_ROLE.worlds),
-    bodyLimit({ maxSize: config.limits.uploadBytes }),
-    async (c) => {
-      const dimension = c.req.param('dim');
-      if (dimension && !isDimensionId(dimension)) return c.json({ error: 'invalid dimension id' }, 400);
-      const body = await c.req.json().catch(() => null);
-      const chunks = parseChunkCoordinates(body, Number.MAX_SAFE_INTEGER);
-      if (!chunks) return c.json({ error: 'invalid chunk coordinates' }, 400);
-      return c.json(await deleteChunks(c.req.param('world'), c.req.param('dim'), chunks));
-    },
-  );
+  app.delete('/api/admin/worlds/:world/:dim/chunks', requireRole(REQUIRED_ROLE.worlds), async (c) => {
+    const dimension = c.req.param('dim');
+    if (dimension && !isDimensionId(dimension)) return c.json({ error: 'invalid dimension id' }, 400);
+    const body = await readRequestJson(c, config.limits.uploadBytes);
+    const chunks = parseChunkCoordinates(body, Number.MAX_SAFE_INTEGER);
+    if (!chunks) return c.json({ error: 'invalid chunk coordinates' }, 400);
+    return c.json(await deleteChunks(c.req.param('world'), c.req.param('dim'), chunks));
+  });
   app.post(
     '/api/admin/worlds/:world/upload',
     requireRole(REQUIRED_ROLE.worlds),
