@@ -10,6 +10,25 @@ import { ServerWorldStorage } from '../src/server.js';
 import { syncWorld } from '../src/sync.js';
 import type { StoredFileInfo, ObjectStorage } from '@violet-map/core/storage';
 
+test('local change tokens agree across stat/list and detect same-size edits with restored modification times', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-local-revisions-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const storage = new LocalStorage(root);
+  await storage.write('file', new Uint8Array([1, 2]));
+  const file = path.join(root, 'file');
+  const fixed = 1700000000;
+  await fs.utimes(file, fixed, fixed);
+  const before = await storage.stat('file');
+  assert.equal((await storage.list())[0].etag, before!.etag);
+  assert.equal((await storage.stat('file'))!.etag, before!.etag);
+  await storage.write('file', new Uint8Array([2, 1]));
+  await fs.utimes(file, fixed, fixed);
+  const after = await storage.stat('file');
+  assert.equal(after!.modifiedAt, before!.modifiedAt);
+  assert.notEqual(after!.etag, before!.etag);
+  assert.notEqual(before!.etag, '0102');
+});
+
 test('a metadata request from before a write cannot refill the cache', async () => {
   let resolveOld!: (value: StoredFileInfo | null) => void;
   const oldStat = new Promise<StoredFileInfo | null>((resolve) => {

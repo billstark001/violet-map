@@ -2,7 +2,7 @@ import { ResourceError } from '@violet-map/core/resources';
 import { mapWithConcurrency } from '@violet-map/core/async';
 import type { ObjectStorage, StoredFileInfo } from '@violet-map/core/storage';
 import { createHash, randomUUID } from 'node:crypto';
-import type { Dirent } from 'node:fs';
+import type { BigIntStats, Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ObjectHttpMetadata } from './capabilities.js';
@@ -13,6 +13,16 @@ function isMissingPath(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const code = (error as NodeJS.ErrnoException).code;
   return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+/** Opaque local change token, never a content digest or a frozen snapshot. */
+function fileInfo(filePath: string, stat: BigIntStats): StoredFileInfo {
+  return {
+    path: filePath,
+    size: Number(stat.size),
+    modifiedAt: Number(stat.mtimeNs) / 1e6,
+    etag: `local-${stat.dev}-${stat.ino}-${stat.size}-${stat.mtimeNs}-${stat.ctimeNs}`,
+  };
 }
 
 /** Node cannot flush directory handles on Windows. File contents are still
@@ -237,8 +247,8 @@ export class LocalStorage implements ObjectStorage {
 
   async stat(filePath: string): Promise<StoredFileInfo | null> {
     try {
-      const stat = await fs.stat(this.abs(filePath));
-      return stat.isFile() ? { path: cleanStoragePath(filePath), size: stat.size, modifiedAt: stat.mtimeMs } : null;
+      const stat = await fs.stat(this.abs(filePath), { bigint: true });
+      return stat.isFile() ? fileInfo(cleanStoragePath(filePath), stat) : null;
     } catch (error) {
       if (!isMissingPath(error)) throw error;
       return null;
@@ -265,12 +275,8 @@ export class LocalStorage implements ObjectStorage {
     await walk(base);
     const files = await mapWithConcurrency(paths, 32, async (file): Promise<StoredFileInfo | null> => {
       try {
-        const stat = await fs.stat(file);
-        return {
-          path: path.relative(this.root, file).split(path.sep).join('/'),
-          size: stat.size,
-          modifiedAt: stat.mtimeMs,
-        };
+        const stat = await fs.stat(file, { bigint: true });
+        return fileInfo(path.relative(this.root, file).split(path.sep).join('/'), stat);
       } catch (error) {
         if (isMissingPath(error)) return null;
         throw error;

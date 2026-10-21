@@ -45,6 +45,7 @@ export class ResourceEngine {
   readonly publication: ResourcePublisher;
   private bounded?: BoundedSource;
   private observationTimer?: ReturnType<typeof setTimeout>;
+  private readonly observationController = new AbortController();
   private closed = false;
   private readonly operations: Singleflight;
   private readonly members = new Map<string, { entry?: PublicationEntry; validUntil: number; release(): void }>();
@@ -110,10 +111,14 @@ export class ResourceEngine {
       this.bounded = new BoundedSource(
         coordinator,
         async () => {
-          const release = this.repo().work.reserve(128 * 1024 ** 2);
+          const release = await this.repo().work.waitReserve(
+            128 * 1024 ** 2,
+            config.resources.work.maxTasks + 1,
+            this.observationController.signal,
+          );
           try {
             const hash = createHash('sha256');
-            hash.update(await dynamic.assets.sourceDigest());
+            hash.update(await dynamic.assets.sourceRevision());
             hash.update(resourceJsonBytes(await dynamic.gameData.buildBlockInfo()));
             hash.update(resourceJsonBytes(await dynamic.gameData.readBiomes()));
             hash.update(resourceJsonBytes(await dynamic.gameData.readDimensions()));
@@ -121,6 +126,7 @@ export class ResourceEngine {
             if (files.length > Math.floor(budget / 1024))
               throw new ResourceError('RESOURCE_BUSY', 'source inventory exceeds metadata budget');
             for (const file of files.sort((a, b) => a.path.localeCompare(b.path))) {
+              this.observationController.signal.throwIfAborted();
               if (
                 !/\.(mca|nbt|msgpack)$|\/(level.dat|identity.json|world.json)$|\/top-map\/manifest.json$/.test(
                   file.path,
@@ -128,6 +134,10 @@ export class ResourceEngine {
               )
                 continue;
               hash.update(canonicalJson({ key: file.path, bytes: file.size }));
+              if (file.etag && !/^W\//i.test(file.etag)) {
+                hash.update(canonicalJson({ revision: file.etag }));
+                continue;
+              }
               for (let offset = 0; offset < file.size; offset += 1024 ** 2) {
                 const length = Math.min(1024 ** 2, file.size - offset);
                 const bytes = await mounts.worlds!.readRange(file.path, offset, length);
@@ -176,11 +186,14 @@ export class ResourceEngine {
 
   async close() {
     this.closed = true;
+    this.observationController.abort(new ResourceError('RESOURCE_BUSY', 'resource engine is closing', true));
     this.publication.close();
     if (this.observationTimer) clearTimeout(this.observationTimer);
     this.observationTimer = undefined;
     await this.operations.close();
-    await this.bounded?.drain();
+    await this.bounded?.drain().catch((error) => {
+      if (error !== this.observationController.signal.reason) throw error;
+    });
     for (const value of this.members.values()) value.release();
     this.members.clear();
     this.generator.close();

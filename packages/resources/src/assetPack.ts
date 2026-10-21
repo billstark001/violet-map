@@ -656,8 +656,8 @@ export function createAssetPack(config: AssetPackOptions) {
     buildAssetBundle,
     clearTextureAtlasCache,
     textureFilePath,
-    sourceDigest: async () =>
-      (await import('./assetDigest.js')).assetDirectoryDigest([BUNDLED_RENDERER_ASSETS, ...config.assets.dirs]),
+    sourceRevision: async () =>
+      (await import('./assetDigest.js')).assetDirectoryRevision([BUNDLED_RENDERER_ASSETS, ...config.assets.dirs]),
     readTextureFile,
     prepareTextureAtlas,
   };

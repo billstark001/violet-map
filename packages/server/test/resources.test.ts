@@ -22,6 +22,53 @@ async function rootFixture(t: { after: (fn: () => Promise<unknown>) => void }) {
   return root;
 }
 
+test('bounded world observations avoid validated body reads and hash bytes when only weak metadata is available', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 10000 });
+  const root = await rootFixture(t);
+  const config = loadServerConfig({
+    env: {
+      DEPLOYMENT_PROFILE: 'public',
+      DATA_DIR: root,
+      WORLDS_DIR: path.join(root, 'worlds'),
+      RESOURCES_SOURCE_CONSISTENCY: 'bounded',
+    },
+    cwd: root,
+  });
+  const services = await createServices(config);
+  t.after(() => services.close());
+  const storage = services.mounts.worlds!;
+  await storage.write('world/level.dat', new Uint8Array([1]));
+  let reads = 0,
+    weak = false;
+  const read = storage.readRange.bind(storage),
+    list = storage.list.bind(storage);
+  t.mock.method(storage, 'readRange', async (...args: Parameters<typeof read>) => {
+    reads++;
+    return read(...args);
+  });
+  t.mock.method(storage, 'list', async (prefix?: string) =>
+    (await list(prefix)).map((file) => (weak ? { ...file, modifiedAt: 1, etag: 'W/"same"' } : file)),
+  );
+  await services.resources.head('world');
+  assert.equal(reads, 0);
+  const release = services.resources.repository!.work.reserve(config.resources.work.memoryBytes);
+  t.mock.timers.tick(5000);
+  const waiting = services.resources.head('world');
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(services.resources.repository!.work.queuedTasks, 1);
+  release();
+  await waiting;
+  assert.equal(reads, 0);
+  weak = true;
+  t.mock.timers.tick(5000);
+  const before = await services.resources.head('world');
+  assert.ok(reads > 0);
+  await fs.writeFile(path.join(root, 'worlds/world/level.dat'), new Uint8Array([2]));
+  t.mock.timers.tick(5000);
+  const after = await services.resources.head('world');
+  assert.notEqual(after.generation, before.generation);
+});
+
 test('dynamic zero retention resolves and GETs deterministic chunks; source writes expire views and HEAD reads no body', async (t) => {
   const root = await rootFixture(t);
   const config = loadServerConfig({
