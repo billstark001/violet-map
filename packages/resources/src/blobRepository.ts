@@ -102,19 +102,33 @@ export class BlobRepository {
     if (maxBytes < 1) throw new RangeError('invalid generator budget');
     if (workBytes < maxBytes)
       throw new ResourceError('RESOURCE_BUSY', 'generator output exceeds available work budget', true);
-    const releaseWork = await this.work.waitReserve(workBytes, this.options.maxTasks, this.controller.signal);
+    // Delivery can drain while a producer waits for handoff space. Never occupy
+    // work bytes first: GETs need that budget to consume the existing promises.
+    const releaseHandoff = await this.handoff.reserve(
+      maxBytes,
+      maxArtifacts,
+      this.options.maxTasks,
+      this.controller.signal,
+    );
     try {
+      const releaseWork = await this.work.waitReserve(workBytes, this.options.maxTasks, this.controller.signal);
       return {
         releaseWork,
-        releaseHandoff: this.handoff.reserve(maxBytes, maxArtifacts),
+        releaseHandoff,
         maxBytes,
         workBytes,
         maxArtifacts,
       };
     } catch (error) {
-      releaseWork();
+      releaseHandoff();
       throw error;
     }
+  }
+  private retainOutputs(outputs: { ref: ArtifactRef; bytes: Uint8Array }[], reservation: Reservation) {
+    return this.handoff.budget.replaceReservation(reservation.releaseHandoff, () => {
+      for (const output of outputs) this.handoff.put(output.ref.digest, this.retainBytes(output.ref, output.bytes));
+      return this.hold(outputs.map((output) => output.ref));
+    });
   }
   lease(ref: ArtifactRef): ResourceAvailability | undefined {
     const pin = this.handoff.get(ref.digest);
@@ -251,11 +265,7 @@ export class BlobRepository {
           }
           if (complete) {
             this.options.source.assert(action.generation);
-            owned.releaseHandoff();
-            for (const output of outputs) {
-              this.handoff.put(output.ref.digest, this.retainBytes(output.ref, output.bytes));
-            }
-            const held = this.hold(outputs.map((output) => output.ref));
+            const held = this.retainOutputs(outputs, owned);
             try {
               await this.options.index.set(action.actionKey, known);
               this.options.source.assert(action.generation);
@@ -289,12 +299,7 @@ export class BlobRepository {
         ref: artifactRef(item.bytes, item.mediaType, item.format),
         bytes: item.bytes,
       }));
-      owned.releaseHandoff();
-      this.handoff.put(ref.digest, this.retainBytes(ref, bytes));
-      for (const output of outputs) {
-        this.handoff.put(output.ref.digest, this.retainBytes(output.ref, output.bytes));
-      }
-      const held = this.hold([ref, ...outputs.map((output) => output.ref)]);
+      const held = this.retainOutputs([{ ref, bytes }, ...outputs], owned);
       try {
         for (const layer of this.options.layers ?? []) {
           for (const output of outputs) await layer.retain(output.ref.digest, output.ref, output.bytes);

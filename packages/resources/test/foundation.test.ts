@@ -374,6 +374,48 @@ test('generation waits in a bounded work queue before preparation and drains whe
   assert.equal(f.repository.work.bytes, 0);
 });
 
+test('handoff admission leaves work bytes available for GETs that release earlier promises', async (t) => {
+  const f = fixture(0, 1024);
+  t.after(() => f.repository.close());
+  const old = new Uint8Array(900),
+    ref = artifactRef(old, 'application/msgpack', 'chunk-msgpack-v1');
+  f.repository.handoff.put(ref.digest, old);
+  const pending = f.repository.ensure(f.action);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(f.repository.handoff.budget.queuedTasks, 1);
+  assert.equal(f.repository.work.bytes, 0);
+  const read = await f.repository.acquire(ref);
+  read.release();
+  const lease = await pending;
+  assert.ok(lease);
+  lease.release();
+  assert.equal(f.repository.handoff.budget.bytes, 0);
+  assert.equal(f.repository.work.bytes, 0);
+});
+
+test('handoff reservations become actual pins before competing producers can take the released capacity', async (t) => {
+  const f = fixture(0, 256);
+  t.after(() => f.repository.close());
+  const first = await f.repository.ensure(f.action);
+  const make = (name: string) =>
+    f.repository.ensure({
+      ...f.action,
+      actionKey: sha256(name),
+      generate: async () => new TextEncoder().encode(name),
+    });
+  const second = make('second'),
+    third = make('third');
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(f.repository.handoff.budget.queuedTasks, 2);
+  first.release();
+  const held = await second;
+  assert.equal(f.repository.handoff.budget.queuedTasks, 1);
+  assert.equal(f.repository.work.bytes, 0);
+  held.release();
+  (await third).release();
+  assert.equal(f.repository.handoff.budget.bytes, 0);
+});
+
 test('cold generated digests participate in low-benefit fill observation without retaining delivery pins', async (t) => {
   const f = fixture(1024);
   t.after(() => f.repository.close());

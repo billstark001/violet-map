@@ -16,6 +16,8 @@ Online cache settings and removal of ineffective source-cache knobs are document
 
 The memory, local and shared derived caches permit zero bytes. Missing local cache, SQLite and workspace configuration means no probing or creation. Selected drivers fail explicitly. Work and handoff budgets are separate positive bounds: reserve before preparing input; admission failures reject before generation. A zero-retention resolve pins its results only until transfer/cancellation or the advertised handoff deadline. Oversized optional cache entries do not evict a hot working set. Optional cache write admission has no unbounded waiting queue.
 
+Producer admission waits for handoff capacity before occupying work bytes, so downloads can drain earlier promises. Converting a producer's upper bound into actual output pins completes before queued producers wake. Both waits are bounded and abort during repository shutdown.
+
 Local caches have one exclusive writer. Shared cache readers do not create locks, upload or evict remote files; only the publisher fills and prunes that cache. A crashed owner requires an explicitly quiesced recovery, never an expiring lease takeover. Never share a SQLite cache between independent writers.
 
 Local atomic and conditional writes flush file contents before making them visible. POSIX also flushes the containing directory after publication. Node does not support directory flushing on Windows, so Windows retains atomic visibility and file-content flushing but does not provide the same directory-entry durability guarantee after power loss.

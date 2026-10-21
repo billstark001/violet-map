@@ -11,6 +11,7 @@ export class ByteBudget {
   private used = 0;
   private limit: number;
   private readonly waiting: { bytes: number; resume(): void }[] = [];
+  private replacing = 0;
   get queuedBytes() {
     return this.waiting.reduce((sum, waiter) => sum + waiter.bytes, 0);
   }
@@ -34,9 +35,21 @@ export class ByteBudget {
     this.wake();
   }
   private wake() {
+    if (this.replacing) return;
     for (const waiter of [...this.waiting]) {
       if (waiter.bytes <= this.limit && this.used > this.limit - waiter.bytes) break;
       waiter.resume();
+    }
+  }
+  /** Convert an admitted upper bound to actual ownership before waking queued work. */
+  replaceReservation<T>(release: () => void, retain: () => T): T {
+    this.replacing++;
+    try {
+      release();
+      return retain();
+    } finally {
+      this.replacing--;
+      this.wake();
     }
   }
   async waitReserve(bytes: number, maxQueued: number, signal: AbortSignal): Promise<() => void> {

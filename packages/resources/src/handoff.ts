@@ -28,13 +28,19 @@ export class HandoffStore {
         this.expired++;
       }
   }
-  reserve(maxBytes: number, artifacts = 1) {
+  async reserve(maxBytes: number, artifacts: number, maxQueued: number, signal: AbortSignal) {
     this.sweep();
     byteCapacity(artifacts);
     if (artifacts < 1 || this.entries.size + this.reservedEntries > this.maxEntries - artifacts)
       throw new ResourceError('RESOURCE_BUSY', 'handoff metadata budget exhausted', true);
-    const releaseBytes = this.budget.reserve(Math.max(1, byteCapacity(maxBytes)));
     this.reservedEntries += artifacts;
+    let releaseBytes: () => void;
+    try {
+      releaseBytes = await this.budget.waitReserve(Math.max(1, byteCapacity(maxBytes)), maxQueued, signal);
+    } catch (error) {
+      this.reservedEntries -= artifacts;
+      throw error;
+    }
     let active = true;
     return () => {
       if (active) {
