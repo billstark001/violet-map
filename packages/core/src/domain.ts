@@ -3,6 +3,12 @@ export interface BlockStateRef {
   properties: Record<string, string>;
 }
 
+/** Canonical block-state identity, independent of property insertion order. */
+export function blockStateKey(state: BlockStateRef): string {
+  const keys = Object.keys(state.properties).sort();
+  return JSON.stringify([state.name, keys.map((key) => [key, state.properties[key]])]);
+}
+
 export interface BiomeDef {
   temperature: number;
   downfall: number;

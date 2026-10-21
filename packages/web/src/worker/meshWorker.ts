@@ -1,11 +1,6 @@
 /// <reference lib="webworker" />
-import {
-  type BlockInfo,
-  type RendererDefinitions,
-  type RendererModelDef,
-  type TintType,
-} from '@violet-map/core/assets';
-import { type ChunkColumn, appendChunkEntities, parseChunkColumn } from '@violet-map/core/domain';
+import { type BlockInfo, type RendererDefinitions, type RendererModelDef } from '@violet-map/core/assets';
+import { blockStateKey, type ChunkColumn, appendChunkEntities, parseChunkColumn } from '@violet-map/core/domain';
 import {
   meshByteLength,
   ChunkNeighborhood,
@@ -14,7 +9,7 @@ import {
   type MesherResources,
   ModelBaker,
   computeColumnLight,
-  hexToRgb,
+  blockTint,
   meshLodChunk,
   meshSection,
   resolveBiomeColors,
@@ -42,37 +37,6 @@ const topColorStateKeyCache = new WeakMap<BlockStateRef, string>();
 
 function infoOf(name: string): BlockInfo {
   return blockInfo[name] ?? DEFAULT_INFO;
-}
-
-function clamp01(value: number): number {
-  return Math.min(1, Math.max(0, value));
-}
-
-function redstoneTint(state?: BlockStateRef): Rgb {
-  const power = Math.min(15, Math.max(0, Number(state?.properties.power ?? '0') || 0));
-  const f = power / 15;
-  const r = power === 0 ? 0.3 : f * 0.6 + 0.4;
-  const g = f * f * 0.7 - 0.5;
-  const b = f * f * 0.6 - 0.7;
-  return [clamp01(r), clamp01(g), clamp01(b)];
-}
-
-function stemTint(state?: BlockStateRef): Rgb {
-  const age = Math.min(7, Math.max(0, Number(state?.properties.age ?? '0') || 0));
-  return [(age * 32) / 255, (255 - age * 8) / 255, (age * 4) / 255];
-}
-
-function tintOf(type: TintType, fixed: number | undefined, biome: string, state?: BlockStateRef): Rgb {
-  if (fixed !== undefined) return hexToRgb(fixed);
-  if (type === 'redstone') return redstoneTint(state);
-  if (type === 'stem') return stemTint(state);
-  if (type === 'attachedStem') return hexToRgb(0xe0c71c);
-  const bc = biomeColors[biome] ?? biomeColors['default'] ?? biomeColors['minecraft:plains'];
-  if (!bc) return WHITE;
-  if (type === 'grass') return bc.grass;
-  if (type === 'foliage') return bc.foliage;
-  if (type === 'water') return bc.water;
-  return WHITE;
 }
 
 function firstAverageTexture(ids: string[]): { id: string; avg: Rgb } | null {
@@ -115,15 +79,15 @@ function fallbackColorOf(state: BlockStateRef, biome: string): Rgb | null {
   const bi = infoOf(state.name);
   const tint =
     bi.tint !== 'none'
-      ? tintOf(bi.tint, bi.fixedTint, biome, state)
+      ? blockTint(bi.tint, bi.fixedTint, biome, biomeColors, state)
       : state.name === 'minecraft:grass_block' ||
           state.name === 'minecraft:short_grass' ||
           state.name === 'minecraft:grass' ||
           state.name === 'minecraft:tall_grass' ||
           state.name === 'minecraft:fern'
-        ? tintOf('grass', undefined, biome)
+        ? blockTint('grass', undefined, biome, biomeColors, state)
         : state.name.endsWith('_leaves')
-          ? tintOf('foliage', undefined, biome)
+          ? blockTint('foliage', undefined, biome, biomeColors, state)
           : WHITE;
   return [found.avg[0] * tint[0], found.avg[1] * tint[1], found.avg[2] * tint[2]];
 }
@@ -132,11 +96,7 @@ function fallbackColorOf(state: BlockStateRef, biome: string): Rgb | null {
 function topColorOf(state: BlockStateRef, biome: string): Rgb {
   let stateKey = topColorStateKeyCache.get(state);
   if (stateKey === undefined) {
-    const props = Object.keys(state.properties)
-      .sort()
-      .map((k) => `${k}=${state.properties[k]}`)
-      .join(',');
-    stateKey = `${state.name}[${props}]`;
+    stateKey = blockStateKey(state);
     topColorStateKeyCache.set(state, stateKey);
   }
   const key = `${stateKey}|${biome}`;
@@ -150,7 +110,7 @@ function topColorOf(state: BlockStateRef, biome: string): Rgb {
   let color: Rgb | null = null;
   if (bi.fluid) {
     const avg = avgColors[bi.fluid.texture] ?? [1, 1, 1];
-    const t = tintOf(bi.fluid.tint, undefined, biome, state);
+    const t = blockTint(bi.fluid.tint, undefined, biome, biomeColors, state);
     color = [avg[0] * t[0], avg[1] * t[1], avg[2] * t[2]];
   } else {
     const quads = baker.getQuads(state, 0);
@@ -158,7 +118,7 @@ function topColorOf(state: BlockStateRef, biome: string): Rgb {
     if (up) {
       const avg = avgColors[up.texture];
       if (avg) {
-        const t = up.tintIndex >= 0 ? tintOf(bi.tint, bi.fixedTint, biome, state) : WHITE;
+        const t = up.tintIndex >= 0 ? blockTint(bi.tint, bi.fixedTint, biome, biomeColors, state) : WHITE;
         color = [avg[0] * t[0], avg[1] * t[1], avg[2] * t[2]];
       }
     }
@@ -329,7 +289,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       res = {
         baker,
         info: infoOf,
-        tint: tintOf,
+        tint: (type, fixed, biome, state) => blockTint(type, fixed, biome, biomeColors, state),
         atlas: msg.atlasIndex,
         textureHasAlpha: msg.textureHasAlpha,
         textureAnimationIds: msg.textureAnimationIds,

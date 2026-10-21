@@ -4,7 +4,7 @@ import { canonicalJson, ResourceError } from '@violet-map/core/resources';
 import { sha256 } from '@violet-map/storage';
 import type { WorldSource } from './sources/worldChunks.js';
 
-export const TOPMAP_GENERATOR = 'topmap-v6-colors3-light1-dependencies1';
+export const TOPMAP_GENERATOR = 'topmap-v6-colors4-light1-dependencies1';
 
 export interface TopMapDependencies {
   schemaVersion: 1;

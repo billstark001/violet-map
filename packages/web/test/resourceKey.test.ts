@@ -19,7 +19,7 @@ test('biome and dimension edits miss stale persistent meshes while reordered JSO
   await clearMeshCache();
   t.after(() => clearMeshCache());
   const renderKey = buildRenderKey(resources);
-  assert.ok(renderKey.startsWith('mesh-v17-model-and-coordinate-fixes:'));
+  assert.ok(renderKey.startsWith('mesh-v18-shared-tints-canonical-json:'));
   assert.equal(buildRenderKey({ ...resources, bundle: { blockstates: {}, models: {} } }), renderKey);
   const parts = { world: 'world', dimension: 'overworld', renderKey, cx: 0, cz: 0, contentKey: 'same-nbt' };
   await putCachedFull(parts, []);
@@ -33,4 +33,18 @@ test('biome and dimension edits miss stale persistent meshes while reordered JSO
     assert.notEqual(nextKey, renderKey);
     assert.equal(await getCachedFull({ ...parts, renderKey: nextKey }), null);
   }
+});
+
+test('render identities reject non-JSON inputs without evaluating accessors', () => {
+  let invoked = false;
+  const bundle = Object.defineProperty({}, 'models', {
+    enumerable: true,
+    get() {
+      invoked = true;
+      return {};
+    },
+  });
+  assert.throws(() => buildRenderKey({ ...resources, bundle: bundle as typeof resources.bundle }), /accessors/);
+  assert.equal(invoked, false);
+  assert.throws(() => buildRenderKey({ ...resources, blockInfo: { invalid: undefined } as never }), /finite JSON/);
 });

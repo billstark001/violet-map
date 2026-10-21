@@ -7,7 +7,6 @@ const { computeColumnLight, meshLodChunk, meshSection } = render;
 
 import { type AssetBundle, type AtlasIndex, type BlockInfo } from '@violet-map/core/assets';
 import { type ColumnEntry } from './worldInput.js';
-import { tintOf } from './colorInput.js';
 import { type MeshStats, meshStats, sectionStats, addStats } from './report.js';
 
 export const DEFAULT_RECT = { u0: 0, v0: 0, u1: 1, v1: 1 };
@@ -40,7 +39,7 @@ export function buildMesherResources(bundle: AssetBundle, infoOf: (name: string)
   return {
     baker,
     info: infoOf,
-    tint: (type, fixed) => tintOf(type, fixed),
+    tint: (type, fixed, biome, state) => render.blockTint(type, fixed, biome, undefined, state),
     atlas: fakeAtlas,
     textureHasAlpha: {},
   };

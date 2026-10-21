@@ -30,7 +30,6 @@ import {
 import { dataFileCandidates, loadBlockInfo, readJsonFirst } from './assetInput.js';
 import { infoGetter, loadBiomeColors, makeColorOf, makeTextureColorOf, stateColor } from './colorInput.js';
 import { ensureLight } from './meshing.js';
-import { ensureDir } from './paths.js';
 import { type ColumnEntry, type RegionFile } from './worldInput.js';
 
 const TOPMAP_COLOR_VERSION = 3;
@@ -79,7 +78,7 @@ async function readManifest(out: string, world: string): Promise<TopMapManifest>
 
 async function writeManifest(out: string, manifest: TopMapManifest) {
   manifest.generatedAt = new Date().toISOString();
-  await ensureDir(out);
+  await fs.mkdir(out, { recursive: true });
   await fs.writeFile(path.join(out, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
@@ -185,7 +184,7 @@ async function bakeTopMapRegion(
     };
   }
   const outDir = dimOutDir(opts.out, opts.dim);
-  await ensureDir(outDir);
+  await fs.mkdir(outDir, { recursive: true });
   await fs.writeFile(outFile, output);
   return {
     entry: {
@@ -257,7 +256,7 @@ export async function runBakeTopMap(input: BakeInput) {
   let empty = 0;
   let removed = 0;
 
-  await ensureDir(dimOutDir(opts.out, opts.dim));
+  await fs.mkdir(dimOutDir(opts.out, opts.dim), { recursive: true });
   for (const previous of previousSources.length ? previousSources : (previousTopMap?.regions ?? [])) {
     const key = `${previous.x},${previous.z}`;
     if (!force && currentKeys.has(key)) continue;

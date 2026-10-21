@@ -1,6 +1,21 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { hexToRgb, resolveBiomeColors } from '../src/colors.js';
+import { blockTint, hexToRgb, resolveBiomeColors } from '../src/colors.js';
+
+test('shared block tints preserve fixed overrides, state-dependent colors and biome fallbacks', () => {
+  assert.deepEqual(
+    blockTint('redstone', undefined, 'unknown', null, { name: 'wire', properties: { power: '15' } }),
+    [1, 0.19999999999999996, 0],
+  );
+  assert.deepEqual(blockTint('stem', undefined, 'unknown', null, { name: 'stem', properties: { age: '7' } }), [
+    224 / 255,
+    199 / 255,
+    28 / 255,
+  ]);
+  assert.deepEqual(blockTint('water', 0x123456), hexToRgb(0x123456));
+  assert.deepEqual(blockTint('grass', undefined, 'unknown'), [0.48, 0.68, 0.29]);
+  assert.equal(blockTint('none', undefined), blockTint('none', undefined), 'untinted vertices reuse a constant');
+});
 
 test('truncated colormaps and invalid climate values use the fallback color', () => {
   const biomes = {

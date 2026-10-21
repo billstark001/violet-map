@@ -1,9 +1,9 @@
 import { hashString32 } from '@violet-map/core/hash';
 import { loadCapability } from '../capabilities.js';
-import { AIR_NAMES, normalizeId, type BiomeMap, type BlockStateRef } from '@violet-map/core/domain';
+import { AIR_NAMES, normalizeId, blockStateKey, type BiomeMap, type BlockStateRef } from '@violet-map/core/domain';
 import type { ResolvedBiomeColors, Rgb } from '@violet-map/render';
 
-const { MISSING_TEXTURE, ModelBaker, hexToRgb, resolveBiomeColors } = await loadCapability('@violet-map/render');
+const { MISSING_TEXTURE, ModelBaker, resolveBiomeColors, blockTint } = await loadCapability('@violet-map/render');
 
 import { type BlockInfo, type BlockInfoMap, type TintType } from '@violet-map/core/assets';
 import {
@@ -32,44 +32,6 @@ export function hashColor(id: string): Rgb {
   return [r, g, b];
 }
 
-export function clamp01(value: number): number {
-  return Math.min(1, Math.max(0, value));
-}
-
-export function redstoneTint(state?: BlockStateRef): Rgb {
-  const power = Math.min(15, Math.max(0, Number(state?.properties.power ?? '0') || 0));
-  const f = power / 15;
-  return [power === 0 ? 0.3 : f * 0.6 + 0.4, clamp01(f * f * 0.7 - 0.5), clamp01(f * f * 0.6 - 0.7)];
-}
-
-export function stemTint(state?: BlockStateRef): Rgb {
-  const age = Math.min(7, Math.max(0, Number(state?.properties.age ?? '0') || 0));
-  return [(age * 32) / 255, (255 - age * 8) / 255, (age * 4) / 255];
-}
-
-export function tintOf(
-  type: TintType,
-  fixed: number | undefined,
-  biome = 'minecraft:plains',
-  biomeColors?: BiomeColorMap | null,
-  state?: BlockStateRef,
-): Rgb {
-  if (fixed !== undefined) return hexToRgb(fixed);
-  if (type === 'redstone') return redstoneTint(state);
-  if (type === 'stem') return stemTint(state);
-  if (type === 'attachedStem') return hexToRgb(0xe0c71c);
-  const resolved = biomeColors?.[biome] ?? biomeColors?.default ?? biomeColors?.['minecraft:plains'];
-  if (resolved) {
-    if (type === 'grass') return resolved.grass;
-    if (type === 'foliage') return resolved.foliage;
-    if (type === 'water') return resolved.water;
-  }
-  if (type === 'grass') return [0.48, 0.68, 0.29];
-  if (type === 'foliage') return [0.36, 0.58, 0.25];
-  if (type === 'water') return [0.25, 0.42, 0.95];
-  return WHITE;
-}
-
 export function infoGetter(blockInfo?: BlockInfoMap): (name: string) => BlockInfo {
   return (name) => {
     if (AIR_NAMES.has(name)) return AIR_BLOCK_INFO;
@@ -87,17 +49,12 @@ export function makeColorOf(infoOf: (name: string) => BlockInfo): (state: BlockS
     const hit = cache.get(state.name);
     if (hit) return hit;
     const info = infoOf(state.name);
-    const tint = info.fluid ? tintOf(info.fluid.tint, undefined) : tintOf(info.tint, info.fixedTint);
+    const tint = info.fluid ? blockTint(info.fluid.tint, undefined) : blockTint(info.tint, info.fixedTint);
     const base = info.fluid ? hashColor(info.fluid.texture) : hashColor(state.name);
     const color: Rgb = [base[0] * tint[0], base[1] * tint[1], base[2] * tint[2]];
     cache.set(state.name, color);
     return color;
   };
-}
-
-export function stateKey(state: BlockStateRef): string {
-  const keys = Object.keys(state.properties).sort();
-  return `${state.name}[${keys.map((k) => `${k}=${state.properties[k]}`).join(',')}]`;
 }
 
 export async function loadBiomeColors(assetDirs: string[], biomesFile?: string): Promise<BiomeColorMap | null> {
@@ -166,12 +123,12 @@ export function fallbackSurfaceColor(
     const info = infoOf(state.name);
     const tint =
       info.tint !== 'none'
-        ? tintOf(info.tint, info.fixedTint, biome, biomeColors, state)
-        : tintOf(inferredTint(state, info), info.fixedTint, biome, biomeColors, state);
+        ? blockTint(info.tint, info.fixedTint, biome, biomeColors, state)
+        : blockTint(inferredTint(state, info), info.fixedTint, biome, biomeColors, state);
     return [found[0] * tint[0], found[1] * tint[1], found[2] * tint[2]];
   }
   const name = localName(state.name);
-  if (name.includes('water')) return tintOf('water', undefined, biome, biomeColors, state);
+  if (name.includes('water')) return blockTint('water', undefined, biome, biomeColors, state);
   if (name.includes('lava')) return [1, 0.34, 0.05];
   return fallbackColorOf(state, biome);
 }
@@ -190,14 +147,14 @@ export async function makeTextureColorOf(
   const fallbackColorOf = makeColorOf(infoOf);
   return (state, biome) => {
     if (AIR_NAMES.has(state.name)) return [0, 0, 0];
-    const key = `${stateKey(state)}|${biomeColors ? biome : ''}`;
+    const key = `${blockStateKey(state)}|${biomeColors ? biome : ''}`;
     const cached = cache.get(key);
     if (cached) return cached;
     const info = infoOf(state.name);
     let color: Rgb | null = null;
     if (info.fluid) {
       const avg = textureColors.get(info.fluid.texture) ?? [1, 1, 1];
-      const tint = tintOf(info.fluid.tint, undefined, biome, biomeColors, state);
+      const tint = blockTint(info.fluid.tint, undefined, biome, biomeColors, state);
       color = [avg[0] * tint[0], avg[1] * tint[1], avg[2] * tint[2]];
     } else {
       const quads = baker.getQuads(state, 0);
@@ -205,7 +162,7 @@ export async function makeTextureColorOf(
       if (up && up.texture !== MISSING_TEXTURE) {
         const avg = textureColors.get(normalizeId(up.texture)) ?? textureColors.get(up.texture);
         if (avg) {
-          const tint = up.tintIndex >= 0 ? tintOf(info.tint, info.fixedTint, biome, biomeColors, state) : WHITE;
+          const tint = up.tintIndex >= 0 ? blockTint(info.tint, info.fixedTint, biome, biomeColors, state) : WHITE;
           color = [avg[0] * tint[0], avg[1] * tint[1], avg[2] * tint[2]];
         }
       }

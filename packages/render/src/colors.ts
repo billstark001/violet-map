@@ -1,7 +1,12 @@
-import { type BiomeDef, type BiomeMap } from '@violet-map/core/domain';
+import type { TintType } from '@violet-map/core/assets';
+import { type BiomeDef, type BiomeMap, type BlockStateRef } from '@violet-map/core/domain';
 
 export type Rgb = readonly [number, number, number];
 
+const WHITE: Rgb = [1, 1, 1];
+const FALLBACK_GRASS: Rgb = [0.48, 0.68, 0.29];
+const FALLBACK_FOLIAGE: Rgb = [0.36, 0.58, 0.25];
+const FALLBACK_WATER: Rgb = [0.25, 0.42, 0.95];
 const COLORMAP_SIZE = 256;
 const COLORMAP_FALLBACK_COLOR = 0x48b518;
 
@@ -63,4 +68,35 @@ export function resolveBiomeColors(
     };
   }
   return out;
+}
+
+/** State-dependent vanilla tints shared by baked maps and browser meshing. */
+function redstoneTint(state?: BlockStateRef): Rgb {
+  const power = Math.min(15, Math.max(0, Number(state?.properties.power ?? '0') || 0));
+  const f = power / 15;
+  return [power === 0 ? 0.3 : f * 0.6 + 0.4, Math.max(0, f * f * 0.7 - 0.5), Math.max(0, f * f * 0.6 - 0.7)];
+}
+
+function stemTint(state?: BlockStateRef): Rgb {
+  const age = Math.min(7, Math.max(0, Number(state?.properties.age ?? '0') || 0));
+  return [(age * 32) / 255, (255 - age * 8) / 255, (age * 4) / 255];
+}
+
+/** One tint policy for offline baking and browser meshes, including missing biome data. */
+export function blockTint(
+  type: TintType,
+  fixed: number | undefined,
+  biome = 'minecraft:plains',
+  biomeColors?: Record<string, ResolvedBiomeColors> | null,
+  state?: BlockStateRef,
+): Rgb {
+  if (fixed !== undefined) return hexToRgb(fixed);
+  if (type === 'redstone') return redstoneTint(state);
+  if (type === 'stem') return stemTint(state);
+  if (type === 'attachedStem') return hexToRgb(0xe0c71c);
+  const resolved = biomeColors?.[biome] ?? biomeColors?.default ?? biomeColors?.['minecraft:plains'];
+  if (type === 'grass') return resolved?.grass ?? FALLBACK_GRASS;
+  if (type === 'foliage') return resolved?.foliage ?? FALLBACK_FOLIAGE;
+  if (type === 'water') return resolved?.water ?? FALLBACK_WATER;
+  return WHITE;
 }

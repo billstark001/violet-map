@@ -1,3 +1,4 @@
+import { blockStateKey } from '@violet-map/core/domain';
 import {
   type AssetBundle,
   type BlockModelJson,
@@ -185,11 +186,6 @@ function normalDir(verts: Vec3[]): Direction {
   return n[2] >= 0 ? 'south' : 'north';
 }
 
-function stateKey(state: BlockStateRef): string {
-  const keys = Object.keys(state.properties).sort();
-  return `${state.name}[${keys.map((k) => `${k}=${state.properties[k]}`).join(',')}]`;
-}
-
 function matchVariantKey(key: string, props: Record<string, string>): boolean {
   if (key === '') return true;
   return key.split(',').every((pair) => {
@@ -253,7 +249,7 @@ export class ModelBaker {
   getQuads(state: BlockStateRef, seed: number): BakedQuad[] {
     let variants = this.byRef.get(state);
     if (!variants) {
-      const key = stateKey(state);
+      const key = blockStateKey(state);
       variants = this.byKey.get(key);
       if (!variants) {
         variants = this.build(state);
