@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseArgs, parseEnv } from 'node:util';
 import { pathToFileURL } from 'node:url';
+import { canonicalPath, isWithinDirectory } from '../helpers/filesystem.mjs';
 import { loadServerConfig } from '../../packages/server/dist/src/configuration.js';
 import { createObjectStorage } from '../../packages/storage/dist/factory.js';
 import { ScopedStorage } from '../../packages/storage/dist/prefixed.js';
@@ -131,7 +132,7 @@ async function readObject(root, digest, bytes) {
   const target = path.join(root, 'objects', digest),
     canonical = await fs.realpath(target),
     base = await fs.realpath(root);
-  if (!canonical.startsWith(base + path.sep + 'objects' + path.sep) || !(await fs.lstat(target)).isFile())
+  if (!isWithinDirectory(path.join(base, 'objects'), canonical) || !(await fs.lstat(target)).isFile())
     throw new Error('backup objects must be regular files inside the snapshot');
   const data = await fs.readFile(target);
   if (data.length !== bytes || hash(data) !== digest) throw new Error('backup object checksum/size mismatch');
@@ -209,8 +210,8 @@ export async function backupContent({ configFile, output, env = process.env, qui
   for (const name of ['worlds', 'content', 'blobs']) {
     const definition = locations[bindings[name].backend];
     if (definition.driver === 'local') {
-      const source = path.resolve(definition.root, bindings[name].prefix);
-      if (root === source || root.startsWith(source + path.sep))
+      const source = await canonicalPath(path.resolve(definition.root, bindings[name].prefix));
+      if (isWithinDirectory(source, await canonicalPath(root)))
         throw new Error('backup directory must be outside all source mounts');
     }
   }

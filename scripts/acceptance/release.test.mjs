@@ -120,6 +120,13 @@ test('quiesced snapshot restores retained revisions/blobs and registrations acro
   const source = await service(one);
   const seeded = await seed(source);
   await source.close();
+  const alias = path.join(root, 'source-alias');
+  await fs.symlink(path.join(root, 'one'), alias, process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(
+    backupContent({ configFile: one, output: path.join(alias, 'content/nested/snapshot'), env, quiesced: true }),
+    /outside all source mounts/,
+  );
+  await assert.rejects(fs.stat(path.join(root, 'one/content/nested')), { code: 'ENOENT' });
   const snapshot = path.join(root, 'snapshot');
   await assert.rejects(backupContent({ configFile: one, output: snapshot, env }), /quiesced/);
   const backed = JSON.parse(
