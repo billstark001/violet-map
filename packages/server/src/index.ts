@@ -20,7 +20,11 @@ function shutdown() {
         await stopped;
       }
     } finally {
-      await services.close();
+      try {
+        await services.close();
+      } finally {
+        if (process.connected) process.disconnect?.();
+      }
     }
   })();
   void closing.catch((error) => {
@@ -32,6 +36,12 @@ function shutdown() {
 process.once('SIGINT', shutdown);
 
 process.once('SIGTERM', shutdown);
+
+if (process.send)
+  process.on('message', (message) => {
+    if (message && typeof message === 'object' && 'type' in message && message.type === 'violet-map:shutdown')
+      shutdown();
+  });
 
 try {
   const application = createApp(config, services);

@@ -26,8 +26,12 @@ const server = createServer(async (req, res) => {
     }
     const relative = pathname.slice(base.length) || 'index.html';
     const file = path.resolve(root, relative);
+    const within = path.relative(root, file);
     if (
-      !file.startsWith(root + path.sep) ||
+      !within ||
+      within === '..' ||
+      within.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(within) ||
       relative.split('/').includes('..') ||
       !['GET', 'HEAD'].includes(req.method)
     ) {
@@ -53,11 +57,16 @@ const server = createServer(async (req, res) => {
 });
 server.listen(port, '0.0.0.0', () => console.log(`Static Violet Map on :${server.address().port}${base}`));
 let closing = false;
-for (const signal of ['SIGINT', 'SIGTERM'])
-  process.once(signal, () => {
-    if (!closing) {
-      closing = true;
-      server.close();
-      server.closeIdleConnections();
-    }
+function shutdown() {
+  if (closing) return;
+  closing = true;
+  server.close(() => {
+    if (process.connected) process.disconnect();
+  });
+  server.closeIdleConnections();
+}
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, shutdown);
+if (process.send)
+  process.on('message', (message) => {
+    if (message?.type === 'violet-map:shutdown') shutdown();
   });
