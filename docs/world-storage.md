@@ -4,7 +4,7 @@ Resource delivery uses the coordinated 0.4 protocol. See [Unified resources](res
 
 [Back to README](../README.md)
 
-World names are single directory segments containing ASCII letters, numbers, dot, dash or underscore; `.` and `..` are rejected. This is shared by server operations, CLI world synchronization and overlay registrations so a world cannot normalize to the mount root. Creation validates level names and every dimension before any write; malformed JSON/metadata returns HTTP 400 without leaving a partial world.
+World names are single portable directory segments, including Unicode, spaces and URL characters such as `#` and `%`. HTTP callers encode the complete name as one URL component. Empty names, path separators, control characters, Windows-invalid filename characters, reserved device names and trailing dots/spaces are rejected; names are at most 255 UTF-16 code units. This is shared by server operations, CLI world synchronization and overlay registrations so a world cannot escape or alias its mount. Creation validates level names and every dimension before any write; malformed JSON/metadata returns HTTP 400 without leaving a partial world.
 
 S3 prefix deletion uses [bulk deletion](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html), which [R2 also supports](https://developers.cloudflare.com/r2/api/s3/api/). Each request contains at most 1000 keys and at most four requests run simultaneously; an HTTP 200 with per-key failures still rejects. Deletion is not transactional: completed keys remain deleted if another key/batch fails. Directory prefixes exclude same-name and sibling objects, including after normalization of `/` or `.` to the root.
 

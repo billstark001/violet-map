@@ -125,6 +125,23 @@ test('world HTTP mutations reject malformed input without partial worlds and pre
   });
   assert.equal(uploaded.status, 200);
   assert.deepEqual(await services.mounts.worlds.read('foo/test.bin'), new Uint8Array([42]));
+  for (const name of ['Ancient City Restoration', 'Surv#Vanilla', '世界', 'a%20b']) {
+    const created = await app.request('/api/admin/worlds', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ world: name }),
+    });
+    assert.equal(created.status, 200);
+    assert.ok((await services.worldStore!.listWorlds()).some((world) => world.id === name));
+    const uploaded = await app.request(`/api/admin/worlds/${encodeURIComponent(name)}/files/test.bin`, {
+      method: 'PUT',
+      headers,
+      body: new Uint8Array([7]),
+    });
+    assert.equal(uploaded.status, 200);
+    assert.deepEqual(await services.mounts.worlds.read(`${name}/test.bin`), new Uint8Array([7]));
+    assert.equal((await app.request(`/api/worlds/${encodeURIComponent(name)}/capabilities`)).status, 200);
+  }
 });
 
 test('world discovery skips malformed encoded directories and metadata while retaining valid nested dimensions', async (t) => {
