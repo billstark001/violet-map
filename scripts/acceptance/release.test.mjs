@@ -334,7 +334,7 @@ test(
       DATA_DIR: path.join(root, 'data'),
       WORLDS_DIR: worlds,
     };
-    const oldServer = await boot(old, legacyEnv, unrelated);
+    const oldServer = await boot(old, legacyEnv, unrelated, { legacySignals: true });
     try {
       const caps = await (await fetch(oldServer.url + '/api/capabilities')).json();
       assert.equal(caps.contentReads, undefined);

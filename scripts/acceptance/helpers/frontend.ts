@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { serve } from '@hono/node-server';
+import { stopProcess } from '../../helpers/process.mjs';
 
 export const project = fileURLToPath(new URL('../../../', import.meta.url));
 export const closeServer = (server: ReturnType<typeof serve>) =>
@@ -20,15 +21,15 @@ export async function startStaticSite(root: string, name: 'web' | 'admin', base:
   await fs.cp(path.join(project, 'packages', name, 'dist'), dist, { recursive: true });
   const child = spawn(process.execPath, [path.join(dist, 'serve.mjs'), '0', api], {
     env: { ...process.env, PORT: '0', STATIC_BASE_PATH: base, API_BASE_URL: undefined },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   let match: RegExpMatchArray;
   try {
     match = await waitForProcessOutput(child, /Static Violet Map on :(\d+)(?=\/|\s)/, 'static site');
   } catch (error) {
-    child.kill('SIGTERM');
+    await stopProcess(child);
     throw error;
   }
   const port = Number(match[1]);
-  return { url: `http://127.0.0.1:${port}${base}`, dist, child };
+  return { url: `http://127.0.0.1:${port}${base}`, dist, child, close: () => stopProcess(child) };
 }

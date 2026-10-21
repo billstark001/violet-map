@@ -1,17 +1,15 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { promisify } from 'node:util';
+import { execute } from '../helpers/process.mjs';
 import { createRequire } from 'node:module';
 
 const { decode } = createRequire(new URL('../../packages/resources/package.json', import.meta.url))('@msgpack/msgpack');
 
-const execute = promisify(execFile);
 const baselineRevision = 'da048f422e155861f153088e2a73ad4ac0d3fce2';
 const project = fileURLToPath(new URL('../../', import.meta.url));
 const requests = 500;

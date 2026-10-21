@@ -3,6 +3,8 @@ import net from 'node:net';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { isWithinDirectory } from '../helpers/filesystem.mjs';
 import { test } from 'node:test';
 
 import { execute, project, cleanEnv, boot } from './helpers/artifacts.mjs';
@@ -32,7 +34,7 @@ test('server production deployment is self-contained; public/sync/full and start
   async function checkLinks(dir) {
     for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
       const file = path.join(dir, entry.name);
-      if (entry.isSymbolicLink()) assert.ok((await fs.realpath(file)).startsWith(canonicalArtifact + path.sep), file);
+      if (entry.isSymbolicLink()) assert.ok(isWithinDirectory(canonicalArtifact, await fs.realpath(file)), file);
       else if (entry.isDirectory()) await checkLinks(file);
     }
   }
@@ -60,7 +62,7 @@ test('server production deployment is self-contained; public/sync/full and start
     [
       '--input-type=module',
       '-e',
-      `await Promise.all(['app','services','configuration','admin'].map(name => import(${JSON.stringify(artifact)} + '/dist/src/' + name + '.js')))`,
+      `await Promise.all(${JSON.stringify(['app', 'services', 'configuration', 'admin'].map((name) => pathToFileURL(path.join(artifact, 'dist/src', name + '.js')).href))}.map(url => import(url)))`,
     ],
     { cwd: work, env: { ...cleanEnv, VIOLET_MAP_CONFIG: '/missing/config.yaml' } },
   );

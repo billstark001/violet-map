@@ -1,18 +1,18 @@
+import { execute, stopProcess } from '../helpers/process.mjs';
+import { chromiumExecutablePath } from '../helpers/browser.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFile, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 import { chromium } from 'playwright';
 import { waitForProcessOutput } from './helpers/process-startup';
 import { OIT_MAX_PIXELS, OIT_BYTES_PER_PIXEL } from '../../packages/web/src/render/oitShaders';
 import type {} from '../../packages/web/test/transparency-browser';
 
 const project = fileURLToPath(new URL('../../', import.meta.url));
-const execute = promisify(execFile);
 
 function near(actual: number[], expected: number[], tolerance = 2) {
   assert.equal(actual.length, expected.length);
@@ -47,17 +47,13 @@ test(
     await fs.copyFile(path.join(project, 'scripts/serve-static.mjs'), path.join(root, 'serve.mjs'));
     const server = spawn(process.execPath, [path.join(root, 'serve.mjs'), '0', 'http://127.0.0.1:1/'], {
       env: { ...process.env, PORT: '0', STATIC_BASE_PATH: '/', API_BASE_URL: undefined },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
-    t.after(() => {
-      server.kill('SIGTERM');
-    });
+    t.after(() => stopProcess(server));
     const marker = await waitForProcessOutput(server, /Static Violet Map on :(\d+)(?=\/|\s)/, 'transparency fixture');
     const url = `http://127.0.0.1:${marker[1]}/test/transparency-browser.html`;
     const browser = await chromium.launch({
-      executablePath:
-        process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ??
-        (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined),
+      executablePath: chromiumExecutablePath(),
       headless: true,
       args: ['--enable-unsafe-swiftshader'],
     });

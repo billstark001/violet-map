@@ -1,3 +1,5 @@
+import { chromiumExecutablePath } from '../helpers/browser.mjs';
+import { stopProcess } from '../helpers/process.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
@@ -92,9 +94,7 @@ test(
       env: { ...process.env, FORCE_COLOR: '0' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    t.after(() => {
-      vite.kill('SIGTERM');
-    });
+    t.after(() => stopProcess(vite));
     stage = 'starting Vite';
     vite.stderr.on('data', (bytes) => diagnostics.push(String(bytes)));
     vite.stdout.on('data', (bytes) => diagnostics.push(String(bytes)));
@@ -102,9 +102,7 @@ test(
     stage = 'launching browser';
     const browser = await chromium.launch({
       timeout: 15_000,
-      executablePath:
-        process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ??
-        (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined),
+      executablePath: chromiumExecutablePath(),
       headless: true,
     });
     t.after(() => browser.close());
@@ -303,14 +301,10 @@ test(
       cwd: fileURLToPath(new URL('../../packages/web/', import.meta.url)),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    t.after(() => {
-      vite.kill('SIGTERM');
-    });
+    t.after(() => stopProcess(vite));
     const [origin] = await waitForProcessOutput(vite, /http:\/\/127\.0\.0\.1:\d+(?=\/|\s)/, 'Vite');
     const browser = await chromium.launch({
-      executablePath:
-        process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ??
-        (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined),
+      executablePath: chromiumExecutablePath(),
       headless: true,
     });
     t.after(() => browser.close());

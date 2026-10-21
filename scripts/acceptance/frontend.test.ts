@@ -1,3 +1,4 @@
+import { chromiumExecutablePath } from '../helpers/browser.mjs';
 import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -66,13 +67,10 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
     admin = await startStaticSite(root, 'admin', adminBase, apiBase);
   t.after(async () => {
     for (const site of [web, admin]) {
-      site.child.kill('SIGTERM');
-      await new Promise((resolve) => site.child.once('exit', resolve));
+      await site.close();
     }
   });
-  const chrome =
-    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ??
-    (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined);
+  const chrome = chromiumExecutablePath();
   const browser = await chromium.launch({
     executablePath: chrome,
     headless: true,

@@ -1,3 +1,5 @@
+import { execute, stopProcess } from '../helpers/process.mjs';
+import { chromiumExecutablePath } from '../helpers/browser.mjs';
 import { waitForProcessOutput } from './helpers/process-startup.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -5,8 +7,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { spawn, execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 import { serve } from '@hono/node-server';
 import { chromium } from 'playwright';
 import sharp from 'sharp';
@@ -14,8 +15,7 @@ import { createApp } from '../../packages/server/src/app.js';
 import { createServices } from '../../packages/server/src/services.js';
 import { loadServerConfig } from '../../packages/server/src/configuration.js';
 import type { OverlayHarness } from '../../packages/web/test/overlay-browser.js';
-const execute = promisify(execFile),
-  project = fileURLToPath(new URL('../../', import.meta.url));
+const project = fileURLToPath(new URL('../../', import.meta.url));
 function cubeGlb() {
   const vertices: number[] = [];
   const corners = [
@@ -333,17 +333,13 @@ test(
     await fs.copyFile(path.join(project, 'scripts/serve-static.mjs'), path.join(fixtureBuild, 'serve.mjs'));
     const fixture = spawn(process.execPath, [path.join(fixtureBuild, 'serve.mjs'), '0', apiBase], {
       env: { ...process.env, PORT: '0', STATIC_BASE_PATH: '/', API_BASE_URL: undefined },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
-    t.after(() => {
-      fixture.kill('SIGTERM');
-    });
+    t.after(() => stopProcess(fixture));
     const fixtureMarker = await waitForProcessOutput(fixture, /Static Violet Map on :(\d+)(?=\/|\s)/, 'built fixture');
     const fixtureUrl = `http://127.0.0.1:${fixtureMarker[1]}`;
     const browser = await chromium.launch({
-      executablePath:
-        process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ??
-        (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined),
+      executablePath: chromiumExecutablePath(),
       headless: true,
       args: ['--enable-unsafe-swiftshader'],
     });
@@ -712,11 +708,9 @@ test(
     await fs.copyFile(path.join(project, 'scripts/serve-static.mjs'), path.join(builtRoot, 'serve.mjs'));
     const built = spawn(process.execPath, [path.join(builtRoot, 'serve.mjs'), '0', apiBase], {
       env: { ...process.env, PORT: '0', STATIC_BASE_PATH: '/map/', API_BASE_URL: undefined },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
-    t.after(() => {
-      built.kill('SIGTERM');
-    });
+    t.after(() => stopProcess(built));
     const builtMarker = await waitForProcessOutput(built, /Static Violet Map on :(\d+)(?=\/|\s)/, 'built viewer');
     const builtUrl = `http://127.0.0.1:${builtMarker[1]}/map`;
     const builtHtml = await fs.readFile(path.join(builtRoot, 'index.html'), 'utf8');

@@ -1,3 +1,4 @@
+import { chromiumExecutablePath } from '../helpers/browser.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import fs from 'node:fs/promises';
@@ -53,13 +54,9 @@ test(
       ? '/console/'
       : '/';
     const site = await startStaticSite(root, 'admin', base, apiBase);
-    t.after(() => {
-      site.child.kill('SIGTERM');
-    });
+    t.after(() => site.close());
     const browser = await chromium.launch({
-      executablePath:
-        process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ??
-        (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined),
+      executablePath: chromiumExecutablePath(),
       headless: true,
     });
     t.after(() => browser.close());

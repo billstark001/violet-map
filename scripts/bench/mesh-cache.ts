@@ -1,3 +1,5 @@
+import { chromiumExecutablePath } from '../helpers/browser.mjs';
+import { stopProcess } from '../helpers/process.mjs';
 import { waitForProcessOutput } from '../acceptance/helpers/process-startup.js';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -16,9 +18,7 @@ const vite = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host',
 try {
   const [origin] = await waitForProcessOutput(vite, /http:\/\/127\.0\.0\.1:\d+(?=\/|\s)/, 'Vite');
   const browser = await chromium.launch({
-    executablePath:
-      process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ??
-      (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined),
+    executablePath: chromiumExecutablePath(),
     headless: true,
   });
   try {
@@ -86,5 +86,5 @@ try {
     await browser.close();
   }
 } finally {
-  vite.kill('SIGTERM');
+  await stopProcess(vite);
 }
