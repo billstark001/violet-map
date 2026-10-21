@@ -21,7 +21,7 @@
     "@violet-map/core": "workspace:*",
     "commander": "^15.0.0",
     "env-paths": "^4.0.0",
-    "minecraft-data": "^3.111.0",
+    "minecraft-data": "^3.117.0",
     "pngjs": "^7.0.0",
     "yauzl": "^3.4.0"
   },

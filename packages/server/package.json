@@ -52,7 +52,7 @@
     "fresh": "^0.5.2",
     "gltf-validator": "2.0.0-dev.3.10",
     "hono": "^4.12.27",
-    "minecraft-data": "^3.111.0",
+    "minecraft-data": "^3.117.0",
     "pako": "^3.0.0",
     "pg": "^8.22.0",
     "prismarine-nbt": "^2.8.0",
