@@ -316,6 +316,72 @@ const harness = {
     }
     return results;
   },
+  nestedOwnership() {
+    clear();
+    renderer.setSize(640, 480);
+    camera = orthographic;
+    orthographic.left = -4;
+    orthographic.right = 4;
+    orthographic.top = 3;
+    orthographic.bottom = -3;
+    camera.position.set(0, 0, 10);
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+    const parent = plane(0x0000ff, 1, 0);
+    const child = plane(0xff0000, 0.5, 1);
+    const light = new THREE.AmbientLight(0xffffff);
+    parent.add(light);
+    light.add(child);
+    const parentChildren = parent.children;
+    const lightChildren = light.children;
+    draw();
+    const center = pixel();
+    let failure = '';
+    parent.material.onBeforeRender = () => {
+      throw new Error('nested render failure');
+    };
+    try {
+      draw();
+    } catch (error) {
+      failure = String(error);
+    }
+    parent.material.onBeforeRender = () => {};
+    return {
+      center,
+      failure,
+      restored:
+        parent.parent === scene &&
+        light.parent === parent &&
+        child.parent === light &&
+        parent.children === parentChildren &&
+        light.children === lightChildren &&
+        camera.matrixWorldAutoUpdate,
+    };
+  },
+  async contextRecovery() {
+    clear();
+    renderer.setSize(640, 480);
+    plane(0x00ff00, 1, 0);
+    draw();
+    const before = pixel();
+    const extension = renderer.getContext().getExtension('WEBGL_lose_context');
+    if (!extension) throw new Error('context-loss injection is unavailable');
+    const lost = new Promise<void>((resolve) =>
+      renderer.domElement.addEventListener('webglcontextlost', () => resolve(), { once: true }),
+    );
+    extension.loseContext();
+    await lost;
+    draw();
+    const lostStatus = transparency.diagnosticSnapshot().contextLost;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const restored = new Promise<void>((resolve) =>
+      renderer.domElement.addEventListener('webglcontextrestored', () => resolve(), { once: true }),
+    );
+    extension.restoreContext();
+    await restored;
+    draw();
+    return { before, after: pixel(), lostStatus, restoredStatus: transparency.diagnosticSnapshot().contextLost };
+  },
   dispose() {
     clear();
     transparency.dispose();

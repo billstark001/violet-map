@@ -139,6 +139,14 @@ test(
       assert.ok(result.reference >= 60 && result.reference <= 70, JSON.stringify(result));
       assert.ok(Math.abs(result.reference - result.actual) <= 2, JSON.stringify(result));
     }
+    const nested = await page.evaluate(() => window.transparencyHarness.nestedOwnership());
+    near(nested.center, [128, 0, 128, 255]);
+    assert.match(nested.failure, /nested render failure/);
+    assert.equal(nested.restored, true);
+    const recovery = await page.evaluate(() => window.transparencyHarness.contextRecovery());
+    assert.equal(recovery.lostStatus, true);
+    assert.equal(recovery.restoredStatus, false);
+    near(recovery.after, recovery.before);
     const disposed = await page.evaluate(() => window.transparencyHarness.dispose());
     assert.equal(disposed.geometries, 0);
     // MeshStandardMaterial's renderer-owned BRDF LUT survives until renderer.dispose().
@@ -174,6 +182,8 @@ test(
           small,
           lifetimes,
           pointSize,
+          nested,
+          recovery,
           disposed,
           errors,
         },

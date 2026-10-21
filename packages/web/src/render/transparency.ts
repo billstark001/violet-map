@@ -14,7 +14,19 @@ type Drawable = THREE.Object3D & { material: THREE.Material | THREE.Material[] }
 
 type MaterialSet = { version: number; phases: Map<OitPhase, THREE.Material>; release: () => void };
 
-type DrawEntry = { object: Drawable; source: THREE.Material | THREE.Material[]; materials: THREE.Material[] };
+type Phase = OitPhase | 'foreground';
+
+type DrawEntry = {
+  object: Drawable;
+  source: THREE.Material | THREE.Material[];
+  materials: THREE.Material[];
+  states: number[];
+  background: boolean;
+  phases: Partial<Record<Phase, THREE.Material | THREE.Material[]>>;
+  groupOrder: number;
+};
+
+type DrawView = { scene: THREE.Scene; groups: Map<number, THREE.Group>; entries: DrawEntry[] };
 
 export interface TransparencyDiagnosticSnapshot {
   algorithm: 'depth-binned';
@@ -24,6 +36,7 @@ export interface TransparencyDiagnosticSnapshot {
   bufferBytes: number;
   materials: number;
   transparentDraws: number;
+  contextLost: boolean;
 }
 
 function isDrawable(object: THREE.Object3D): object is Drawable {
@@ -55,6 +68,19 @@ export class TransparencyRenderer {
   private readonly screenGeometry: THREE.BufferGeometry;
   private readonly hidden = new THREE.Material();
   private readonly variants = new Map<THREE.Material, MaterialSet>();
+  private readonly draws = new WeakMap<Drawable, DrawEntry>();
+  private readonly views: DrawView[] = Array.from({ length: 3 }, () => {
+    const scene = new THREE.Scene();
+    scene.matrixWorldAutoUpdate = false;
+    return { scene, groups: new Map(), entries: [] };
+  });
+  private needsValidation = true;
+  private readonly restored = () => {
+    this.needsValidation = true;
+    for (const target of [this.base, this.bounds, this.bins, this.color]) target.dispose();
+    for (const set of this.variants.values()) for (const material of set.phases.values()) material.needsUpdate = true;
+    this.composite.needsUpdate = true;
+  };
   private readonly inverseProjection = { value: new THREE.Matrix4() };
   private readonly size = new THREE.Vector2();
   private transparentDraws = 0;
@@ -120,6 +146,49 @@ export class TransparencyRenderer {
     } finally {
       renderer.setRenderTarget(target);
     }
+    renderer.domElement.addEventListener('webglcontextrestored', this.restored);
+  }
+
+  private drawEntry(object: Drawable, groupOrder: number): DrawEntry {
+    const source = object.material;
+    const materials = Array.isArray(source) ? source : [source];
+    const state = (m: THREE.Material) =>
+      m.version * 8 + Number(m.visible) * 4 + Number(m.transparent) * 2 + Number(m.depthTest);
+    let entry = this.draws.get(object);
+    if (
+      !entry ||
+      entry.source !== source ||
+      entry.background !== !!object.userData.oitBackground ||
+      entry.materials.length !== materials.length ||
+      materials.some((m, i) => m !== entry!.materials[i] || state(m) !== entry!.states[i])
+    ) {
+      entry = {
+        object,
+        source,
+        materials: [...materials],
+        states: materials.map(state),
+        background: !!object.userData.oitBackground,
+        phases: {},
+        groupOrder,
+      };
+      for (const phase of ['base', 'bounds', 'bins', 'color', 'foreground'] as const) {
+        let visible = false;
+        const selected = materials.map((material) => {
+          const kind = category(object, material);
+          if (
+            !material.visible ||
+            (phase === 'foreground' ? kind !== 'foreground' : phase === 'base' ? kind !== 'base' : kind !== 'world')
+          )
+            return this.hidden;
+          visible = true;
+          return phase === 'foreground' ? material : this.variant(material, phase);
+        });
+        if (visible) entry.phases[phase] = Array.isArray(source) ? selected : selected[0];
+      }
+      this.draws.set(object, entry);
+    }
+    entry.groupOrder = groupOrder;
+    return entry;
   }
 
   private variant(source: THREE.Material, phase: OitPhase): THREE.Material {
@@ -206,40 +275,77 @@ export class TransparencyRenderer {
     const [width, height] = oitBufferSize(this.size.x, this.size.y);
     this.inverseProjection.value.copy(camera.projectionMatrixInverse);
     const entries: DrawEntry[] = [];
+    const lights: THREE.Object3D[] = [];
     this.transparentDraws = 0;
-    scene.traverseVisible((object) => {
-      if (!isDrawable(object)) return;
-      const source = object.material;
-      const materials = Array.isArray(source) ? source : [source];
-      entries.push({ object, source, materials });
-      this.transparentDraws += materials.filter(
-        (material) => material.visible && category(object, material) === 'world',
-      ).length;
-    });
+    // Update the owning scene once. Passes below are non-owning, filtered views
+    // of its drawables: parents, callbacks, geometry and world matrices stay
+    // on their original objects, including nested GLB/line/point renderers.
+    scene.updateMatrixWorld();
+    camera.updateMatrixWorld();
+    const visit = (object: THREE.Object3D, groupOrder: number) => {
+      if (!object.visible) return;
+      const order = object instanceof THREE.Group ? object.renderOrder : groupOrder;
+      if (isDrawable(object)) {
+        const entry = this.drawEntry(object, order);
+        entries.push(entry);
+        for (const material of entry.materials)
+          if (material.visible && category(object, material) === 'world') this.transparentDraws++;
+      } else if (object instanceof THREE.Light) lights.push(object);
+      for (const child of object.children) visit(child, order);
+    };
+    visit(scene, 0);
+    const children = new Map<THREE.Object3D, THREE.Object3D[]>();
+    for (const object of [...entries.map((entry) => entry.object), ...lights])
+      if (object.children.length) {
+        children.set(object, object.children);
+        object.children = [];
+      }
     const target = renderer.getRenderTarget();
     const autoClear = renderer.autoClear;
     const autoReset = renderer.info.autoReset;
-    const background = scene.background;
+    const cameraAutoUpdate = camera.matrixWorldAutoUpdate;
+    camera.matrixWorldAutoUpdate = false;
     const clearColor = renderer.getClearColor(new THREE.Color());
     const clearAlpha = renderer.getClearAlpha();
     const gl = renderer.getContext() as WebGL2RenderingContext;
-    const select = (phase: OitPhase | 'foreground') => {
+    const phases = ['base', 'bounds', 'foreground'] as const;
+    this.views.forEach((view, index) => {
+      view.entries.length = 0;
+      view.scene.children = [...lights];
+      view.scene.background = index === 0 ? scene.background : null;
+      view.scene.backgroundIntensity = scene.backgroundIntensity;
+      view.scene.backgroundBlurriness = scene.backgroundBlurriness;
+      view.scene.backgroundRotation.copy(scene.backgroundRotation);
+      view.scene.environment = scene.environment;
+      view.scene.environmentIntensity = scene.environmentIntensity;
+      view.scene.environmentRotation.copy(scene.environmentRotation);
+      view.scene.fog = scene.fog;
+      view.scene.overrideMaterial = scene.overrideMaterial;
+      for (const group of view.groups.values()) group.children = [];
       for (const entry of entries) {
-        const materials = entry.materials.map((source) => {
-          if (!source.visible) return this.hidden;
-          const kind = category(entry.object, source);
-          if (phase === 'foreground') return kind === 'foreground' ? source : this.hidden;
-          if ((phase === 'base' && kind !== 'base') || (phase !== 'base' && kind !== 'world')) return this.hidden;
-          return this.variant(source, phase);
-        });
-        entry.object.material = Array.isArray(entry.source) ? materials : materials[0];
+        if (!entry.phases[phases[index]]) continue;
+        view.entries.push(entry);
+        let group = view.groups.get(entry.groupOrder);
+        if (!group) {
+          group = new THREE.Group();
+          group.renderOrder = entry.groupOrder;
+          view.groups.set(entry.groupOrder, group);
+        }
+        if (!group.children.length) view.scene.children.push(group);
+        group.children.push(entry.object);
       }
+      for (const [order, group] of view.groups) if (!group.children.length) view.groups.delete(order);
+    });
+    const renderPass = (index: number, phase: Phase) => {
+      const view = this.views[index];
+      for (const entry of view.entries) entry.object.material = entry.phases[phase]!;
+      renderer.render(view.scene, camera);
     };
     renderer.autoClear = false;
     if (autoReset) renderer.info.reset();
     renderer.info.autoReset = false;
     try {
-      if (this.base.width !== width || this.base.height !== height) {
+      if (this.needsValidation || this.base.width !== width || this.base.height !== height) {
         for (const buffer of [this.base, this.bounds, this.bins, this.color]) {
           buffer.setSize(width, height);
           renderer.setRenderTarget(buffer);
@@ -248,39 +354,40 @@ export class TransparencyRenderer {
           }
         }
       }
-      select('base');
+      this.needsValidation = false;
       renderer.setRenderTarget(this.base);
       renderer.clear(true, true, false);
-      renderer.render(scene, camera);
-      scene.background = null;
+      renderPass(0, 'base');
       renderer.setRenderTarget(this.bounds);
       renderer.state.buffers.color.setMask(true);
       gl.clearBufferfv(gl.COLOR, 0, this.clearBounds);
       if (this.transparentDraws) {
-        select('bounds');
-        renderer.render(scene, camera);
+        renderPass(1, 'bounds');
       }
       renderer.setRenderTarget(this.bins);
       renderer.state.buffers.color.setMask(true);
       for (let i = 0; i < OIT_ATTACHMENT_COUNT; i++) gl.clearBufferfv(gl.COLOR, i, this.clearZero);
       if (this.transparentDraws) {
-        select('bins');
-        renderer.render(scene, camera);
+        renderPass(1, 'bins');
       }
       renderer.setRenderTarget(this.color);
       renderer.state.buffers.color.setMask(true);
       gl.clearBufferfv(gl.COLOR, 0, this.clearZero);
       if (this.transparentDraws) {
-        select('color');
-        renderer.render(scene, camera);
+        renderPass(1, 'color');
       }
       renderer.setRenderTarget(target);
       renderer.render(this.screen, this.screenCamera);
-      select('foreground');
-      renderer.render(scene, camera);
+      if (this.views[2].entries.length) renderPass(2, 'foreground');
     } finally {
       for (const entry of entries) entry.object.material = entry.source;
-      scene.background = background;
+      for (const [object, original] of children) object.children = original;
+      camera.matrixWorldAutoUpdate = cameraAutoUpdate;
+      for (const view of this.views) {
+        view.scene.children = [];
+        view.entries.length = 0;
+        for (const group of view.groups.values()) group.children = [];
+      }
       renderer.autoClear = autoClear;
       renderer.info.autoReset = autoReset;
       renderer.setClearColor(clearColor, clearAlpha);
@@ -297,12 +404,14 @@ export class TransparencyRenderer {
       bufferBytes: this.base.width * this.base.height * OIT_BYTES_PER_PIXEL,
       materials: this.variants.size,
       transparentDraws: this.transparentDraws,
+      contextLost: this.renderer.getContext().isContextLost(),
     };
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.renderer.domElement.removeEventListener('webglcontextrestored', this.restored);
     for (const set of this.variants.values()) set.release();
     for (const target of [this.base, this.bounds, this.bins, this.color]) target.dispose();
     this.composite.dispose();

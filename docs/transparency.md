@@ -19,6 +19,8 @@ Built-in material output encoding and the custom terrain output convention are r
 
 Variants share original shader uniforms, animation textures and per-object callbacks. Source disposal releases variants; material version changes rebuild them. Temporary material substitutions, background, target, clear state and renderer-info settings are restored on exceptions. Render errors stop the animation loop and reach the viewer error display. Disposal releases all targets and variants.
 
+The owning scene updates world matrices once per frame. Opaque, transparent and foreground passes traverse filtered, non-owning views of its drawables, retaining original parents, nested world transforms, group ordering and lights. Material selection is cached until the source material or its rendering flags change. Empty transparent and foreground passes are skipped. WebGL context restoration invalidates framebuffers and shader programs before rendering resumes.
+
 This is approximate OIT: nearby surfaces within finite depth bins can mix colors, and half-float sums can vary slightly with submission order. Attachment memory is independent of layer count, but transparent overdraw still costs time. Opaque LOD and offline top-map representations retain their existing limitations.
 
 ## Requirements and memory
@@ -33,7 +35,7 @@ WebGL2 must expose `EXT_color_buffer_float`, `EXT_float_blend` and four draw buf
 | Weighted color/alpha                       | RGBA16F                        |           8 |
 | Total                                      |                                |          64 |
 
-Targets retain aspect ratio and are capped at 3,145,728 pixels: 192 MiB before driver overhead. Larger canvases receive an upscaled composite; depth-disabled annotations draw at destination resolution. At 960×720 the targets use 44,236,800 bytes (42.19 MiB). Meshes, assets, masks, the canvas and renderer lookup textures are additional allocations.
+Targets retain aspect ratio and are capped at 1,572,864 pixels: 96 MiB before driver overhead. Larger canvases receive an upscaled composite; depth-disabled annotations draw at destination resolution. At 960×720 the targets use 44,236,800 bytes (42.19 MiB). Meshes, assets, masks, the canvas and renderer lookup textures are additional allocations.
 
 ## Rendering acceptance
 
@@ -51,5 +53,6 @@ The suite verifies:
 - High-resolution allocation obeys the pixel/byte limit, shrinking releases the larger allocation, and repeated world load/unload cycles return to the same baseline. Renderer-owned lookup textures are accounted separately from pipeline ownership.
 - Background point sprites retain their screen size when the scene target is downscaled, with or without perspective size attenuation.
 - Missing float-blend support reports an explicit capability error without starting another rendering path.
+- Nested drawables and lights keep their ownership and world transforms, including when a callback throws. Actual context loss and restoration reproduce the pre-loss pixels and release all pipeline allocations on disposal.
 
 Inspect the generated perspective and orthographic PNGs for missing surfaces, overlap colors and seams at chunk boundaries. The JSON records browser/GPU identity, pixel differences, allocation estimates, lifecycle counts and CPU submission timings. Record hardware, viewport and DPR when comparing reports. CPU submission time is not GPU time or FPS; this small world validates correctness and ownership rather than large-world throughput.
