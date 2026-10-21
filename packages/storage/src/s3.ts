@@ -14,7 +14,7 @@ import type { ObjectStorage, StoredFileInfo } from '@violet-map/core/storage';
 import type { S3StorageOptions } from '@violet-map/storage/types';
 import type { ObjectHttpMetadata } from './capabilities.js';
 import { cleanStoragePath } from './paths.js';
-import { validateReadRange } from './range.js';
+import { validateReadRange, readStreamRange } from './range.js';
 
 const DELETE_BATCH_SIZE = 1000;
 const DELETE_BATCH_CONCURRENCY = 4;
@@ -98,21 +98,7 @@ export class S3Storage implements ObjectStorage {
       const stream = result.Body as AsyncIterable<Uint8Array>;
       if (typeof stream[Symbol.asyncIterator] !== 'function')
         throw new Error('S3 Node body is not a readable byte stream');
-      const skip = result.$metadata.httpStatusCode === 200 ? start : 0;
-      const output = new Uint8Array(length);
-      let offset = 0,
-        written = 0;
-      for await (const piece of stream) {
-        const from = Math.min(piece.length, Math.max(0, skip - offset));
-        offset += piece.length;
-        const take = Math.min(piece.length - from, length - written);
-        if (take > 0) {
-          output.set(piece.subarray(from, from + take), written);
-          written += take;
-        }
-        if (written === length) break;
-      }
-      return written === length ? output : output.slice(0, written);
+      return await readStreamRange(stream, result.$metadata.httpStatusCode === 200 ? start : 0, length);
     } catch (error) {
       const failure = error as { name?: string; $metadata?: { httpStatusCode?: number } };
       if (failure.name === 'InvalidRange' || failure.$metadata?.httpStatusCode === 416)

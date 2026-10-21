@@ -8,8 +8,32 @@ import { ScopedStorage } from '../src/prefixed.js';
 import { CachedStorage } from '../src/cached.js';
 import { S3Storage } from '../src/s3.js';
 import { copyObjects, compareObjectContent } from '../src/copy.js';
+import { requireStorageCapabilities } from '../src/capabilities.js';
 
 const bytes = (s: string) => new TextEncoder().encode(s);
+
+test('nested storage decorators expose exactly the optional capabilities supplied by their backend', async () => {
+  const reader = { kind: 'server' } as import('@violet-map/core/storage').ObjectStorage;
+  const nested = new CachedStorage(new ScopedStorage(reader, 'scope'));
+  for (const method of ['replace', 'create', 'readDocument', 'compareExchange', 'scan'] as const) {
+    assert.equal(nested[method], undefined);
+    assert.throws(() => requireStorageCapabilities(nested, method), /does not support/);
+  }
+  let path = '';
+  const backend = {
+    ...reader,
+    create: async (key: string) => {
+      path = key;
+      return true;
+    },
+  };
+  const writable = new CachedStorage(new ScopedStorage(backend, 'scope'));
+  const selected = requireStorageCapabilities(writable, 'create');
+  assert.equal(await selected.create('object', new Uint8Array(), { contentType: 'image/png' }), true);
+  assert.equal(path, 'scope/object');
+  assert.equal(writable.metrics.put, 1);
+  assert.equal(writable.replace, undefined);
+});
 
 test('scopes, descendant prefixes, atomic replacement and copy share the object contract', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-objects-'));

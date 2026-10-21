@@ -1,3 +1,4 @@
+import { requireStorageCapabilities } from '@violet-map/storage';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { bearer } from '../auth.js';
 import type { RouteContext } from './context.js';
@@ -42,7 +43,7 @@ export function mountDiagnostics(context: RouteContext) {
       const id = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`;
       const document = JSON.stringify({ receivedAt: new Date().toISOString(), payload }, null, 2);
       if (context.mounts.blobs)
-        await context.mounts.blobs.replace(
+        await requireStorageCapabilities(context.mounts.blobs, 'replace').replace(
           `diagnostics/${id}.json`,
           new TextEncoder().encode(document),
           'application/json',

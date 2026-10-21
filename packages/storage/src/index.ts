@@ -7,3 +7,4 @@ export * from './prefixed.js';
 export * from './publicUrl.js';
 export * from './range.js';
 export * from './sync.js';
+export * from './publicArtifact.js';

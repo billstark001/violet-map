@@ -159,7 +159,10 @@ test('remote range reads slice ignored 200 responses and retain only requested b
   let partial = false;
   t.mock.method(globalThis, 'fetch', async (_input, init) => {
     assert.equal(new Headers(init?.headers).get('range'), 'bytes=3-4');
-    return new Response(new Uint8Array(partial ? [3, 4] : [0, 1, 2, 3, 4, 5, 6, 7]), { status: partial ? 206 : 200 });
+    return new Response(new Uint8Array(partial ? [3, 4] : [0, 1, 2, 3, 4, 5, 6, 7]), {
+      status: partial ? 206 : 200,
+      headers: partial ? { 'content-range': 'bytes 3-4/8' } : {},
+    });
   });
   const storage = new ServerWorldStorage({ url: 'https://example.test', token: 'test' });
   for (partial of [false, true]) {

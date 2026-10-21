@@ -69,10 +69,12 @@ test('explicit HTTP CAS batches missing objects, conditionally commits MIME-isol
     }
     let bytes = object.bytes;
     res.setHeader('content-type', object.mediaType);
+    res.setHeader('cache-control', 'public, max-age=31536000, immutable');
     if (req.headers.range) {
       const [, start, end] = /bytes=(\d+)-(\d+)/.exec(req.headers.range)!;
       bytes = bytes.subarray(Number(start), Math.min(bytes.length, Number(end) + 1));
       res.statusCode = 206;
+      res.setHeader('content-range', `bytes ${start}-${Number(start) + bytes.length - 1}/${object.bytes.length}`);
     }
     res.setHeader('content-length', bytes.length);
     res.end(req.method === 'HEAD' ? undefined : bytes);
@@ -91,7 +93,7 @@ test('explicit HTTP CAS batches missing objects, conditionally commits MIME-isol
   const binary = artifactRef(bytes, 'application/octet-stream', 'raw-v1');
   const publisher = new StaticHttpPublisher(url, url, 'private-fixture-token');
   assert.deepEqual(
-    await publisher.missing([image, binary]),
+    await publisher.missing([image, binary].map(representationKey)),
     new Set([representationKey(image), representationKey(binary)]),
   );
   assert.equal(await publisher.ensure(image, bytes), true);
@@ -102,16 +104,20 @@ test('explicit HTTP CAS batches missing objects, conditionally commits MIME-isol
   assert.deepEqual(await reader.readRange(publicObjectKey(image), 1, 2), new Uint8Array([2, 3]));
   assert.equal((await reader.stat(publicObjectKey(image)))!.size, 4);
   assert.ok(publicHeaders.every((value) => value === undefined));
-  await assert.rejects(
-    reader.create(publicObjectKey(image), bytes, { contentType: 'image/png', digest: image.digest }),
-    /not configured/,
-  );
+  assert.equal(reader.create, undefined);
+  assert.equal(reader.scan, undefined);
   const writer = new HttpCasStorage(url, { url, token: 'private-fixture-token' });
   const extra = artifactRef(bytes, 'application/json', 'json-v1');
   assert.equal(await new ContentAddressedStorage(writer, writer).ensure(extra, bytes, publicObjectKey(extra)), true);
   assert.equal(publicMisses, 0);
   await writer.delete(publicObjectKey(extra));
-  assert.equal((await writer.list('objects')).length, 2);
+  const paths = [image, binary].map(publicObjectKey).sort((a, b) => a.localeCompare(b));
+  for (const prefix of ['objects', '/objects/', './objects'])
+    assert.deepEqual(
+      (await writer.list(prefix)).map((item) => item.path),
+      paths,
+    );
+  assert.equal((await writer.stat('./' + publicObjectKey(image)))!.path, publicObjectKey(image));
   await writer.delete(publicObjectKey(binary));
   assert.equal(await reader.stat(publicObjectKey(binary)), null);
 });

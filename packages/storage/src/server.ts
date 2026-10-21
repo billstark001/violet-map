@@ -1,6 +1,6 @@
 import { normalizeApiBaseUrl, apiUrl } from '@violet-map/core/contracts';
 import { cleanStoragePath } from './paths.js';
-import { validateReadRange } from './range.js';
+import { validateReadRange, readHttpRange } from './range.js';
 import { storageRequest } from './http.js';
 import { nonSharedByteView } from '@violet-map/core/http';
 import { forEachConcurrent } from '@violet-map/core/async';
@@ -28,10 +28,12 @@ export class ServerWorldStorage implements ObjectStorage {
     return { ...extra, authorization: `Bearer ${this.token}` };
   }
   private async required(response: Response): Promise<Response> {
-    if (!response.ok)
+    if (!response.ok) {
+      await response.body?.cancel();
       throw new Error(
         `remote storage request failed: HTTP ${response.status}${response.status === 401 ? ' (sign in again or replace the credential)' : response.status === 403 ? ' (authenticated user lacks permission)' : ''}`,
       );
+    }
     return response;
   }
 
@@ -39,7 +41,10 @@ export class ServerWorldStorage implements ObjectStorage {
     const response = await storageRequest(this.url(`files/${encodeURIComponent(cleanStoragePath(filePath))}`), {
       headers: this.headers(),
     });
-    if (response.status === 404) return null;
+    if (response.status === 404) {
+      await response.body?.cancel();
+      return null;
+    }
     return new Uint8Array(await (await this.required(response)).arrayBuffer());
   }
   async readRange(filePath: string, start: number, length: number): Promise<Uint8Array | null> {
@@ -48,13 +53,15 @@ export class ServerWorldStorage implements ObjectStorage {
     const response = await storageRequest(this.url(`files/${encodeURIComponent(cleanStoragePath(filePath))}`), {
       headers: this.headers({ range: `bytes=${start}-${start + length - 1}` }),
     });
-    if (response.status === 404) return null;
-    if (response.status === 416) return (await this.stat(filePath)) ? new Uint8Array() : null;
-    const bytes = new Uint8Array(await (await this.required(response)).arrayBuffer());
-    // HTTP permits a server/proxy to ignore Range and return the complete 200
-    // representation. Preserve ObjectReader's slice/ownership contract in that case.
-    if (response.status === 200) return bytes.slice(start, start + length);
-    return bytes.length > length ? bytes.slice(0, length) : bytes;
+    if (response.status === 404) {
+      await response.body?.cancel();
+      return null;
+    }
+    if (response.status === 416) {
+      await response.body?.cancel();
+      return (await this.stat(filePath)) ? new Uint8Array() : null;
+    }
+    return readHttpRange(await this.required(response), start, length);
   }
   async write(filePath: string, bytes: Uint8Array, contentType = 'application/octet-stream'): Promise<void> {
     await this.required(
@@ -82,7 +89,10 @@ export class ServerWorldStorage implements ObjectStorage {
     const response = await storageRequest(this.url(`stat/${encodeURIComponent(cleanStoragePath(filePath))}`), {
       headers: this.headers(),
     });
-    if (response.status === 404) return null;
+    if (response.status === 404) {
+      await response.body?.cancel();
+      return null;
+    }
     return (await (await this.required(response)).json()) as StoredFileInfo;
   }
   async list(prefix = ''): Promise<StoredFileInfo[]> {

@@ -13,20 +13,14 @@ import {
   type PublicationManifest,
   type RegionResourcePage,
 } from '@violet-map/core/resources';
-import type { AtomicObjectStorage, ObjectReader } from '@violet-map/core/storage';
+import type { ObjectReader } from '@violet-map/core/storage';
 import {
   artifactRef,
   ContentAddressedStorage,
   type ConditionalDocumentStore,
-  type ConditionalObjectWriter,
-  type ObjectScanner,
+  type TransactionalObjectStorage,
 } from '@violet-map/storage';
 import { randomUUID } from 'node:crypto';
-
-export type PublicationStorage = AtomicObjectStorage &
-  ConditionalDocumentStore &
-  ConditionalObjectWriter &
-  ObjectScanner;
 
 const json = (value: unknown) => new TextEncoder().encode(canonicalJson(value));
 
@@ -166,7 +160,7 @@ export class PublicationStore {
   readonly metrics = { controlPut: 0, objectPut: 0, uploadedBytes: 0, cleanupFailed: 0 };
   constructor(
     private readonly reader: ObjectReader & Pick<ConditionalDocumentStore, 'readDocument'>,
-    private readonly writer?: PublicationStorage,
+    private readonly writer?: TransactionalObjectStorage,
     readonly maxDocumentBytes = 8 * 1024 ** 2,
     readWork = new ByteBudget(128 * 1024 ** 2),
     private readonly retainedMs = 604800000,

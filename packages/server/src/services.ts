@@ -1,5 +1,4 @@
 import { canonicalJson } from '@violet-map/core/resources';
-import type { PublicationStorage } from '@violet-map/resources';
 import {
   BlobRepository,
   ByteBudget,
@@ -11,7 +10,13 @@ import {
   PublicTarget,
   ResourceEngine,
 } from '@violet-map/resources';
-import { ContentAddressedStorage, publicObjectKey, ScopedStorage, sha256 } from '@violet-map/storage';
+import {
+  ContentAddressedStorage,
+  publicObjectKey,
+  ScopedStorage,
+  sha256,
+  requireStorageCapabilities,
+} from '@violet-map/storage';
 import { createAuthorization, type Authentication } from './auth.js';
 import { createAuthentication } from './authentication.js';
 import type { ServerConfig } from './configuration.js';
@@ -35,8 +40,17 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
   const workBudget = new ByteBudget(config.resources.work.memoryBytes);
   const store = mounts.publicationStore
     ? new PublicationStore(
-        mounts.publicationStore,
-        publisher ? (mounts.publicationStore as PublicationStorage) : undefined,
+        requireStorageCapabilities(mounts.publicationStore, 'readDocument'),
+        publisher
+          ? requireStorageCapabilities(
+              mounts.publicationStore,
+              'replace',
+              'create',
+              'readDocument',
+              'compareExchange',
+              'scan',
+            )
+          : undefined,
         Math.floor(config.resources.cache.metadataBytes / 4),
         workBudget,
         config.resources.publication.retainedMs,
@@ -46,7 +60,7 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
     mounts.resourceTarget && store
       ? new PublicTarget(
           mounts.resourceTarget,
-          publisher ? (mounts.resourceTarget as PublicationStorage) : undefined,
+          publisher ? requireStorageCapabilities(mounts.resourceTarget, 'create', 'scan') : undefined,
           config.resources.delivery.publicBaseUrl!,
           store,
           config.server.cors.origins,
@@ -80,7 +94,14 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
       }
       if (needsDynamic && mounts.sharedCache) {
         const layer = new PersistentResourceCache(
-          mounts.sharedCache as PublicationStorage,
+          requireStorageCapabilities(
+            mounts.sharedCache,
+            'replace',
+            'create',
+            'readDocument',
+            'compareExchange',
+            'scan',
+          ),
           config.resources.cache.sharedBytes,
           Math.floor(config.resources.cache.metadataBytes / 8192),
           config.resources.cache.writeBytes,
@@ -113,8 +134,12 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
     }
     const content: ContentService | undefined =
       mounts.content && mounts.blobs && storage && repository
-        ? new ContentService(mounts.content, mounts.blobs, storage, repository, (operation) =>
-            resources.mutateSource(operation, 'content'),
+        ? new ContentService(
+            requireStorageCapabilities(mounts.content, 'replace'),
+            requireStorageCapabilities(mounts.blobs, 'replace', 'create'),
+            storage,
+            repository,
+            (operation) => resources.mutateSource(operation, 'content'),
           )
         : undefined;
     // Original-source caches do not retain a second copy of derived working sets.
@@ -128,7 +153,9 @@ export async function createServices(config: ServerConfig, factories: ServiceFac
     const gameData = assets
       ? (await import('./gameData.js')).createGameDataService(
           config,
-          mounts.blobs ? new ScopedStorage(mounts.blobs, 'server-data') : undefined,
+          mounts.blobs
+            ? requireStorageCapabilities(new ScopedStorage(mounts.blobs, 'server-data'), 'replace')
+            : undefined,
         )
       : undefined;
     const topMap =

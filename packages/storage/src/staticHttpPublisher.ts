@@ -1,6 +1,7 @@
 import { nonSharedByteView, readLimitedBody } from '@violet-map/core/http';
-import { parseArtifactRef, ResourceError, type ArtifactRef } from '@violet-map/core/resources';
+import { ResourceError, type ArtifactRef } from '@violet-map/core/resources';
 import { publicObjectKey, representationKey, verifyArtifact } from './contentAddressed.js';
+import { verifyPublicArtifact } from './publicArtifact.js';
 import { createPublicObjectUrl } from './publicUrl.js';
 
 /** Explicit HTTP CAS upload protocol, independent of all object SDKs and bucket names. */
@@ -17,11 +18,7 @@ export class StaticHttpPublisher {
     this.publicUrl = createPublicObjectUrl(publicBaseUrl);
     if (!token || /[\r\n]/.test(token)) throw new TypeError('HTTP CAS requires an upload credential');
   }
-  async missing(refs: readonly ArtifactRef[]): Promise<Set<string>> {
-    return this.missingObjects(refs.map((ref) => representationKey(parseArtifactRef(ref))));
-  }
-  /** Object adapters know representation keys before they have a typed reference. */
-  async missingObjects(keys: readonly string[]): Promise<Set<string>> {
+  async missing(keys: readonly string[]): Promise<Set<string>> {
     if (keys.length > 256 || keys.some((key) => !/^[a-f0-9]{64}$/.test(key)))
       throw new RangeError('invalid HTTP CAS missing batch');
     const response = await fetch(this.endpoint('v1/missing'), {
@@ -32,7 +29,10 @@ export class StaticHttpPublisher {
       redirect: 'error',
       signal: AbortSignal.timeout(this.timeoutMs),
     });
-    if (!response.ok) throw new ResourceError('RESOURCE_BACKEND_UNAVAILABLE', 'HTTP CAS missing query failed', true);
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new ResourceError('RESOURCE_BACKEND_UNAVAILABLE', 'HTTP CAS missing query failed', true);
+    }
     const bytes = await readLimitedBody(response, 64 * 1024);
     if (!bytes) throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'HTTP CAS response exceeds limits');
     const value = JSON.parse(new TextDecoder().decode(bytes));
@@ -48,7 +48,7 @@ export class StaticHttpPublisher {
   }
   async ensure(ref: ArtifactRef, bytes: Uint8Array): Promise<boolean> {
     verifyArtifact(ref, bytes);
-    if (!(await this.missing([ref])).has(representationKey(ref))) return false;
+    if (!(await this.missing([representationKey(ref)])).has(representationKey(ref))) return false;
     const response = await fetch(this.endpoint(`v1/objects/${representationKey(ref)}`), {
       method: 'PUT',
       headers: {
@@ -63,27 +63,18 @@ export class StaticHttpPublisher {
       redirect: 'error',
       signal: AbortSignal.timeout(this.timeoutMs),
     });
+    await response.body?.cancel();
     if (response.status === 412) {
-      await this.verify(ref);
+      await verifyPublicArtifact(ref, this.publicUrl(publicObjectKey(ref)), {
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
       return false;
     }
     if (response.status !== 201 && response.status !== 204)
       throw new ResourceError('RESOURCE_BACKEND_UNAVAILABLE', 'HTTP CAS atomic upload failed', true);
-    await response.body?.cancel();
-    await this.verify(ref);
-    return true;
-  }
-  async verify(ref: ArtifactRef): Promise<void> {
-    const response = await fetch(this.publicUrl(publicObjectKey(ref)), {
-      method: 'GET',
-      credentials: 'omit',
-      redirect: 'error',
+    await verifyPublicArtifact(ref, this.publicUrl(publicObjectKey(ref)), {
       signal: AbortSignal.timeout(this.timeoutMs),
     });
-    if (!response.ok || response.headers.get('content-type')?.split(';')[0] !== ref.mediaType)
-      throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'HTTP CAS public object headers are invalid');
-    const bytes = await readLimitedBody(response, ref.bytes);
-    if (!bytes) throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'HTTP CAS object exceeds declared size');
-    verifyArtifact(ref, bytes);
+    return true;
   }
 }

@@ -1,6 +1,6 @@
 import { LruCache } from '@violet-map/core/cache';
 import type { ObjectStorage, StoredFileInfo } from '@violet-map/core/storage';
-import type { ConditionalDocumentStore, ConditionalObjectWriter, ObjectHttpMetadata } from './capabilities.js';
+import type { ObjectCapabilities } from './capabilities.js';
 import { cleanStoragePath } from './paths.js';
 
 export interface StorageCacheOptions {
@@ -27,6 +27,11 @@ interface CacheEntry<T> {
  * metadata entry, including backend failures that may have partially written.
  */
 export class CachedStorage implements ObjectStorage {
+  readonly scan?: ObjectCapabilities['scan'];
+  readonly create?: ObjectCapabilities['create'];
+  readonly readDocument?: ObjectCapabilities['readDocument'];
+  readonly compareExchange?: ObjectCapabilities['compareExchange'];
+  readonly replace?: ObjectCapabilities['replace'];
   readonly kind: ObjectStorage['kind'];
   readonly metrics = {
     get: 0,
@@ -47,53 +52,58 @@ export class CachedStorage implements ObjectStorage {
   private readonly inflight = new Map<string, Promise<unknown>>();
   private generation = 0;
   private readonly onMutation?: () => void;
-  async *scan(prefix = ''): AsyncIterable<StoredFileInfo> {
-    const backend = this.storage as ObjectStorage & Partial<import('./capabilities.js').ObjectScanner>;
-    if (!backend.scan) throw new Error('storage does not support bounded inventory');
-    this.metrics.list++;
-    yield* backend.scan(prefix);
-  }
-
-  create(filePath: string, bytes: Uint8Array, metadata: ObjectHttpMetadata): Promise<boolean> {
-    const backend = this.storage as ObjectStorage & Partial<ConditionalObjectWriter>;
-    if (!backend.create) throw new Error('storage does not support conditional creation');
-    return this.mutate(async () => {
-      this.metrics.conditionalCreateAttempts++;
-      const created = await backend.create!(filePath, bytes, metadata);
-      if (created) {
-        this.metrics.put++;
-        this.metrics.uploadedBytes += bytes.length;
-      }
-      return created;
-    });
-  }
-  readDocument(filePath: string, maxBytes?: number) {
-    const backend = this.storage as ObjectStorage & Partial<ConditionalDocumentStore>;
-    if (!backend.readDocument) throw new Error('storage does not support conditional documents');
-    this.metrics.get++;
-    return backend.readDocument(filePath, maxBytes).then((document) => {
-      this.metrics.readBytes += document?.bytes.length ?? 0;
-      return document;
-    });
-  }
-  compareExchange(filePath: string, expectedToken: string | null, bytes: Uint8Array) {
-    const backend = this.storage as ObjectStorage & Partial<ConditionalDocumentStore>;
-    if (!backend.compareExchange) throw new Error('storage does not support conditional documents');
-    return this.mutate(async () => {
-      this.metrics.conditionalDocumentAttempts++;
-      const committed = await backend.compareExchange!(filePath, expectedToken, bytes);
-      if (committed) {
-        this.metrics.put++;
-        this.metrics.uploadedBytes += bytes.length;
-      }
-      return committed;
-    });
-  }
 
   constructor(
     private readonly storage: ObjectStorage,
     options: StorageCacheOptions = {},
   ) {
+    const backend = storage as ObjectStorage & Partial<ObjectCapabilities>;
+    if (backend.scan)
+      this.scan = async function* (this: CachedStorage, prefix = '') {
+        this.metrics.list++;
+        yield* backend.scan!(prefix);
+      }.bind(this);
+    if (backend.create)
+      this.create = (filePath, bytes, metadata) => {
+        return this.mutate(async () => {
+          this.metrics.conditionalCreateAttempts++;
+          const created = await backend.create!(filePath, bytes, metadata);
+          if (created) {
+            this.metrics.put++;
+            this.metrics.uploadedBytes += bytes.length;
+          }
+          return created;
+        });
+      };
+    if (backend.readDocument)
+      this.readDocument = (filePath, maxBytes) => {
+        this.metrics.get++;
+        return backend.readDocument!(filePath, maxBytes).then((document) => {
+          this.metrics.readBytes += document?.bytes.length ?? 0;
+          return document;
+        });
+      };
+    if (backend.compareExchange)
+      this.compareExchange = (filePath, expectedToken, bytes) => {
+        return this.mutate(async () => {
+          this.metrics.conditionalDocumentAttempts++;
+          const committed = await backend.compareExchange!(filePath, expectedToken, bytes);
+          if (committed) {
+            this.metrics.put++;
+            this.metrics.uploadedBytes += bytes.length;
+          }
+          return committed;
+        });
+      };
+    if (backend.replace)
+      this.replace = async (filePath, bytes, contentType) => {
+        return this.mutate(async () => {
+          await backend.replace!(filePath, bytes, contentType);
+          this.metrics.put++;
+          this.metrics.uploadedBytes += bytes.length;
+        });
+      };
+
     this.kind = storage.kind;
     this.onMutation = options.onMutation;
     this.statTtlMs = Math.max(0, options.statTtlMs ?? 1_000);
@@ -183,15 +193,7 @@ export class CachedStorage implements ObjectStorage {
       this.metrics.uploadedBytes += bytes.length;
     });
   }
-  async replace(filePath: string, bytes: Uint8Array, contentType?: string): Promise<void> {
-    const backend = this.storage as Partial<import('@violet-map/core/storage').AtomicObjectStorage>;
-    if (!backend.replace) throw new Error('storage does not support atomic replacement');
-    return this.mutate(async () => {
-      await backend.replace!(filePath, bytes, contentType);
-      this.metrics.put++;
-      this.metrics.uploadedBytes += bytes.length;
-    });
-  }
+
   delete(filePath: string): Promise<void> {
     return this.mutate(async () => {
       await this.storage.delete(filePath);

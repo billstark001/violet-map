@@ -1,12 +1,9 @@
 import { canonicalJson, parseArtifactRef, type ArtifactRef } from '@violet-map/core/resources';
-import type { AtomicObjectStorage } from '@violet-map/core/storage';
 import {
   ContentAddressedStorage,
   contentObjectKey,
   verifyArtifact,
-  type ConditionalDocumentStore,
-  type ConditionalObjectWriter,
-  type ObjectScanner,
+  type TransactionalObjectStorage,
 } from '@violet-map/storage';
 import { randomUUID } from 'node:crypto';
 import { ByteBudget } from './budget.js';
@@ -26,7 +23,7 @@ export class PersistentResourceCache {
   readonly writes: ByteBudget;
   readonly metrics = { put: 0, uploadedBytes: 0, writeBudgetReject: 0, admissionReject: 0 };
   constructor(
-    private readonly storage: AtomicObjectStorage & ConditionalObjectWriter & ObjectScanner & ConditionalDocumentStore,
+    private readonly storage: TransactionalObjectStorage,
     bytes: number,
     metadataEntries: number,
     writeBytes: number,
