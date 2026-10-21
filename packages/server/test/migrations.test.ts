@@ -249,7 +249,7 @@ for (const driver of ['pglite', 'postgres'] as const) {
       } else {
         await assert.rejects(connectDatabase(options), /directory is locked/);
         const alias = path.join(root, 'alias');
-        await fs.symlink(options.databaseDir, alias);
+        await fs.symlink(options.databaseDir, alias, process.platform === 'win32' ? 'junction' : 'dir');
         await assert.rejects(connectDatabase({ databaseDir: alias }), /directory is locked/);
         // A separate Node process shares the lock with the service as well.
         await assert.rejects(

@@ -56,6 +56,7 @@ test('overlap checks compare actual locations and segment prefixes, not names', 
     ['same', 'same', true],
     ['same', 'same/child', true],
     ['a', 'ab', false],
+    ['Case', 'case/child', process.platform === 'win32'],
   ]) {
     await write(
       header +
@@ -66,7 +67,11 @@ test('overlap checks compare actual locations and segment prefixes, not names', 
     else load();
   }
   await fs.mkdir(path.join(root, 'target'));
-  await fs.symlink(path.join(root, 'target'), path.join(root, 'link'));
+  await fs.symlink(
+    path.join(root, 'target'),
+    path.join(root, 'link'),
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
   await write(
     header +
       'storage:\n  backends:\n    one: { driver: local, root: target }\n    two: { driver: local, root: link }\n  mounts:\n    worlds: { backend: one, prefix: same }\n    content: { backend: two, prefix: same }\n',

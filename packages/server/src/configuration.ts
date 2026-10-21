@@ -476,15 +476,20 @@ function resolveStorage(
     for (let b = a + 1; b < locations.length; b++) {
       const x = locations[a],
         y = locations[b];
-      if (
-        x.identity === y.identity &&
-        (x.prefix === y.prefix ||
-          !x.prefix ||
-          !y.prefix ||
-          x.prefix.startsWith(y.prefix + '/') ||
-          y.prefix.startsWith(x.prefix + '/'))
-      )
-        throw new Error(`overlapping storage mounts: ${x.name}, ${y.name}`);
+      if (x.identity !== y.identity) continue;
+      const overlaps =
+        x.identity === 'local'
+          ? [path.relative(x.prefix, y.prefix), path.relative(y.prefix, x.prefix)].some(
+              (relative) =>
+                relative === '' ||
+                (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)),
+            )
+          : x.prefix === y.prefix ||
+            !x.prefix ||
+            !y.prefix ||
+            x.prefix.startsWith(y.prefix + '/') ||
+            y.prefix.startsWith(x.prefix + '/');
+      if (overlaps) throw new Error(`overlapping storage mounts: ${x.name}, ${y.name}`);
     }
   for (const backend of Object.values(backends))
     if (backend.driver === 's3') delete (backend as S3StorageOptions).prefix;
