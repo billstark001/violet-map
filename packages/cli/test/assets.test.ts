@@ -4,6 +4,65 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { crc32 } from 'node:zlib';
+import { extractMinecraftAssets } from '../src/commands/assetArchive.js';
+
+function jar(entries: [string, string][]): Uint8Array {
+  const local: Buffer[] = [],
+    central: Buffer[] = [];
+  let offset = 0;
+  for (const [name, contents] of entries) {
+    const filename = Buffer.from(name),
+      data = Buffer.from(contents);
+    const header = Buffer.alloc(30),
+      record = Buffer.alloc(46);
+    header.writeUInt32LE(0x04034b50);
+    header.writeUInt16LE(20, 4);
+    header.writeUInt16LE(0x800, 6);
+    header.writeUInt32LE(crc32(data), 14);
+    header.writeUInt32LE(data.length, 18);
+    header.writeUInt32LE(data.length, 22);
+    header.writeUInt16LE(filename.length, 26);
+    record.writeUInt32LE(0x02014b50);
+    header.copy(record, 6, 4, 30);
+    record.writeUInt32LE(offset, 42);
+    local.push(header, filename, data);
+    central.push(record, filename);
+    offset += header.length + filename.length + data.length;
+  }
+  const index = Buffer.concat(central),
+    end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(index.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...local, index, end]);
+}
+
+test('JAR extraction needs no system unzip and handles spaces and Unicode while rejecting unsafe entries', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'violet archive & '));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const archive = path.join(root, 'client # 空间.jar'),
+    output = path.join(root, 'output');
+  await writeFile(
+    archive,
+    jar([
+      ['assets/minecraft/models/block/stone.json', '{}'],
+      ['assets/minecraft/textures/空间.png', 'pixels'],
+      ['META-INF/MANIFEST.MF', 'ignored'],
+      ['assets/other/models/block/stone.json', 'ignored'],
+    ]),
+  );
+  await extractMinecraftAssets(archive, output);
+  assert.equal(await readFile(path.join(output, 'assets/minecraft/models/block/stone.json'), 'utf8'), '{}');
+  assert.equal(await readFile(path.join(output, 'assets/minecraft/textures/空间.png'), 'utf8'), 'pixels');
+  assert.deepEqual(await readdir(output), ['assets']);
+  assert.deepEqual(await readdir(path.join(output, 'assets')), ['minecraft']);
+  await writeFile(archive, jar([['assets/minecraft/../../../outside', 'escape']]));
+  await assert.rejects(extractMinecraftAssets(archive, output), /invalid relative path/);
+  await assert.rejects(readFile(path.join(root, 'outside')), { code: 'ENOENT' });
+});
 
 test('asset downloads stay atomic and extract-all includes later snapshots', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'violet-assets-download-'));
@@ -43,10 +102,10 @@ test('asset downloads stay atomic and extract-all includes later snapshots', asy
         },
       }),
     );
-    await assert.rejects(commands.extract('test-version', path.join(root, 'out')), /unzip failed/);
+    await assert.rejects(commands.extract('test-version', path.join(root, 'out')), /asset archive extraction failed/);
     assert.equal(await readFile(jar, 'utf8'), replacement);
     assert.equal(
-      (await readdir(cache)).some((name) => name.endsWith('-extract')),
+      (await readdir(cache)).some((name) => name.includes('-extract-')),
       false,
     );
 

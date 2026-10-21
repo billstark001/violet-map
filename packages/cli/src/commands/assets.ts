@@ -1,14 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync } from 'node:fs';
-import { cp as copy, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { cp as copy, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import * as childProcess from 'node:child_process';
 import { dirname, join } from 'node:path';
-import { promisify } from 'node:util';
 import { resolvePath } from './paths.js';
+import { extractMinecraftAssets } from './assetArchive.js';
 
-const execFile = promisify(childProcess.execFile);
 const MANIFEST_URL = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json';
 
 interface VersionManifest {
@@ -116,7 +114,6 @@ export function assetCommands(cacheDir: string) {
     const info = await getVersionInfo(versionId);
     const jarPath = join(cacheDir, `${versionId}.jar`);
     const assetsOutput = resolvePath(outputDir);
-    const tmpOutput = join(cacheDir, `${versionId}-extract`);
 
     await downloadFile(info.downloads.client.url, jarPath, info.downloads.client.sha1, dryRun);
     if (dryRun) {
@@ -126,15 +123,12 @@ export function assetCommands(cacheDir: string) {
 
     console.log(`Extracting assets from ${jarPath}...`);
     await mkdir(assetsOutput, { recursive: true });
-    await rm(tmpOutput, { recursive: true, force: true });
-    await mkdir(tmpOutput, { recursive: true });
+    const tmpOutput = await mkdtemp(join(cacheDir, `${versionId}-extract-`));
     try {
       try {
-        await execFile('unzip', ['-oq', jarPath, 'assets/minecraft/*', '-d', tmpOutput], {
-          maxBuffer: 50 * 1024 * 1024,
-        });
+        await extractMinecraftAssets(jarPath, tmpOutput);
       } catch (e) {
-        throw new Error(`unzip failed: ${(e as Error).message}`);
+        throw new Error(`asset archive extraction failed: ${(e as Error).message}`, { cause: e });
       }
 
       const srcDir = join(tmpOutput, 'assets', 'minecraft');
