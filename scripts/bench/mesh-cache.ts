@@ -40,7 +40,7 @@ try {
           cx: 0,
           cz: 0,
           contentKey: 'benchmark',
-          mode: 'full' as const,
+          step: 1 as const,
         };
         const percentile = (values: number[], p: number) =>
           values.toSorted((a, b) => a - b)[Math.min(values.length - 1, Math.floor(values.length * p))];

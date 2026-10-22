@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { SkyTextureImage, SkyTextureImages } from '../runtime/skyTextures';
 
 const PLANE_FORWARD = new THREE.Vector3(0, 0, 1);
+
 type CelestialMesh = THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
 
 export interface SkyDiagnosticSnapshot {

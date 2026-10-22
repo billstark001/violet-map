@@ -9,6 +9,7 @@ import { TopMapRuntime } from '../src/runtime/topMapRuntime.js';
 import { testView } from './helpers/scheduling.js';
 
 const dimension = 'minecraft:overworld';
+
 const fixture = (rx = 0) => ({
   schema: 6,
   kind: 'topmap-region',
@@ -30,12 +31,14 @@ const fixture = (rx = 0) => ({
   colors: new Uint8Array([0, 255, 0, 255]),
   lights: new Uint8Array([15, 0]),
 });
+
 const ref = (bytes: Uint8Array) => ({
   digest: createHash('sha256').update(bytes).digest('hex'),
   bytes: bytes.length,
   mediaType: 'application/msgpack',
   format: 'topmap-msgpack-v6',
 });
+
 const head = {
   schemaVersion: 1,
   mode: 'server',

@@ -4,7 +4,9 @@ import { decodeChunkCoverage } from '../src/resources/chunkCoverage.js';
 import { ChunkRuntime } from '../src/runtime/chunkRuntime.js';
 
 const mask = new Uint8Array(128);
+
 mask[127] = 128;
+
 const encoded = Buffer.from(mask).toString('base64');
 
 test('source coverage requires exact masks, including negative coordinates and direct overrides', () => {
