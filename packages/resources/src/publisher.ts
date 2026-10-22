@@ -117,7 +117,7 @@ export class ResourcePublisher {
     const intent = canonicalJson({ expectedHead, selectors, world: world ?? null });
     if (intent.length * 6 + 4096 > this.options.config.resources.cache.metadataBytes / 16)
       throw new ResourceError('RESOURCE_BUSY', 'publication task exceeds metadata budget');
-    if (this.task?.intent === intent && this.task.value.state !== 'failed') return this.taskStatus()!;
+    if (this.task?.intent === intent && this.task.value.state === 'pending') return this.taskStatus()!;
     if (this.task?.value.state === 'pending')
       throw new ResourceError('RESOURCE_BUSY', 'another online publication is running', true);
     const controller = new AbortController();

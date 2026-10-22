@@ -21,7 +21,7 @@ const timerTurn = () => new Promise<void>((resolve) => setTimeout(resolve, 10));
 
 async function fixture(
   t: TestContext,
-  render = async () => {},
+  render: () => Promise<string | void> = async () => {},
   project?: ConstructorParameters<typeof ResourcePublisher>[0]['publicResult'],
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-publisher-concurrency-'));
@@ -52,8 +52,8 @@ async function fixture(
     sessions: { sourceScope: async () => 'test' } as never,
     rootEntries: () => [],
     renderRoot: async () => {
-      await render();
-      return { digest: 'a'.repeat(64), entries: [] };
+      const digest = await render();
+      return { digest: typeof digest === 'string' ? digest : 'a'.repeat(64), entries: [] };
     },
     publicResult:
       project ??
@@ -125,6 +125,32 @@ test('an already canceled reviewed publication performs no new source preparatio
   await assert.rejects(publisher.publish(null, prepared, controller.signal), /canceled before preparation/);
   assert.equal(renders, 1);
   assert.equal(await store.head(), null);
+});
+
+test('a completed stable readiness intent does not suppress a later source publication with the same parent', async (t) => {
+  let digest = 'a'.repeat(64);
+  const { publisher, store } = await fixture(
+    t,
+    async () => digest,
+    async () => ({
+      head: { mode: 'public', publicationId: (await store.head())!.publicationId } as never,
+      resources: [],
+    }),
+  );
+  const original = await publisher.publish(null);
+  const stable = publisher.start(original.publicationId);
+  await publisher.drain();
+  assert.equal(publisher.taskStatus(stable.id)?.state, 'ready');
+  assert.equal((await store.head())?.publicationId, original.publicationId);
+  digest = 'b'.repeat(64);
+  const changed = publisher.start(original.publicationId);
+  assert.notEqual(changed.id, stable.id);
+  await publisher.drain();
+  const ready = publisher.taskStatus(changed.id)!;
+  assert.equal(ready.state, 'ready');
+  assert.ok(ready.result && ready.result.head.mode === 'public');
+  assert.notEqual(ready.result.head.publicationId, original.publicationId);
+  assert.equal(ready.result.head.publicationId, (await store.head())?.publicationId);
 });
 
 test('an automatic publisher queued before a source mutation rechecks the durable snapshot requirement on admission', async (t) => {
