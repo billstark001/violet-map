@@ -18,7 +18,8 @@ import {
 import { type BlockStateRef } from '@violet-map/core/domain';
 import type { RenderModelInstance } from '@violet-map/render';
 import { parseNbt } from '@violet-map/core/nbt';
-import type { SectionMeshMsg, WorkerRequest, WorkerResponse } from './protocol';
+import type { WorkerRequest, WorkerResponse } from './protocol';
+import type { SectionMesh } from '../view/terrain';
 
 const DEFAULT_INFO: BlockInfo = { occludes: false, emit: 0, filter: 0, layer: 'cutout', tint: 'none' };
 const WHITE: Rgb = [1, 1, 1];
@@ -171,7 +172,7 @@ function transfersOf(buffers: (MeshBuffers | null | undefined)[]): Transferable[
   return t;
 }
 
-function sectionBytes(sections: SectionMeshMsg[]): number {
+function sectionBytes(sections: SectionMesh[]): number {
   let total = 0;
   for (const section of sections) {
     for (const buffers of Object.values(section.layers)) if (buffers) total += meshByteLength(buffers);
@@ -364,7 +365,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
         }
         const sectionYs = new Set<number>(instancesBySection.keys());
         for (let sy = col.minSectionY; sy <= col.maxSectionY; sy++) sectionYs.add(sy);
-        const sections: SectionMeshMsg[] = [];
+        const sections: SectionMesh[] = [];
         for (const sy of [...sectionYs].sort((a, b) => a - b)) {
           const s = col.sections.get(sy);
           const sectionInstances = instancesBySection.get(sy) ?? [];

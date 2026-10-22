@@ -1,10 +1,11 @@
+import { planFixtureDemands } from './helpers/scheduling.js';
 import { ChunkScheduler } from '../src/scheduling/chunkScheduler.js';
-import { LoadingMetrics } from '../src/scheduling/loadingMetrics.js';
+import { LoadingMetrics } from '../src/diagnostics/loadingMetrics.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import { resourceClient } from '../src/resources/client.js';
-import { ChunkManager } from '../src/scheduling/chunkManager.js';
+import { ChunkRuntime } from '../src/runtime/chunkRuntime.js';
 import { encode } from '@msgpack/msgpack';
 import { chunkKey } from '../src/worker/protocol.js';
 
@@ -27,7 +28,7 @@ test('unavailable IndexedDB falls back to worker meshing for both full and LOD t
       const started = new Promise<{ kind: string; version: number }>((done) => {
         resolve = done;
       });
-      const manager = Object.assign(Object.create(ChunkManager.prototype), {
+      const manager = Object.assign(Object.create(ChunkRuntime.prototype), {
         metrics: new LoadingMetrics(),
         chunks: new Map([[entry.key, entry]]),
         meshJobs: new Map(),
@@ -51,8 +52,11 @@ test('unavailable IndexedDB falls back to worker meshing for both full and LOD t
             contentKey: 'nbt',
           },
         }),
-        startWorkerMeshing: (_entry: unknown, task: string, _step: number, version: number) =>
-          resolve({ kind: task, version }),
+        flushMeshQueue() {
+          const [version, job] = [...this.meshJobs][0];
+          assert.equal(job.phase, 'waiting-input', 'cache miss waits for scheduler dispatch');
+          resolve({ kind: job.kind, version });
+        },
       });
       assert.equal(manager.requestMesh(entry, kind, kind === 'full' ? 1 : 2), true);
       const worker = await Promise.race([
@@ -91,7 +95,7 @@ test('disposing a manager cancels pending IO and ignores even an unabortable lat
         });
       };
       const entry = { key: 'test', state: kind === 'hash' ? 'checking' : 'hashed', cx: 0, cz: 0 };
-      const manager = Object.assign(Object.create(ChunkManager.prototype), {
+      const manager = Object.assign(Object.create(ChunkRuntime.prototype), {
         metrics: new LoadingMetrics(),
         opts: { world: 'test', dimension: 'minecraft:overworld' },
         requests: new AbortController(),
@@ -160,7 +164,7 @@ test('reloaded identical columns do not invalidate neighbors, and stale worker r
     lastTier: 6,
     lastScore: 0,
   };
-  const manager = Object.assign(Object.create(ChunkManager.prototype), {
+  const manager = Object.assign(Object.create(ChunkRuntime.prototype), {
     metrics: new LoadingMetrics(),
     opts: { world: 'world', dimension: 'minecraft:overworld' },
     chunks: new Map([
@@ -168,6 +172,7 @@ test('reloaded identical columns do not invalidate neighbors, and stale worker r
       [neighbor.key, neighbor],
     ]),
     workers: [{}, {}],
+    terrain: { updateSurface() {} },
     scheduler: { notify() {} },
     flushMeshQueue() {},
     reportStats() {},
@@ -206,7 +211,7 @@ test('active neighborhood pins prevent eviction and settle exactly once', async 
     workerReadyMask: 1,
   };
   const drops: unknown[] = [];
-  const manager = Object.assign(Object.create(ChunkManager.prototype), {
+  const manager = Object.assign(Object.create(ChunkRuntime.prototype), {
     metrics: new LoadingMetrics(),
     meshJobs: new Map([[1, { dependencies: [dependency] }]]),
     inFlightMeshVersions: new Set([1]),
@@ -234,7 +239,7 @@ test('active neighborhood pins prevent eviction and settle exactly once', async 
 
 test('a known neighborhood hits cached geometry before restoring any worker columns', async () => {
   await import('fake-indexeddb/auto');
-  const { putCachedMesh, clearMeshCache, setMeshCacheEnabled } = await import('../src/scheduling/meshCache.js');
+  const { putCachedMesh, clearMeshCache, setMeshCacheEnabled } = await import('../src/resources/meshCache.js');
   setMeshCacheEnabled(true);
   await clearMeshCache();
   const entries = Array.from({ length: 9 }, (_, i) => {
@@ -254,7 +259,7 @@ test('a known neighborhood hits cached geometry before restoring any worker colu
   });
   const center = entries[4];
   let displays = 0;
-  const manager = Object.assign(Object.create(ChunkManager.prototype), {
+  const manager = Object.assign(Object.create(ChunkRuntime.prototype), {
     metrics: new LoadingMetrics(),
     chunks: new Map(entries.map((e) => [e.key, e])),
     opts: { sourceScope: 'scope', world: 'world', dimension: 'minecraft:overworld', renderKey: 'r' },
@@ -290,7 +295,7 @@ test('transient IO backs off without discarding displayed terrain; a worker dead
   const { ResourceError } = await import('@violet-map/core/resources');
   const entry = { key: 'chunk', contentDigest: 'known', retryAttempts: 0, state: 'fetching', displayed: 'full' };
   let queued = 0;
-  const manager = Object.assign(Object.create(ChunkManager.prototype), {
+  const manager = Object.assign(Object.create(ChunkRuntime.prototype), {
     metrics: new LoadingMetrics(),
     activity: { retries: 0 },
     queueIo(kind: string) {
@@ -333,7 +338,7 @@ test('known neighbors are restored before first display and cancelled read admis
     workerKeepUntil: 0,
   };
   const queued: string[] = [];
-  const manager = Object.assign(Object.create(ChunkManager.prototype), {
+  const manager = Object.assign(Object.create(ChunkRuntime.prototype), {
     metrics: new LoadingMetrics(),
     opts: { world: 'world', dimension: 'minecraft:overworld' },
     chunks: new Map([
@@ -341,8 +346,8 @@ test('known neighbors are restored before first display and cancelled read admis
       [neighbor.key, neighbor],
     ]),
     scheduler: {
-      notify(event: { key: string }) {
-        queued.push(event.key);
+      notify(event: { type: string; key: string }) {
+        if (event.type === 'fetchNeeded') queued.push(event.key);
       },
     },
     scheduleIoFlush() {},
@@ -362,7 +367,7 @@ test('a body arriving during a Worker restart stays queued for an actual decode'
   const entry = { key, cx: 0, cz: 0, state: 'fetching', contentDigest: 'digest' };
   let queued = 0,
     restarts = 0;
-  const manager = Object.assign(Object.create(ChunkManager.prototype), {
+  const manager = Object.assign(Object.create(ChunkRuntime.prototype), {
     opts: { world: 'world', dimension: 'minecraft:overworld', dimensionDef: {} },
     chunks: new Map([[key, entry]]),
     workers: [],
@@ -399,7 +404,7 @@ test('a body arriving during a Worker restart stays queued for an actual decode'
 
 test('new work preempts a later retry timer without retaining a duplicate wake', async (t) => {
   let flushes = 0;
-  const manager = Object.assign(Object.create(ChunkManager.prototype), {
+  const manager = Object.assign(Object.create(ChunkRuntime.prototype), {
     disposed: false,
     hashTimer: null,
     fetchTimer: null,
@@ -421,33 +426,34 @@ test('new work preempts a later retry timer without retaining a duplicate wake',
 });
 
 test('repair promotes work priority while preserving the current LOD target', () => {
-  const { key, ...metadata } = {
+  const entry = {
     key: 'chunk',
     cx: 0,
     cz: 0,
-    lastTargetStep: 4,
-    lastWantedAt: 0,
-    lastTier: 3,
-    lastScore: 100,
-    lastImportance: 0.2,
-    lastSatisfaction: 1,
-    lastGap: -0.8,
-    lastForcedFull: false,
-  };
-  const entry = {
-    key,
-    ...metadata,
-    state: 'stored',
-    displayed: 'full',
+    state: 'stored' as const,
+    displayed: 'full' as const,
+    displayedVersion: -1,
+    displayedLodStep: 0,
+    pendingLodStep: 0,
+    dirty: false,
     dirtyToken: 0,
     pendingFull: false,
     pendingLod: false,
   };
-  const manager = Object.assign(Object.create(ChunkManager.prototype), { scheduler: new ChunkScheduler() });
+  const scheduler = new ChunkScheduler();
+  planFixtureDemands(
+    scheduler,
+    new Map([[entry.key, entry]]),
+    performance.now(),
+    () => 4,
+    () => ({ tier: 3, score: 100 }),
+  );
+  const manager = Object.assign(Object.create(ChunkRuntime.prototype), { scheduler });
   manager.markDirty(entry);
-  assert.equal(entry.lastTargetStep, 4);
+  assert.equal(scheduler.demandFor(entry.key)!.targetStep, 4);
   assert.equal(entry.dirtyToken, 1);
-  assert.ok(entry.lastTier <= 0);
+  assert.ok(scheduler.demandFor(entry.key)!.boost!.tier <= 0);
+  assert.equal('lastTargetStep' in entry, false, 'the executor never mirrors camera demand');
 });
 
 test('a recovered resolve or explicit absence clears obsolete retry state even without a body download', () => {
@@ -462,7 +468,7 @@ test('a recovered resolve or explicit absence clears obsolete retry state even w
     retryAttempts: 1,
     lastError: 'temporary outage',
   };
-  const manager = Object.assign(Object.create(ChunkManager.prototype), {
+  const manager = Object.assign(Object.create(ChunkRuntime.prototype), {
     opts: { world: 'world', dimension: 'minecraft:overworld', renderRoot: 'root' },
     chunks: new Map([[key, entry]]),
   });
@@ -538,7 +544,7 @@ test('resource refresh ignores replacement entries, newer IO and out-of-order re
       lastError: 'temporary outage',
     };
     const queued: string[] = [];
-    const manager = Object.assign(Object.create(ChunkManager.prototype), {
+    const manager = Object.assign(Object.create(ChunkRuntime.prototype), {
       refreshSeq: 0,
       disposed: false,
       requests: new AbortController(),

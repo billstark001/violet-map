@@ -1,14 +1,8 @@
-import type * as THREE from 'three';
+import type { ViewState } from '../view/state';
 
-export const LOD_STEPS = [1, 2, 4, 8] as const;
+import type { LodStep, MeshTaskKind } from '../view/terrain';
 
 export type ChunkState = 'checking' | 'resolving' | 'hashed' | 'fetching' | 'decoding' | 'stored' | 'absent' | 'error';
-
-export type LodStep = (typeof LOD_STEPS)[number];
-
-export type MeshTaskKind = 'full' | 'lod';
-
-export type ChunkSchedulerCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 
 export interface ChunkSchedulingTuning {
   /** Camera-grid active radius in chunks. This is independent from fog/view-distance UI settings. */
@@ -93,7 +87,10 @@ export interface CriticalCell {
   j: number;
 }
 
-export interface ChunkSchedulerEntry extends SchedulerEntryUpdate {
+export interface ChunkSchedulerEntry {
+  key: string;
+  cx: number;
+  cz: number;
   retryAt?: number;
   surfaceY?: number;
   state: ChunkState;
@@ -106,26 +103,35 @@ export interface ChunkSchedulerEntry extends SchedulerEntryUpdate {
   dirty: boolean;
 }
 
-export interface SchedulerFramePlan {
-  candidates: ChunkCandidate[];
-  keepKeys: Set<string>;
-  protectedKeys: Set<string>;
-  centerCx: number;
-  centerCz: number;
-}
-
-export interface SchedulerEntryUpdate {
+export interface ChunkDemand {
   key: string;
   cx: number;
   cz: number;
-  lastWantedAt: number;
-  lastTier: number;
-  lastScore: number;
-  lastTargetStep: LodStep;
-  lastForcedFull: boolean;
-  lastImportance: number;
-  lastSatisfaction: number;
-  lastGap: number;
+  wantedAt: number;
+  targetStep: LodStep;
+  importance: number;
+  satisfaction: number;
+  gap: number;
+  priority: ChunkPriority;
+  boost: (ChunkPriority & { reason: 'dependency' | 'repair' }) | null;
+  meshRetryAt: number;
+}
+
+export interface SchedulerQueueStats {
+  hashQueued: number;
+  fetchQueued: number;
+  meshQueued: number;
+  trackedPriorities: number;
+}
+
+export interface SchedulerFramePlan {
+  demands: ChunkCandidate[];
+  candidates: ChunkCandidate[];
+  keepKeys: Set<string>;
+  protectedKeys: Set<string>;
+  fullDetailKeys: Set<string>;
+  centerCx: number;
+  centerCz: number;
 }
 
 export type SchedulerAction =
@@ -133,18 +139,21 @@ export type SchedulerAction =
   | { type: 'dropChunk'; key: string };
 
 export interface SchedulerTickInput {
-  camera: ChunkSchedulerCamera;
+  view: ViewState;
   now: number;
-  topDownView?: boolean;
   options: ChunkSchedulerOptions;
   keyFor: (cx: number, cz: number) => string;
   cellInfoFor?: (cx: number, cz: number) => SchedulerCellInfo | null;
   entries: ReadonlyMap<string, ChunkSchedulerEntry>;
 }
 
+export interface SchedulerViewInput extends SchedulerTickInput {
+  demands: ReadonlyMap<string, Readonly<ChunkDemand>>;
+}
+
 export interface SchedulerTickResult {
   actions: SchedulerAction[];
-  entryUpdates: SchedulerEntryUpdate[];
+  fullDetailKeys: ReadonlySet<string>;
   keepKeys: Set<string>;
   centerCx: number;
   centerCz: number;
@@ -173,9 +182,10 @@ export interface SchedulerWorkBatch {
 }
 
 export type SchedulerEvent =
-  | { type: 'hashNeeded'; key: string; priority?: ChunkPriority }
-  | { type: 'fetchNeeded'; key: string; priority?: ChunkPriority }
-  | { type: 'meshDeferred'; key: string; kind: MeshTaskKind; step: LodStep; fallbackTier: number; now: number }
+  | { type: 'hashNeeded'; key: string }
+  | { type: 'fetchNeeded'; key: string }
+  | { type: 'dependencyNeeded'; centerKey: string; key: string; now: number }
+  | { type: 'meshDeferred'; key: string; now: number }
   | { type: 'meshInvalidated'; entry: ChunkSchedulerEntry; now: number }
   | { type: 'chunkStored'; entry: ChunkSchedulerEntry; now: number }
   | {
@@ -188,65 +198,33 @@ export type SchedulerEvent =
     }
   | { type: 'chunkDropped'; key: string };
 
+export interface ReadyMeshTask {
+  entry: ChunkSchedulerEntry;
+  kind: MeshTaskKind;
+  step: LodStep;
+  version: number;
+}
+
+export interface WorkerDispatchInput {
+  now: number;
+  activeTasks: number;
+  maxTasks: number;
+  workerLoads: readonly number[];
+  ready: readonly ReadyMeshTask[];
+  entries: ReadonlyMap<string, ChunkSchedulerEntry>;
+}
+
+export interface WorkerDispatchPlan {
+  start: { task: ReadyMeshTask; workerIndex: number }[];
+  discard: number[];
+}
+
 export interface SchedulerMeshResult {
   entry: ChunkSchedulerEntry;
   kind: MeshTaskKind;
   step: LodStep;
   version: number;
   now: number;
-}
-
-export interface ChunkRenderStats {
-  trackedChunks: number;
-  nbt: number;
-  lodReady: number;
-  lodRendered: number;
-  fullReady: number;
-  fullRendered: number;
-}
-
-export interface ChunkProfileStats {
-  workerCount: number;
-  activeMeshTasks: number;
-  workerChunkCopies: number;
-  estimatedWorkerBytes: number;
-  cacheLookups: number;
-  errorChunks: number;
-  retryingChunks: number;
-  displayedMeshBytes: number;
-  chunkBytesDecoded: number;
-  diagnostics: ChunkDiagnosticEvent[];
-  hashFetchMsAvg: number;
-  chunkFetchMsAvg: number;
-  parseMsAvg: number;
-  fullMeshMsAvg: number;
-  lodMeshMsAvg: number;
-  fullCacheHits: number;
-  fullCacheMisses: number;
-  lodCacheHits: number;
-  lodCacheMisses: number;
-}
-
-export type ChunkDiagnosticOp = 'hashFetch' | 'chunkFetch' | 'parse' | 'fullMesh' | 'lodMesh';
-
-export type ChunkDiagnosticKind = 'slow' | 'delayed';
-
-export interface ChunkDiagnosticEvent {
-  id: number;
-  time: number;
-  kind: ChunkDiagnosticKind;
-  op: ChunkDiagnosticOp;
-  detail: string;
-  durationMs: number;
-  thresholdMs: number;
-  sampleCount: number;
-}
-
-export interface ChunkSchedulerStats extends ChunkRenderStats, ChunkProfileStats {
-  hashQueued: number;
-  fetchQueued: number;
-  meshQueued: number;
-  trackedPriorities: number;
 }
 
 export interface SchedulerCellDiagnostic {
@@ -301,43 +279,3 @@ export interface ResolvedChunkScheduling {
   minImportanceToSchedule: number;
   minGapToSchedule: number;
 }
-
-const EMPTY_RENDER_STATS: ChunkRenderStats = {
-  trackedChunks: 0,
-  nbt: 0,
-  lodReady: 0,
-  lodRendered: 0,
-  fullReady: 0,
-  fullRendered: 0,
-};
-
-const EMPTY_PROFILE_STATS: ChunkProfileStats = {
-  workerCount: 0,
-  activeMeshTasks: 0,
-  workerChunkCopies: 0,
-  estimatedWorkerBytes: 0,
-  cacheLookups: 0,
-  errorChunks: 0,
-  retryingChunks: 0,
-  displayedMeshBytes: 0,
-  chunkBytesDecoded: 0,
-  diagnostics: [],
-  hashFetchMsAvg: 0,
-  chunkFetchMsAvg: 0,
-  parseMsAvg: 0,
-  fullMeshMsAvg: 0,
-  lodMeshMsAvg: 0,
-  fullCacheHits: 0,
-  fullCacheMisses: 0,
-  lodCacheHits: 0,
-  lodCacheMisses: 0,
-};
-
-export const EMPTY_CHUNK_SCHEDULER_STATS: ChunkSchedulerStats = {
-  ...EMPTY_RENDER_STATS,
-  ...EMPTY_PROFILE_STATS,
-  hashQueued: 0,
-  fetchQueued: 0,
-  meshQueued: 0,
-  trackedPriorities: 0,
-};

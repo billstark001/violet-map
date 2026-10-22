@@ -1,3 +1,5 @@
+import { captureView } from '../src/render/viewSnapshot.js';
+import { UNCLIPPED_VIEW } from '../src/view/worldGeometry.js';
 import { schedulerTuningForPreset } from '../src/scheduling/profiles.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -29,7 +31,7 @@ test('a capacity-limited stationary view admits a stable set instead of evicting
   for (let frame = 0; frame < 400; frame++) {
     const now = frame * 100;
     const result = scheduler.tick({
-      camera,
+      view: captureView(camera, false, UNCLIPPED_VIEW),
       now,
       options,
       keyFor,
@@ -37,7 +39,6 @@ test('a capacity-limited stationary view admits a stable set instead of evicting
       cellInfoFor: () => ({ hasChunkSource: true, topMapSurfaceY: 64 }),
       entries,
     });
-    const updates = new Map(result.entryUpdates.map((u) => [u.key, u]));
     for (const action of result.actions) {
       if (action.type === 'dropChunk') {
         entries.delete(action.key);
@@ -48,7 +49,6 @@ test('a capacity-limited stationary view admits a stable set instead of evicting
         admissions++;
         if (now > 20000) stableAdmissions++;
         entries.set(action.key, {
-          ...updates.get(action.key)!,
           key: action.key,
           cx: action.cx,
           cz: action.cz,
@@ -63,24 +63,22 @@ test('a capacity-limited stationary view admits a stable set instead of evicting
         });
       }
     }
-    for (const update of result.entryUpdates) {
-      const entry = entries.get(update.key);
-      if (!entry) continue;
-      Object.assign(entry, update);
+    for (const entry of entries.values()) {
+      const update = scheduler.demandFor(entry.key)!;
       const dx = entry.cx - result.centerCx,
         dz = entry.cz - result.centerCz;
       if (dx * dx + dz * dz <= 64) {
-        assert.equal(update.lastTargetStep, 1, 'full view distance must survive completed neighbors and falling gaps');
+        assert.equal(update.targetStep, 1, 'full view distance must survive completed neighbors and falling gaps');
         fullChecks++;
       }
-      entry.displayed = update.lastTargetStep === 1 ? 'full' : 'lod';
-      entry.displayedLodStep = update.lastTargetStep === 1 ? 0 : update.lastTargetStep;
+      entry.displayed = update.targetStep === 1 ? 'full' : 'lod';
+      entry.displayedLodStep = update.targetStep === 1 ? 0 : update.targetStep;
       entry.displayedVersion = frame;
       scheduler.notify({
         type: 'meshDisplayed',
         entry,
-        kind: update.lastTargetStep === 1 ? 'full' : 'lod',
-        step: update.lastTargetStep,
+        kind: update.targetStep === 1 ? 'full' : 'lod',
+        step: update.targetStep,
         version: frame,
         now,
       });

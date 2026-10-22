@@ -1,19 +1,18 @@
+import type { ViewState } from '../view/state';
+import type { TopClipRange } from '../view/worldGeometry';
 import type { RenderLayer } from '@violet-map/core/assets';
 import { meshByteLength, SECTION_VISIBILITY_ALL, type MeshBuffers } from '@violet-map/render';
 import * as THREE from 'three';
-import type { ChunkSchedulerCamera, ChunkSchedulerEntry, LodStep } from '../scheduling/contracts';
-import { CHUNK_WORLD_MIN_Y, CHUNK_WORLD_MAX_Y, DEFAULT_FULL_DETAIL_RADIUS_CHUNKS } from '../scheduling/chunkPolicy';
-import type { CachedMesh } from '../scheduling/meshCache';
-import type { SectionMeshMsg } from '../worker/protocol';
+import type { LodStep } from '../view/terrain';
+import { WORLD_MIN_Y, WORLD_MAX_Y } from '../view/worldGeometry';
+import type { TerrainMesh, SectionMesh } from '../view/terrain';
+import { EMPTY_CHUNK_DISPLAY, type TerrainChunk, type ChunkDisplayState } from '../view/terrain';
+import type { ChunkDisplay } from '../runtime/chunkDisplay';
 import type { TerrainMaterials } from './materials';
-
-export interface TopClipRange {
-  minY: number;
-  maxY: number;
-}
 
 interface FullSectionRender {
   key: string;
+  chunkKey: string;
   cx: number;
   sy: number;
   cz: number;
@@ -23,10 +22,7 @@ interface FullSectionRender {
   visible: boolean;
 }
 
-export interface ChunkSceneEntry extends Pick<
-  ChunkSchedulerEntry,
-  'key' | 'cx' | 'cz' | 'displayed' | 'displayedVersion' | 'displayedLodStep'
-> {
+interface ChunkSceneEntry extends TerrainChunk, ChunkDisplayState {
   surfaceY: number;
   group: THREE.Object3D | null;
   fullSections: FullSectionRender[];
@@ -46,10 +42,12 @@ const SECTION_NEIGHBOR: [number, number, number][] = [
 ];
 const SECTION_OPPOSITE = [1, 0, 3, 2, 5, 4] as const;
 
-export class ChunkScene {
+export class ChunkScene implements ChunkDisplay {
+  private readonly chunks = new Map<string, ChunkSceneEntry>();
+  private readonly coordinateIndex = new Map<string, ChunkSceneEntry>();
   private fullSectionIndex = new Map<string, FullSectionRender>();
   private displayedMeshBytes = 0;
-  private latestCamera: ChunkSchedulerCamera | null = null;
+  private latestCamera: ViewState | null = null;
   private displayedChunkKeyCache: ReadonlySet<string> = new Set();
   private displayedChunkKeyCacheDirty = true;
   private visibilityRevision = 0;
@@ -62,18 +60,14 @@ export class ChunkScene {
   private visibilityQueueEntries: number[] = [];
   private sectionVisibilityRevision = 0;
   private lastSpecialVisibilityRevision = -1;
-  private lastSpecialCenterCx = Number.NaN;
-  private lastSpecialCenterCz = Number.NaN;
-  private lastSpecialRadius = Number.NaN;
+  private lastSpecialKeys: ReadonlySet<string> | null = null;
   readonly root = new THREE.Group();
   private topDownView = false;
-  private topClipRange: TopClipRange = { minY: CHUNK_WORLD_MIN_Y, maxY: CHUNK_WORLD_MAX_Y };
-  private fullDetailRadius = DEFAULT_FULL_DETAIL_RADIUS_CHUNKS;
+  private topClipRange: TopClipRange = { minY: WORLD_MIN_Y, maxY: WORLD_MAX_Y };
+  private fullDetailKeys: ReadonlySet<string> = new Set();
   constructor(
     private scene: THREE.Scene,
     private materials: TerrainMaterials,
-    private chunks: ReadonlyMap<string, ChunkSceneEntry>,
-    private entryAt: (cx: number, cz: number) => ChunkSceneEntry | undefined,
   ) {
     this.root.matrixAutoUpdate = false;
     this.root.updateMatrix();
@@ -85,7 +79,9 @@ export class ChunkScene {
   get meshBytes() {
     return this.displayedMeshBytes;
   }
-  setView(camera: ChunkSchedulerCamera, topDownView: boolean, topClipRange: TopClipRange) {
+  setView(camera: ViewState) {
+    const topDownView = camera.mode === 'top';
+    const topClipRange = camera.clip;
     this.latestCamera = camera;
     const changed = this.topDownView !== topDownView;
     if (changed || topClipRange.minY !== this.topClipRange.minY || topClipRange.maxY !== this.topClipRange.maxY) {
@@ -95,20 +91,41 @@ export class ChunkScene {
       if (changed) this.lastVisibilityRevision = -1;
     }
   }
-  updateVisibility(fullDetailRadius: number) {
-    this.fullDetailRadius = fullDetailRadius;
+  updateVisibility(fullDetailKeys: ReadonlySet<string>) {
+    this.fullDetailKeys = fullDetailKeys;
     if (this.latestCamera) {
       this.updateFullSectionVisibility(this.latestCamera);
-      this.updateSpecialRenderVisibility(this.latestCamera);
+      this.updateSpecialRenderVisibility();
     }
   }
-  replace(entry: ChunkSceneEntry, mesh: CachedMesh, version: number, step: LodStep) {
-    this.remove(entry);
+  replace(chunk: TerrainChunk, mesh: TerrainMesh, version: number, step: LodStep): ChunkDisplayState {
+    this.remove(chunk.key);
+    const entry: ChunkSceneEntry = { ...chunk, ...EMPTY_CHUNK_DISPLAY, group: null, fullSections: [] };
+    this.chunks.set(entry.key, entry);
+    this.coordinateIndex.set(entry.cx + ',' + entry.cz, entry);
     if (mesh.mode === 'full') this.displayFull(entry, mesh.sections, version);
     else this.displayLod(entry, mesh.mesh, version, step);
+    return {
+      displayed: entry.displayed,
+      displayedVersion: entry.displayedVersion,
+      displayedLodStep: entry.displayedLodStep,
+      fullReady: entry.fullReady,
+      lodReadyStep: entry.lodReadyStep,
+      meshBytes: entry.meshBytes,
+    };
   }
+
+  updateSurface(key: string, surfaceY: number) {
+    const entry = this.chunks.get(key);
+    if (entry) entry.surfaceY = surfaceY;
+  }
+
+  private entryAt(cx: number, cz: number) {
+    return this.coordinateIndex.get(cx + ',' + cz);
+  }
+
   dispose() {
-    for (const entry of this.chunks.values()) this.remove(entry);
+    for (const key of this.chunks.keys()) this.remove(key);
     this.scene.remove(this.root);
     this.visibleSectionKeys.clear();
     this.visibilityEntryMasks.clear();
@@ -123,7 +140,7 @@ export class ChunkScene {
     if (!this.displayedChunkKeyCacheDirty) return this.displayedChunkKeyCache;
     const out = new Set<string>();
     for (const e of this.chunks.values()) {
-      if (e.displayed === 'none' || !this.hasVisibleMesh(e)) continue;
+      if (e.displayed === 'none' || !this.hasVisibleMesh(e.key)) continue;
       out.add(`${e.cx},${e.cz}`);
     }
     this.displayedChunkKeyCache = out;
@@ -159,7 +176,7 @@ export class ChunkScene {
   }
 
   private lodVisibleForTopClip(): boolean {
-    return !this.topDownView || this.topClipRange.maxY >= CHUNK_WORLD_MAX_Y;
+    return !this.topDownView || this.topClipRange.maxY >= WORLD_MAX_Y;
   }
 
   private applyFullSectionTopClip() {
@@ -183,7 +200,7 @@ export class ChunkScene {
     this.applyLodTopClip();
   }
 
-  private updateFullSectionVisibility(camera: ChunkSchedulerCamera) {
+  private updateFullSectionVisibility(camera: ViewState) {
     if (!this.fullSectionIndex.size) return;
     if (this.topDownView) return;
     const startCx = Math.floor(camera.position.x / 16);
@@ -265,23 +282,15 @@ export class ChunkScene {
     queueEntries.length = 0;
   }
 
-  private updateSpecialRenderVisibility(camera: ChunkSchedulerCamera) {
-    const radius = this.fullDetailRadius;
-    const centerCx = Math.floor(camera.position.x / 16);
-    const centerCz = Math.floor(camera.position.z / 16);
+  private updateSpecialRenderVisibility() {
     if (
       this.lastSpecialVisibilityRevision === this.sectionVisibilityRevision &&
-      this.lastSpecialCenterCx === centerCx &&
-      this.lastSpecialCenterCz === centerCz &&
-      this.lastSpecialRadius === radius
+      this.lastSpecialKeys === this.fullDetailKeys
     )
       return;
-    const radius2 = radius * radius;
     let changed = false;
     for (const section of this.fullSectionIndex.values()) {
-      const dx = section.cx - centerCx;
-      const dz = section.cz - centerCz;
-      const allowed = section.visible && dx * dx + dz * dz <= radius2;
+      const allowed = section.visible && this.fullDetailKeys.has(section.chunkKey);
       for (const mesh of section.specialMeshes) {
         if (mesh.visible === allowed) continue;
         mesh.visible = allowed;
@@ -289,13 +298,11 @@ export class ChunkScene {
       }
     }
     this.lastSpecialVisibilityRevision = this.sectionVisibilityRevision;
-    this.lastSpecialCenterCx = centerCx;
-    this.lastSpecialCenterCz = centerCz;
-    this.lastSpecialRadius = radius;
+    this.lastSpecialKeys = this.fullDetailKeys;
     if (changed) this.invalidateDisplayedChunkKeys();
   }
 
-  private displayFull(e: ChunkSceneEntry, sections: SectionMeshMsg[], version: number) {
+  private displayFull(e: ChunkSceneEntry, sections: SectionMesh[], version: number) {
     const group = new THREE.Group();
     let meshBytes = 0;
     for (const s of sections) {
@@ -319,10 +326,11 @@ export class ChunkScene {
       }
       const section: FullSectionRender = {
         key: this.sectionKey(e.cx, s.sy, e.cz),
+        chunkKey: e.key,
         cx: e.cx,
         sy: s.sy,
         cz: e.cz,
-        visibility: s.visibility ?? SECTION_VISIBILITY_ALL,
+        visibility: s.visibility,
         meshes: sectionMeshes,
         specialMeshes,
         visible: sectionVisible,
@@ -340,7 +348,7 @@ export class ChunkScene {
       this.root.add(group);
       e.group = group;
     }
-    if (this.latestCamera) this.updateSpecialRenderVisibility(this.latestCamera);
+    if (this.latestCamera) this.updateSpecialRenderVisibility();
     e.displayed = 'full';
     e.displayedVersion = version;
     e.displayedLodStep = 0;
@@ -407,7 +415,11 @@ export class ChunkScene {
     };
   }
 
-  remove(e: ChunkSceneEntry) {
+  remove(key: string) {
+    const e = this.chunks.get(key);
+    if (!e) return;
+    this.chunks.delete(key);
+    this.coordinateIndex.delete(e.cx + ',' + e.cz);
     const hadSections = e.fullSections.length > 0;
     const hadDisplay = e.displayed !== 'none' || e.group !== null;
     for (const section of e.fullSections) this.fullSectionIndex.delete(section.key);
@@ -432,8 +444,9 @@ export class ChunkScene {
     if (hadDisplay) this.invalidateDisplayedChunkKeys();
   }
 
-  hasVisibleMesh(e: ChunkSceneEntry): boolean {
-    if (!e.group || !e.group.visible) return false;
+  hasVisibleMesh(key: string): boolean {
+    const e = this.chunks.get(key);
+    if (!e || !e.group || !e.group.visible) return false;
     if (e.displayed === 'lod') {
       return e.group instanceof THREE.Mesh
         ? e.group.visible

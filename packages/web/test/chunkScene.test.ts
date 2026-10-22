@@ -1,7 +1,9 @@
+import { captureView } from '../src/render/viewSnapshot.js';
 import * as THREE from 'three';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ChunkScene } from '../src/render/chunkScene.js';
+import { SECTION_VISIBILITY_ALL } from '@violet-map/render';
 import { chunkKey } from '../src/worker/protocol.js';
 
 test('section visibility revisits independent entrances and stops at a solid neighbor', () => {
@@ -84,41 +86,43 @@ test('the scene owns mesh replacement, clip visibility and geometry disposal but
     fullReady: false,
     lodReadyStep: 0,
   };
-  const entries = new Map([[entry.key, entry]]);
   const scene = new THREE.Scene();
   const material = new THREE.MeshBasicMaterial();
   let materialDisposals = 0,
     geometryDisposals = 0;
   material.addEventListener('dispose', () => materialDisposals++);
-  const terrain = new ChunkScene(
-    scene,
-    { opaque: material, specialCutout: material, lod: material } as never,
-    entries,
-    () => entry,
-  );
+  const terrain = new ChunkScene(scene, { opaque: material, specialCutout: material, lod: material } as never);
   const camera = new THREE.PerspectiveCamera();
   camera.position.set(0, 80, 0);
-  terrain.setView(camera, false, { minY: -80, maxY: 384 });
+  terrain.setView(captureView(camera, false, { minY: -80, maxY: 384 }));
   const mesh = {
     positions: new Uint16Array([0, 0, 0, 65535, 0, 0, 0, 65535, 0]),
     indices: new Uint16Array([0, 1, 2]),
     colors: new Uint8Array(12),
     lights: new Uint8Array(6),
   };
-  terrain.replace(entry, { mode: 'full', sections: [{ sy: 0, layers: { opaque: mesh, specialCutout: mesh } }] }, 1, 1);
-  terrain.updateVisibility(8);
+  terrain.replace(
+    entry,
+    {
+      mode: 'full',
+      sections: [{ sy: 0, layers: { opaque: mesh, specialCutout: mesh }, visibility: SECTION_VISIBILITY_ALL }],
+    },
+    1,
+    1,
+  );
+  terrain.updateVisibility(new Set([entry.key]));
   assert.equal(terrain.displayedChunkKeys().has('0,0'), true);
-  entry.group!.traverse((object) => {
+  terrain.root.traverse((object) => {
     if (object instanceof THREE.Mesh) object.geometry.addEventListener('dispose', () => geometryDisposals++);
   });
-  terrain.setView(camera, true, { minY: 32, maxY: 64 });
+  terrain.setView(captureView(camera, true, { minY: 32, maxY: 64 }));
   assert.equal(terrain.displayedChunkKeys().size, 0);
-  terrain.setView(camera, false, { minY: -80, maxY: 384 });
-  terrain.updateVisibility(8);
+  terrain.setView(captureView(camera, false, { minY: -80, maxY: 384 }));
+  terrain.updateVisibility(new Set([entry.key]));
   assert.equal(terrain.displayedChunkKeys().size, 1);
   terrain.replace(entry, { mode: 'lod', mesh }, 2, 2);
   assert.equal(geometryDisposals, 2);
-  entry.group!.traverse((object) => {
+  terrain.root.traverse((object) => {
     if (object instanceof THREE.Mesh) object.geometry.addEventListener('dispose', () => geometryDisposals++);
   });
   terrain.dispose();

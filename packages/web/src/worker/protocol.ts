@@ -1,4 +1,5 @@
-import type { AssetBundle, AtlasIndex, BlockInfoMap, RenderLayer, TextureAlphaMap } from '@violet-map/core/assets';
+import type { SectionMesh, LodStep } from '../view/terrain';
+import type { AssetBundle, AtlasIndex, BlockInfoMap, TextureAlphaMap } from '@violet-map/core/assets';
 import type { BiomeMap, DimensionDef } from '@violet-map/core/domain';
 import type { MeshBuffers } from '@violet-map/render';
 
@@ -28,14 +29,8 @@ export type WorkerRequest =
       entities?: ArrayBuffer;
     }
   | { type: 'mesh'; key: string; version: number }
-  | { type: 'lod'; key: string; step: number; version: number }
+  | { type: 'lod'; key: string; step: LodStep; version: number }
   | { type: 'drop'; key: string };
-
-export interface SectionMeshMsg {
-  sy: number;
-  layers: Partial<Record<RenderLayer, MeshBuffers>>;
-  visibility?: number;
-}
 
 export interface WorkerChunkProfile {
   chunkBytes: number;
@@ -63,12 +58,12 @@ export type WorkerResponse =
     }
   | { type: 'chunkError'; key: string; contentDigest: string; error: string }
   | { type: 'meshError'; key: string; version: number; kind: 'full' | 'lod'; error: string }
-  | { type: 'meshResult'; key: string; version: number; sections: SectionMeshMsg[]; profile?: WorkerMeshProfile }
+  | { type: 'meshResult'; key: string; version: number; sections: SectionMesh[]; profile?: WorkerMeshProfile }
   | {
       type: 'lodResult';
       key: string;
       version: number;
-      step: number;
+      step: LodStep;
       mesh: MeshBuffers | null;
       profile?: WorkerMeshProfile;
     };

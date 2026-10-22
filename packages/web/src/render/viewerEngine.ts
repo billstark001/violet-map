@@ -1,4 +1,7 @@
-import type { TopClipRange } from './chunkScene';
+import { ChunkScene } from './chunkScene';
+import type { TopClipRange } from '../view/worldGeometry';
+import { captureView } from './viewSnapshot';
+import { TOP_MAP_MAX_RADIUS_BLOCKS } from '../scheduling/topMapPolicy';
 import { schedulerTuningForPreset, type SchedulerPreset } from '../scheduling/profiles';
 import { collectTextureIds } from '@violet-map/core/assets';
 import { type WorldCapabilities } from '@violet-map/core/contracts';
@@ -19,8 +22,8 @@ import {
   VIEW_STORAGE_KEY,
   type InitialView,
 } from './cameraState';
-import { ChunkManager, type ChunkManagerDiagnosticSnapshot } from '../scheduling/chunkManager';
-import { EMPTY_CHUNK_SCHEDULER_STATS, type ChunkSchedulerStats } from '../scheduling/contracts';
+import { ChunkRuntime, type ChunkRuntimeDiagnosticSnapshot } from '../runtime/chunkRuntime';
+import { EMPTY_CHUNK_SCHEDULER_STATS, type ChunkSchedulerStats } from '../diagnostics/contracts';
 import { clampFlyPitch, FlyControls, normalizeFlyYaw, TopDownControls, type FlyView } from './controls';
 import {
   createMaterials,
@@ -33,7 +36,7 @@ import {
 import { OverlayManager, type OverlayDiagnosticSnapshot } from './overlayManager';
 import { buildRenderKey } from './resourceKey';
 import { TopMapScene } from './topMapScene';
-import { TopMapManager, type TopMapDiagnosticSnapshot } from '../scheduling/topMapManager';
+import { TopMapRuntime, type TopMapDiagnosticSnapshot } from '../runtime/topMapRuntime';
 import { TransparencyRenderer, type TransparencyDiagnosticSnapshot } from './transparency';
 
 // Fluid UVs, exterior AO for partial models, and special-model transforms all
@@ -43,9 +46,7 @@ const SKY_PLANE_FORWARD = new THREE.Vector3(0, 0, 1);
 const TOP_CAMERA_HEIGHT = 1024;
 const TOP_ORTHO_HEIGHT = 512;
 const TOP_PERSPECTIVE_FOV = 50;
-const TOP_MAP_FREE_VIEW_MAX_DISTANCE_CHUNKS = 1024;
-const TOP_MAP_FREE_VIEW_MAX_DISTANCE_BLOCKS = TOP_MAP_FREE_VIEW_MAX_DISTANCE_CHUNKS * 16;
-const LONG_RANGE_CAMERA_FAR = TOP_MAP_FREE_VIEW_MAX_DISTANCE_BLOCKS + 2 * 512;
+const LONG_RANGE_CAMERA_FAR = TOP_MAP_MAX_RADIUS_BLOCKS + 2 * 512;
 const DEFAULT_DIMENSION_DEF = {
   hasSkyLight: true,
   ambientLight: 0.18,
@@ -104,7 +105,7 @@ export interface ViewerDiagnosticSnapshot {
   };
   camera: ViewerStatsPayload;
   schedulerPreset: SchedulerPreset;
-  chunkManager: ChunkManagerDiagnosticSnapshot | null;
+  chunkManager: ChunkRuntimeDiagnosticSnapshot | null;
   topMap: TopMapDiagnosticSnapshot;
   overlays: OverlayDiagnosticSnapshot;
   transparency: TransparencyDiagnosticSnapshot;
@@ -142,7 +143,7 @@ interface Engine {
   flyControls: FlyControls;
   topPerspectiveControls: TopDownControls;
   topOrthographicControls: TopDownControls;
-  topMap: TopMapManager;
+  topMap: TopMapRuntime;
   overlays: OverlayManager;
   materials: TerrainMaterials;
   terrainTexture: THREE.Texture;
@@ -189,7 +190,7 @@ interface FrameState {
 
 interface FrameContext {
   engine: Engine;
-  manager: ChunkManager | null;
+  manager: ChunkRuntime | null;
   latestStats: ChunkSchedulerStats;
   props: ViewerOptions;
   capabilities: WorldCapabilities | null;
@@ -276,7 +277,7 @@ function statsForCamera(s: ChunkSchedulerStats, camera: THREE.Camera, viewMode: 
 
 function diagnosticSnapshotForViewer(
   engine: Engine,
-  manager: ChunkManager | null,
+  manager: ChunkRuntime | null,
   stats: ChunkSchedulerStats,
   viewMode: ViewMode,
   schedulerPreset: SchedulerPreset,
@@ -739,7 +740,7 @@ function createEngine(
   const textureAnimations = createTextureAnimationUniforms(resources.atlas.animations);
   const materials = createMaterials(terrainTexture, shared, textureAnimations);
   const controls = createControls(renderer.domElement, cameras, initialView, fastMoveMultiplier, inertiaEnabled);
-  const topMap = new TopMapManager(new TopMapScene(scene, shared));
+  const topMap = new TopMapRuntime(new TopMapScene(scene, shared));
 
   const engine: Engine = {
     renderer,
@@ -837,7 +838,7 @@ function updateActiveControls(engine: Engine, viewMode: ViewMode, dt: number) {
 
 function updateChunksAndTopMap(
   engine: Engine,
-  manager: ChunkManager | null,
+  manager: ChunkRuntime | null,
   props: ViewerOptions,
   capabilities: WorldCapabilities | null,
   now: number,
@@ -847,14 +848,9 @@ function updateChunksAndTopMap(
   const offlineTopMap = topMapAvailable(capabilities, props.dimension);
 
   engine.topMap.configure(props.world, props.dimension, offlineTopMap);
-  if (manager) manager.terrain.root.visible = true;
-  manager?.update(engine.activeCamera, now, false, topView, props.topClipRange);
-  engine.topMap.update(engine.activeCamera, now, {
-    mode: topView ? 'top' : 'perspective',
-    radiusBlocks: TOP_MAP_FREE_VIEW_MAX_DISTANCE_BLOCKS,
-    maxDistanceBlocks: TOP_MAP_FREE_VIEW_MAX_DISTANCE_BLOCKS,
-    onlineChunks: manager?.terrain.displayedChunkKeys(),
-  });
+  const view = captureView(engine.activeCamera, topView, props.topClipRange);
+  manager?.update(view, now);
+  engine.topMap.update(view, now, manager ? manager.terrain.displayedChunkKeys() : new Set());
 
   return dimDef;
 }
@@ -864,7 +860,7 @@ function dayFactorForDimension(dimDef: ViewerDimensionDef, timeOfDay: number): n
   return clamp01(Math.cos(timeOfDay * Math.PI * 2) * 2 + 0.5);
 }
 
-function resolveBiomeName(manager: ChunkManager | null, dimDef: ViewerDimensionDef, camera: THREE.Camera): string {
+function resolveBiomeName(manager: ChunkRuntime | null, dimDef: ViewerDimensionDef, camera: THREE.Camera): string {
   const ccx = Math.floor(camera.position.x / 16);
   const ccz = Math.floor(camera.position.z / 16);
   return manager?.biomeAt(ccx, ccz) ?? dimDef?.defaultBiome ?? 'minecraft:plains';
@@ -910,7 +906,7 @@ function applyFogRange(engine: Engine, topView: boolean, dense: boolean, viewDis
 
 function applyLightingAndFog(
   engine: Engine,
-  manager: ChunkManager | null,
+  manager: ChunkRuntime | null,
   props: ViewerOptions,
   dimDef: ViewerDimensionDef,
   topView: boolean,
@@ -1032,9 +1028,9 @@ function renderFrame({ engine, manager, latestStats, props, capabilities, state 
   engine.transparency.render(engine.scene, camera);
 }
 
-function createWorldManager(engine: Engine, props: ViewerOptions): ChunkManager {
+function createWorldManager(engine: Engine, props: ViewerOptions): ChunkRuntime {
   const dimDef = dimensionDefinition(engine.dimensions, props.dimension);
-  return new ChunkManager(engine.scene, engine.materials, engine.initPayload, {
+  return new ChunkRuntime(new ChunkScene(engine.scene, engine.materials), engine.initPayload, {
     renderRoot: resourceClient.current(props.world)!.renderRoot,
     world: props.world,
     sourceScope: resourceClient.current(props.world)!.sourceScope,
@@ -1074,9 +1070,9 @@ function moveCameraToTarget(engine: Engine, target: CameraPositionRequest, viewM
   setControlsEnabled(engine, viewMode);
 }
 
-function updateManagerAfterCameraTarget(engine: Engine, manager: ChunkManager | null, props: ViewerOptions) {
+function updateManagerAfterCameraTarget(engine: Engine, manager: ChunkRuntime | null, props: ViewerOptions) {
   const topView = isTopViewMode(props.viewMode);
-  manager?.update(engine.activeCamera, performance.now(), true, topView, props.topClipRange);
+  manager?.update(captureView(engine.activeCamera, topView, props.topClipRange), performance.now(), true);
 }
 
 /**
@@ -1087,7 +1083,7 @@ function updateManagerAfterCameraTarget(engine: Engine, manager: ChunkManager | 
  */
 export class ViewerController {
   private engine: Engine | null = null;
-  private manager: ChunkManager | null = null;
+  private manager: ChunkRuntime | null = null;
   private latestStats: ChunkSchedulerStats = { ...EMPTY_CHUNK_SCHEDULER_STATS };
   private capabilities: WorldCapabilities | null = null;
   private capabilityGeneration = 0;
@@ -1264,11 +1260,9 @@ export class ViewerController {
         schedulerTuningForPreset(props.schedulerPreset, props.viewDistance, props.lodDistance),
       );
       this.manager?.update(
-        engine.activeCamera,
+        captureView(engine.activeCamera, isTopViewMode(props.viewMode), props.topClipRange),
         performance.now(),
         true,
-        isTopViewMode(props.viewMode),
-        props.topClipRange,
       );
     }
     const target = props.cameraTarget;

@@ -1,7 +1,7 @@
 import { SCHEDULER_PRESETS } from '../scheduling/profiles';
 import i18n, { language, languageOptions, t } from '../i18n';
 import { clearDebugLog } from '../logger';
-import { clearMeshCache } from '../scheduling/meshCache';
+import { clearMeshCache } from '../resources/meshCache';
 import { serviceCapabilities } from '../runtime';
 import { cacheStats, diagnosticProvider, refreshCacheStats, settings } from '../state/viewer';
 import { browserStorage } from '../browserStorage';

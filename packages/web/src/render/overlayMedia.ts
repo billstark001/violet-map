@@ -3,7 +3,7 @@ import { parseStaticGlb } from '@violet-map/core/overlays';
 import * as THREE from 'three';
 import { resourceDownloader } from '../resources/download';
 import { loadBrowserImage } from '../browserImage';
-import type { DisposableOverlayResource } from '../scheduling/overlayResources';
+import type { DisposableOverlayResource } from '../resources/overlayPool';
 
 export interface OverlayMediaResource extends DisposableOverlayResource {
   instantiate(feature: MediaFeature): THREE.Object3D;

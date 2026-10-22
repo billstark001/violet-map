@@ -5,19 +5,22 @@ import {
   type PreparedTopMapTile,
 } from '@violet-map/core/formats/top-map';
 import { topMapCoverageKeyFromMask } from '@violet-map/render/top-map/mesh';
-import * as THREE from 'three';
+import type { ViewState } from '../view/state';
+import {
+  TOP_MAP_MAX_RADIUS_BLOCKS,
+  TOP_MAP_MAX_RESIDENT_TILES,
+  TOP_MAP_MAX_WANTED_TILES,
+  TOP_MAP_MAX_PENDING_TILES,
+  TOP_MAP_TILE_RETRY_MS,
+  TOP_MAP_MANIFEST_RETRY_MS,
+  TOP_MAP_UPDATE_INTERVAL_MS,
+} from '../scheduling/topMapPolicy';
 import { fetchTopMapManifest, fetchTopMapTile } from '../api';
 import { debugLog } from '../logger';
 import { resourceClient } from '../resources/client';
-import type { TopMapDisplay } from '../runtime/topMapDisplay';
-import { planTopMapTiles, topMapLodStep, type RegionCoordinate } from './topMapPlanner';
+import type { TopMapDisplay } from './topMapDisplay';
+import { planTopMapTiles, topMapLodStep, topMapViewMetrics, type RegionCoordinate } from '../scheduling/topMapPlanner';
 
-const MAX_RESIDENT_TILES = 96;
-const MAX_WANTED_TILES = 96;
-const MAX_PENDING_TILES = 6;
-const FAILED_TILE_RETRY_MS = 12000;
-const FAILED_MANIFEST_RETRY_MS = 5000;
-const UPDATE_INTERVAL_MS = 100;
 const FULL_COVERAGE_KEY = '*';
 const TOP_MAP_CHUNKS_PER_AXIS = TOP_MAP_TILE_BLOCKS / 16;
 const TOP_MAP_CHUNK_MASK_BYTES = (TOP_MAP_CHUNKS_PER_AXIS * TOP_MAP_CHUNKS_PER_AXIS) / 8;
@@ -25,21 +28,13 @@ const TOP_MAP_CHUNK_MASK_BYTES = (TOP_MAP_CHUNKS_PER_AXIS * TOP_MAP_CHUNKS_PER_A
 function residentTileBudget(): number {
   const memory =
     typeof navigator !== 'undefined' ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory : undefined;
-  if (memory !== undefined && memory <= 4) return Math.min(MAX_RESIDENT_TILES, 48);
-  if (memory !== undefined && memory <= 8) return Math.min(MAX_RESIDENT_TILES, 72);
-  return MAX_RESIDENT_TILES;
+  if (memory !== undefined && memory <= 4) return Math.min(TOP_MAP_MAX_RESIDENT_TILES, 48);
+  if (memory !== undefined && memory <= 8) return Math.min(TOP_MAP_MAX_RESIDENT_TILES, 72);
+  return TOP_MAP_MAX_RESIDENT_TILES;
 }
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
-}
-
-export interface TopMapUpdateOptions {
-  mode: 'perspective' | 'top';
-  radiusBlocks?: number;
-  /** Hard radial cutoff around the active camera. */
-  maxDistanceBlocks?: number;
-  onlineChunks?: ReadonlySet<string>;
 }
 
 export interface TopMapDiagnosticSnapshot {
@@ -98,7 +93,7 @@ function buildTileCoverage(onlineChunks: ReadonlySet<string> | undefined): Map<s
   return coverage;
 }
 
-export class TopMapManager {
+export class TopMapRuntime {
   private readonly tiles = new Map<string, TopMapTile>();
   private readonly pendingTiles = new Set<string>();
   private readonly tileAborts = new Map<string, AbortController>();
@@ -113,7 +108,7 @@ export class TopMapManager {
   private regions = new Map<string, RegionCoordinate>();
   private failedTiles = new Map<string, number>();
   private wantedTiles = new Set<string>();
-  private latestMode: TopMapUpdateOptions['mode'] = 'top';
+  private latestMode: ViewState['mode'] = 'top';
   private latestCameraX = 0;
   private latestCameraZ = 0;
   private latestZoom = 1;
@@ -166,7 +161,7 @@ export class TopMapManager {
     if (topMapEnabled) void this.loadManifest(world, dimension, this.manifestSeq);
   }
 
-  update(camera: THREE.Camera, now: number, options: TopMapUpdateOptions) {
+  update(viewState: ViewState, now: number, onlineChunks: ReadonlySet<string>) {
     if (this.disposed) return;
     const topMapAllowed = this.topMapEnabled && (!this.manifestLoaded || this.regions.size > 0);
     if (!topMapAllowed || !this.world) {
@@ -179,32 +174,32 @@ export class TopMapManager {
         void this.loadManifest(this.world, this.dimension, this.manifestSeq);
       return;
     }
-    if (now - this.lastUpdateAt < UPDATE_INTERVAL_MS) return;
+    if (now - this.lastUpdateAt < TOP_MAP_UPDATE_INTERVAL_MS) return;
     this.lastUpdateAt = now;
 
-    const view = this.viewMetrics(camera, options);
-    this.latestMode = options.mode;
-    this.latestCameraX = camera.position.x;
-    this.latestCameraZ = camera.position.z;
+    const view = topMapViewMetrics(viewState);
+    this.latestMode = viewState.mode;
+    this.latestCameraX = viewState.position.x;
+    this.latestCameraZ = viewState.position.z;
     this.latestZoom = view.zoom;
-    if (this.coverageSource !== options.onlineChunks) {
-      this.coverageSource = options.onlineChunks;
-      this.latestCoverage = buildTileCoverage(options.onlineChunks);
+    if (this.coverageSource !== onlineChunks) {
+      this.coverageSource = onlineChunks;
+      this.latestCoverage = buildTileCoverage(onlineChunks);
     }
     this.display.setEnabled(true);
     const radiusX = view.width / 2 + TOP_MAP_TILE_BLOCKS;
     const radiusZ = view.height / 2 + TOP_MAP_TILE_BLOCKS;
-    const minRx = Math.floor((camera.position.x - radiusX) / TOP_MAP_TILE_BLOCKS);
-    const maxRx = Math.floor((camera.position.x + radiusX) / TOP_MAP_TILE_BLOCKS);
-    const minRz = Math.floor((camera.position.z - radiusZ) / TOP_MAP_TILE_BLOCKS);
-    const maxRz = Math.floor((camera.position.z + radiusZ) / TOP_MAP_TILE_BLOCKS);
+    const minRx = Math.floor((viewState.position.x - radiusX) / TOP_MAP_TILE_BLOCKS);
+    const maxRx = Math.floor((viewState.position.x + radiusX) / TOP_MAP_TILE_BLOCKS);
+    const minRz = Math.floor((viewState.position.z - radiusZ) / TOP_MAP_TILE_BLOCKS);
+    const maxRz = Math.floor((viewState.position.z + radiusZ) / TOP_MAP_TILE_BLOCKS);
     const activeCandidates = planTopMapTiles(this.regions, {
       bounds: { minRx, maxRx, minRz, maxRz },
-      cameraX: camera.position.x,
-      cameraZ: camera.position.z,
-      maxDistanceBlocks: options.maxDistanceBlocks,
-      limit: Math.min(MAX_WANTED_TILES, this.residentLimit),
-      mode: options.mode,
+      cameraX: viewState.position.x,
+      cameraZ: viewState.position.z,
+      maxDistanceBlocks: TOP_MAP_MAX_RADIUS_BLOCKS,
+      limit: Math.min(TOP_MAP_MAX_WANTED_TILES, this.residentLimit),
+      mode: viewState.mode,
       zoom: view.zoom,
     });
 
@@ -222,7 +217,7 @@ export class TopMapManager {
       } else if (
         !this.pendingTiles.has(candidate.key) &&
         !this.tileFailedRecently(candidate.key, now) &&
-        this.pendingTiles.size < MAX_PENDING_TILES
+        this.pendingTiles.size < TOP_MAP_MAX_PENDING_TILES
       ) {
         void this.loadTile(candidate.rx, candidate.rz, candidate.key, now, step);
       }
@@ -238,7 +233,7 @@ export class TopMapManager {
     this.wantedTiles = wanted;
     this.evictTiles(wanted);
     debugLog('top-map', 'update', {
-      mode: options.mode,
+      mode: viewState.mode,
       candidates: activeCandidates.length,
       resident: this.tiles.size,
       pending: this.pendingTiles.size,
@@ -339,7 +334,7 @@ export class TopMapManager {
       if (isAbortError(error) || abort.signal.aborted) return;
       if (this.disposed || seq !== this.manifestSeq || world !== this.world || dimension !== this.dimension) return;
       this.manifestLoaded = false;
-      this.manifestRetryAt = performance.now() + FAILED_MANIFEST_RETRY_MS;
+      this.manifestRetryAt = performance.now() + TOP_MAP_MANIFEST_RETRY_MS;
       debugLog('top-map', 'manifest-error', {
         world,
         dimension,
@@ -417,7 +412,7 @@ export class TopMapManager {
   private tileFailedRecently(key: string, now: number): boolean {
     const failedAt = this.failedTiles.get(key);
     if (failedAt === undefined) return false;
-    if (now - failedAt < FAILED_TILE_RETRY_MS) return true;
+    if (now - failedAt < TOP_MAP_TILE_RETRY_MS) return true;
     this.failedTiles.delete(key);
     return false;
   }
@@ -449,25 +444,5 @@ export class TopMapManager {
   private removeTile(key: string) {
     if (!this.tiles.delete(key)) return;
     this.display.remove(key);
-  }
-
-  private viewMetrics(
-    camera: THREE.Camera,
-    options: TopMapUpdateOptions,
-  ): { width: number; height: number; zoom: number } {
-    if (options.mode === 'perspective') {
-      const size = Math.max(TOP_MAP_TILE_BLOCKS, options.radiusBlocks ?? TOP_MAP_TILE_BLOCKS * 2);
-      return { width: size * 2, height: size * 2, zoom: 1 };
-    }
-    if (camera instanceof THREE.OrthographicCamera) {
-      const height = (camera.top - camera.bottom) / camera.zoom;
-      const aspect = (camera.right - camera.left) / Math.max(1e-3, camera.top - camera.bottom);
-      return { width: height * aspect, height, zoom: camera.zoom };
-    }
-    if (camera instanceof THREE.PerspectiveCamera) {
-      const height = 2 * Math.max(1, camera.position.y) * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5);
-      return { width: height * camera.aspect, height, zoom: TOP_MAP_TILE_BLOCKS / Math.max(1, height) };
-    }
-    return { width: TOP_MAP_TILE_BLOCKS * 2, height: TOP_MAP_TILE_BLOCKS * 2, zoom: 1 };
   }
 }

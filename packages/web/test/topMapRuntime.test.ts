@@ -1,9 +1,11 @@
+import { captureView } from '../src/render/viewSnapshot.js';
+import { UNCLIPPED_VIEW } from '../src/view/worldGeometry.js';
 import assert from 'node:assert/strict';
 import { setImmediate } from 'node:timers/promises';
 import { test } from 'node:test';
 import * as THREE from 'three';
 import { TopMapScene } from '../src/render/topMapScene.js';
-import { TopMapManager } from '../src/scheduling/topMapManager.js';
+import { TopMapRuntime } from '../src/runtime/topMapRuntime.js';
 
 test('a transient manifest failure is retried on a later update', async () => {
   const originalFetch = globalThis.fetch;
@@ -22,14 +24,14 @@ test('a transient manifest failure is retried on a later update', async () => {
     if (calls === 1) throw new Error('temporary outage');
     return Response.json({ hasTopMap: false, world: 'world', dimension: 'minecraft:overworld' });
   };
-  const manager = new TopMapManager(new TopMapScene(new THREE.Scene(), {} as never));
+  const manager = new TopMapRuntime(new TopMapScene(new THREE.Scene(), {} as never));
   try {
     manager.configure('world', 'minecraft:overworld', true);
     await setImmediate();
     assert.equal(manager.diagnosticSnapshot().manifestLoaded, false);
     const camera = new THREE.OrthographicCamera(-10, 10, 10, -10);
     camera.position.set(0, 100, 0);
-    manager.update(camera, performance.now() + 6000, { mode: 'top' });
+    manager.update(captureView(camera, true, UNCLIPPED_VIEW), performance.now() + 6000, new Set());
     await setImmediate();
     assert.equal(calls, 2);
     assert.equal(manager.diagnosticSnapshot().manifestLoaded, true);
@@ -75,7 +77,7 @@ test('digest and archive scope switches abort pending tiles and dispose prior GP
       },
     });
   };
-  const manager = new TopMapManager(new TopMapScene(new THREE.Scene(), {} as never));
+  const manager = new TopMapRuntime(new TopMapScene(new THREE.Scene(), {} as never));
   t.after(() => manager.dispose());
   manager.configure('archive', 'minecraft:overworld', true);
   await setImmediate();
@@ -155,7 +157,7 @@ test('an obsolete tile failure cannot poison the replacement request or release 
       },
     });
   };
-  const manager = new TopMapManager(new TopMapScene(new THREE.Scene(), {} as never));
+  const manager = new TopMapRuntime(new TopMapScene(new THREE.Scene(), {} as never));
   t.after(() => {
     manager.dispose();
     globalThis.fetch = originalFetch;
@@ -169,7 +171,7 @@ test('an obsolete tile failure cannot poison the replacement request or release 
   state.loadTile = (...args: unknown[]) => (load = loadTile(...args));
   const camera = new THREE.OrthographicCamera(-10, 10, 10, -10);
   camera.position.set(0, 100, 0);
-  manager.update(camera, performance.now(), { mode: 'top' });
+  manager.update(captureView(camera, true, UNCLIPPED_VIEW), performance.now(), new Set());
   assert.deepEqual(manager.diagnosticSnapshot().wantedTiles, ['0,0']);
   await setImmediate();
   assert.ok(fail, 'the original resolve must be in flight');

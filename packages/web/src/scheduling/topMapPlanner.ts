@@ -1,3 +1,5 @@
+import type { ViewState } from '../view/state';
+import { TOP_MAP_MAX_RADIUS_BLOCKS } from './topMapPolicy';
 import { TOP_MAP_TILE_BLOCKS } from '@violet-map/core/formats/top-map';
 
 export interface RegionCoordinate {
@@ -70,4 +72,17 @@ export function planTopMapTiles(regions: ReadonlyMap<string, RegionCoordinate>, 
 export function topMapLodStep(distance: number, mode: TopMapPlanInput['mode'], zoom: number): number {
   if (mode === 'perspective') return distance <= 32 * 16 ? 2 : distance <= 128 * 16 ? 4 : 8;
   return zoom >= 2.25 ? 2 : zoom >= 1.15 ? 4 : 8;
+}
+
+export function topMapViewMetrics(view: ViewState): { width: number; height: number; zoom: number } {
+  if (view.mode === 'perspective')
+    return { width: TOP_MAP_MAX_RADIUS_BLOCKS * 2, height: TOP_MAP_MAX_RADIUS_BLOCKS * 2, zoom: 1 };
+  const projection = view.projection;
+  if (projection.kind === 'orthographic') {
+    const height = (projection.top - projection.bottom) / projection.zoom;
+    const aspect = (projection.right - projection.left) / Math.max(1e-3, projection.top - projection.bottom);
+    return { width: height * aspect, height, zoom: projection.zoom };
+  }
+  const height = 2 * Math.max(1, view.position.y) * Math.tan(projection.fovYRadians * 0.5);
+  return { width: height * projection.aspect, height, zoom: TOP_MAP_TILE_BLOCKS / Math.max(1, height) };
 }

@@ -1,7 +1,7 @@
+import type { TerrainMesh } from '../view/terrain';
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import { LruCache } from '@violet-map/core/cache';
-import { meshByteLength, type MeshBuffers } from '@violet-map/render';
-import type { SectionMeshMsg } from '../worker/protocol';
+import { meshByteLength } from '@violet-map/render';
 
 const DB_NAME = 'violet-map-mesh-cache';
 const STORE = 'meshes';
@@ -15,8 +15,6 @@ const TOUCH_INTERVAL_MS = 5 * 60 * 1000;
 const READ_DEADLINE_MS = 150;
 const TRANSACTION_DEADLINE_MS = 1000;
 
-export type CachedMesh = { mode: 'full'; sections: SectionMeshMsg[] } | { mode: 'lod'; mesh: MeshBuffers | null };
-
 export interface MeshCacheKeyParts {
   world: string;
   dimension: string;
@@ -24,7 +22,7 @@ export interface MeshCacheKeyParts {
   cx: number;
   cz: number;
   contentKey: string;
-  mode: CachedMesh['mode'];
+  mode: TerrainMesh['mode'];
   step?: number;
 }
 
@@ -35,11 +33,11 @@ interface Usage {
 }
 
 interface MeshCacheRecord extends Usage {
-  data: CachedMesh;
+  data: TerrainMesh;
 }
 
 interface MeshCacheDb extends DBSchema {
-  meshes: { key: string; value: { key: string; data: CachedMesh } };
+  meshes: { key: string; value: { key: string; data: TerrainMesh } };
   usage: { key: string; value: Usage };
 }
 
@@ -144,7 +142,7 @@ function cacheKey(parts: MeshCacheKeyParts) {
     .join('|');
 }
 
-function byteLength(data: CachedMesh) {
+function byteLength(data: TerrainMesh) {
   return data.mode === 'lod'
     ? data.mesh
       ? meshByteLength(data.mesh, 'retained')
@@ -162,7 +160,7 @@ async function metadata(): Promise<Usage[]> {
   return transaction(tx, () => tx.store.getAll(), READ_DEADLINE_MS);
 }
 
-async function write(record: Usage & { data?: CachedMesh }, generation = cacheGeneration): Promise<boolean> {
+async function write(record: Usage & { data?: TerrainMesh }, generation = cacheGeneration): Promise<boolean> {
   const retainedBytes = record.data ? record.bytes : 128;
   if (
     !cacheEnabled ||
@@ -239,7 +237,7 @@ export function isMeshCacheEnabled(): boolean {
 }
 
 /** Optional storage has a bounded latency and never owns a worker execution slot. */
-export async function getCachedMesh(parts: MeshCacheKeyParts): Promise<CachedMesh | undefined> {
+export async function getCachedMesh(parts: MeshCacheKeyParts): Promise<TerrainMesh | undefined> {
   if (!cacheEnabled) return undefined;
   const key = cacheKey(parts);
   const generation = cacheGeneration;
@@ -272,7 +270,7 @@ export async function getCachedMesh(parts: MeshCacheKeyParts): Promise<CachedMes
   return record.data;
 }
 
-export async function putCachedMesh(parts: MeshCacheKeyParts, data: CachedMesh): Promise<void> {
+export async function putCachedMesh(parts: MeshCacheKeyParts, data: TerrainMesh): Promise<void> {
   if (parts.mode !== data.mode) throw new Error('mesh cache mode mismatch');
   if (!cacheEnabled) return;
   const record = { key: cacheKey(parts), accessedAt: Date.now(), bytes: byteLength(data), data };

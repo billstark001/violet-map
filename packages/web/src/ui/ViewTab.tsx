@@ -1,3 +1,4 @@
+import { normalizeTopClipRange, WORLD_MIN_Y, WORLD_MAX_Y, TOP_CLIP_STEP } from '../view/worldGeometry';
 import { t } from '../i18n';
 import {
   activeOverlayMap,
@@ -10,13 +11,7 @@ import {
   worldsError,
   worldsLoading,
 } from '../state/viewer';
-import {
-  defaultTopClipRange,
-  normalizeTopClipRange,
-  TOP_CLIP_MAX_Y,
-  TOP_CLIP_MIN_Y,
-  TOP_CLIP_STEP,
-} from '../state/settings';
+import { defaultTopClipRange } from '../state/settings';
 import type { ViewMode } from '../render/viewerEngine';
 import { CameraFields } from './CameraFields';
 import { FieldGroup, RangeField, SelectField, ToggleField } from './fields';
@@ -67,7 +62,7 @@ export function ViewTab() {
   const value = settings.state.value;
   const { topClipRange } = value;
   const clip = (patch: Partial<typeof topClipRange>) =>
-    settings.update({ topClipRange: normalizeTopClipRange({ ...topClipRange, ...patch }) });
+    settings.update({ topClipRange: normalizeTopClipRange({ ...topClipRange, ...patch }, TOP_CLIP_STEP) });
   return (
     <FieldGroup>
       <SelectField
@@ -162,8 +157,8 @@ export function ViewTab() {
         id="top-clip-min"
         label={t('topClipMinY', { value: topClipRange.minY })}
         value={topClipRange.minY}
-        min={TOP_CLIP_MIN_Y}
-        max={TOP_CLIP_MAX_Y}
+        min={WORLD_MIN_Y}
+        max={WORLD_MAX_Y}
         step={TOP_CLIP_STEP}
         onChange={(minY) => clip({ minY: Math.min(minY, topClipRange.maxY) })}
       />
@@ -171,8 +166,8 @@ export function ViewTab() {
         id="top-clip-max"
         label={t('topClipMaxY', { value: topClipRange.maxY })}
         value={topClipRange.maxY}
-        min={TOP_CLIP_MIN_Y}
-        max={TOP_CLIP_MAX_Y}
+        min={WORLD_MIN_Y}
+        max={WORLD_MAX_Y}
         step={TOP_CLIP_STEP}
         onChange={(maxY) => clip({ maxY: Math.max(maxY, topClipRange.minY) })}
       />

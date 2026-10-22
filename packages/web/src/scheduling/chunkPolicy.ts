@@ -1,21 +1,14 @@
 import {
-  LOD_STEPS,
-  type LodStep,
   type ChunkSchedulingTuning,
   type ResolvedChunkScheduling,
   type ChunkSchedulerEntry,
   type ChunkPriority,
   type MeshTask,
-  type SchedulerEntryUpdate,
+  type ChunkDemand,
 } from './contracts';
+import { LOD_STEPS, type LodStep } from '../view/terrain';
 
-export const CHUNK_SIZE_BLOCKS = 16;
-
-export const CHUNK_WORLD_MIN_Y = -80;
-
-export const CHUNK_WORLD_MAX_Y = 384;
-
-export const DEFAULT_SURFACE_Y = 64;
+import { CHUNK_SIZE_BLOCKS, WORLD_MIN_Y, WORLD_MAX_Y } from '../view/worldGeometry';
 
 export const DEFAULT_ACTIVE_RADIUS_CHUNKS = 32;
 
@@ -40,8 +33,6 @@ export const BLOCKED_RENDER_HASH_BATCH_SIZE = 4;
 export const BLOCKED_RENDER_FETCH_BATCH_SIZE = 3;
 
 export const MAX_IO_QUEUE = 384;
-
-export const MAX_MESH_QUEUE = 64;
 
 export const DEFAULT_MAX_TRACKED_CHUNKS = 384;
 
@@ -142,27 +133,32 @@ export function activeCellCapacity(radiusChunks: number): number {
 }
 
 export function heightForSurfaceY(surfaceY: number): number {
-  return Math.max(1, Math.min(CHUNK_WORLD_MAX_Y - CHUNK_WORLD_MIN_Y, surfaceY - CHUNK_WORLD_MIN_Y + 1));
-}
-
-export function normalizeLodStep(value: number, fallback: LodStep): LodStep {
-  return LOD_STEPS.includes(value as LodStep) ? (value as LodStep) : fallback;
+  return Math.max(1, Math.min(WORLD_MAX_Y - WORLD_MIN_Y, surfaceY - WORLD_MIN_Y + 1));
 }
 
 export function precisionForStep(step: number): number {
-  const normalized = normalizeLodStep(step, 8);
-  if (normalized === 1) return 1;
-  if (normalized === 2) return 0.58;
-  if (normalized === 4) return 0.34;
+  if (!LOD_STEPS.includes(step as LodStep)) throw new RangeError('invalid LOD step');
+  if (step === 1) return 1;
+  if (step === 2) return 0.58;
+  if (step === 4) return 0.34;
   return 0.2;
 }
 
-export function normalizeTimeMs(now: number): number {
-  return Number.isFinite(now) ? now : performance.now();
+/** Visible geometry can remain on screen while a boundary/content repair is pending. */
+export function displayedGeometryPrecision(entry: ChunkSchedulerEntry): number {
+  if (entry.displayed === 'full') return 1;
+  if (entry.displayed === 'lod') return precisionForStep(entry.displayedLodStep);
+  return 0;
+}
+
+/** Residency selection distinguishes stale geometry from a valid completed representation. */
+export function validGeometryPrecision(entry: ChunkSchedulerEntry): number {
+  return entry.dirty ? 0 : displayedGeometryPrecision(entry);
 }
 
 export function trackerTimeSeconds(now: number): number {
-  return normalizeTimeMs(now) / 1000;
+  if (!Number.isFinite(now)) throw new RangeError('scheduler time must be finite');
+  return now / 1000;
 }
 
 export function resolveChunkScheduling(scheduling: ChunkSchedulingTuning = {}): ResolvedChunkScheduling {
@@ -343,6 +339,6 @@ export function meshMatchesTarget(kind: 'full' | 'lod', step: LodStep, target: L
   return kind === 'full' ? step === 1 && target === 1 : !disableLod && target !== 1 && step > 1 && step <= target;
 }
 
-export function isDemandFresh(record: SchedulerEntryUpdate | null, now: number): boolean {
-  return !!record && now - record.lastWantedAt <= IO_QUEUE_RETENTION_MS;
+export function isDemandFresh(record: Readonly<ChunkDemand> | undefined, now: number): boolean {
+  return !!record && now - record.wantedAt <= IO_QUEUE_RETENTION_MS;
 }

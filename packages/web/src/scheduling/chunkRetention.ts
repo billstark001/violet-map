@@ -1,7 +1,7 @@
-import type { ChunkSchedulerEntry, SchedulerEntryUpdate, ResolvedChunkScheduling } from './contracts';
+import type { ChunkSchedulerEntry, ChunkDemand, ResolvedChunkScheduling } from './contracts';
 import {
   activeCellCapacity,
-  precisionForStep,
+  validGeometryPrecision,
   isDemandFresh,
   OUTSIDE_ACTIVE_DROP_MS,
   LOW_VALUE_ACTIVE_DROP_MS,
@@ -9,7 +9,6 @@ import {
   LOW_VALUE_ACTIVE_MAX_IMPORTANCE,
   LOW_VALUE_ACTIVE_MAX_GAP,
 } from './chunkPolicy';
-import { debugLog } from '../logger';
 
 interface ChunkRetentionInput {
   keepKeys: ReadonlySet<string>;
@@ -19,7 +18,7 @@ interface ChunkRetentionInput {
   reservedSlots: number;
   config: Readonly<ResolvedChunkScheduling>;
   center: Readonly<{ cx: number; cz: number }>;
-  demandFor(entry: ChunkSchedulerEntry): SchedulerEntryUpdate | null;
+  demandFor(entry: ChunkSchedulerEntry): Readonly<ChunkDemand> | undefined;
 }
 
 export function selectChunkEvictions(input: ChunkRetentionInput): string[] {
@@ -73,7 +72,7 @@ export function selectChunkEvictions(input: ChunkRetentionInput): string[] {
 
   function isLowValueActiveEntry(entry: ChunkSchedulerEntry, now: number): boolean {
     if (entry.pendingFull || entry.pendingLod) return false;
-    if (now - (demandFor(entry)?.lastWantedAt ?? 0) < LOW_VALUE_ACTIVE_DROP_MS) return false;
+    if (now - (demandFor(entry)?.wantedAt ?? 0) < LOW_VALUE_ACTIVE_DROP_MS) return false;
     if (isDemandFresh(demandFor(entry), now)) return false;
     if (Math.hypot(entry.cx - center.cx, entry.cz - center.cz) < config.fullDetailRadiusChunks + 1) {
       return false;
@@ -90,31 +89,27 @@ export function selectChunkEvictions(input: ChunkRetentionInput): string[] {
   }
 
   function evictionImportance(entry: ChunkSchedulerEntry): number {
-    const value = demandFor(entry)?.lastImportance ?? 0;
+    const value = demandFor(entry)?.importance ?? 0;
     return Number.isFinite(value) ? value : 0;
   }
 
   function evictionGap(entry: ChunkSchedulerEntry): number {
-    const value = demandFor(entry)?.lastGap;
+    const value = demandFor(entry)?.gap;
     if (Number.isFinite(value)) return value!;
     return evictionImportance(entry) - evictionPrecision(entry);
   }
 
   function evictionPrecision(entry: ChunkSchedulerEntry): number {
-    if (entry.dirty) return 0;
-    if (entry.displayed === 'full') return 1;
-    if (entry.displayed === 'lod') return precisionForStep(entry.displayedLodStep);
-    if (entry.state === 'absent') return 1;
-    if (entry.state === 'error') return 0;
-    return 0;
+    if (!entry.dirty && entry.state === 'absent') return 1;
+    return validGeometryPrecision(entry);
   }
 
   function evictionScore(entry: ChunkSchedulerEntry, now: number): number {
-    const age = Math.max(0, now - (demandFor(entry)?.lastWantedAt ?? 0)) * 0.001;
+    const age = Math.max(0, now - (demandFor(entry)?.wantedAt ?? 0)) * 0.001;
     const dx = entry.cx - center.cx;
     const dz = entry.cz - center.cz;
     const distance = Math.hypot(dx, dz);
-    const score = demandFor(entry)?.lastScore ?? 0;
+    const score = demandFor(entry)?.priority.score ?? 0;
     const unrendered = entry.displayed === 'none' ? 2 : 0;
     const notResident = entry.state !== 'stored' ? 1 : 0;
     const rendered = entry.displayed === 'full' ? -0.8 : entry.displayed === 'lod' ? -0.35 : 0;
@@ -127,7 +122,7 @@ export function selectChunkEvictions(input: ChunkRetentionInput): string[] {
 
   for (const entry of all) {
     if (keepKeys.has(entry.key)) continue;
-    const age = now - (demandFor(entry)?.lastWantedAt ?? 0);
+    const age = now - (demandFor(entry)?.wantedAt ?? 0);
     if (age > OUTSIDE_ACTIVE_DROP_MS) {
       out.push(entry.key);
       already.add(entry.key);
@@ -208,18 +203,6 @@ export function selectChunkEvictions(input: ChunkRetentionInput): string[] {
       if (tracked <= hardLimit) break;
       dropVictim(victim);
     }
-  }
-
-  if (out.length) {
-    debugLog('scheduler', 'evict', {
-      evicted: out.length,
-      trackedBefore: all.length,
-      trackedAfter: all.length - out.length,
-      residentLimit,
-      reservedSlots,
-      softLimit,
-      hardLimit,
-    });
   }
 
   return out;

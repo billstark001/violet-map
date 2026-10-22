@@ -27,7 +27,7 @@ import { planOverlayAdmission, curveSamplingBudget, type OverlayCandidate } from
 import { OVERLAY_LIMITS } from './overlayLimits';
 import { OverlayMask, createMaskMaterial } from './overlayMask';
 import { loadOverlayMedia, type OverlayMediaResource } from './overlayMedia';
-import { OverlayResourcePool, type ResourceLease } from '../scheduling/overlayResources';
+import { OverlayResourcePool, type ResourceLease } from '../resources/overlayPool';
 
 const REFRESH_MS = 30_000;
 const RETRY_MS = 12_000;

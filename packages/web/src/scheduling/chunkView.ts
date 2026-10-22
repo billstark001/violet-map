@@ -1,23 +1,18 @@
-import * as THREE from 'three';
+import type { ViewState } from '../view/state';
 import { CameraGridTracker, type Pose, type RankedCell, type RankingResult } from './cameraGridTracker';
-import { debugLog, isDebugLoggingEnabled } from '../logger';
 import {
-  type LodStep,
-  type ChunkSchedulerCamera,
   type ChunkSchedulerOptions,
   type SchedulerCellInfo,
   type ChunkCandidate,
   type CriticalCell,
   type ChunkSchedulerEntry,
   type SchedulerFramePlan,
-  type SchedulerTickInput,
+  type SchedulerViewInput,
   type SchedulerCellDiagnostic,
   type ResolvedChunkScheduling,
 } from './contracts';
+import { type LodStep } from '../view/terrain';
 import {
-  CHUNK_SIZE_BLOCKS,
-  CHUNK_WORLD_MIN_Y,
-  DEFAULT_SURFACE_Y,
   TRACKER_CHUNK_SIZE,
   TRACKER_SEED_SECONDS,
   CRITICAL_CENTER_RAY_MAX_CHUNKS,
@@ -31,7 +26,7 @@ import {
   ACTIVE_KEEP_EPSILON,
   activeCellCapacity,
   heightForSurfaceY,
-  precisionForStep,
+  displayedGeometryPrecision,
   trackerTimeSeconds,
   targetLodStep,
   meshCoversTarget,
@@ -40,6 +35,7 @@ import {
   resolveChunkScheduling,
   comparePriority,
 } from './chunkPolicy';
+import { CHUNK_SIZE_BLOCKS, WORLD_MIN_Y, DEFAULT_SURFACE_Y } from '../view/worldGeometry';
 
 function emptyRankingResult(time: number): RankingResult {
   return {
@@ -74,7 +70,6 @@ export class ChunkViewPlanner {
   private tracker: CameraGridTracker | null = null;
   private trackerKey = '';
   private trackerSeeded = false;
-  private tmpDirection = new THREE.Vector3();
   private opts: ChunkSchedulerOptions = {};
   private currentConfig = resolveChunkScheduling();
   private currentCenter = { cx: 0, cz: 0 };
@@ -87,18 +82,17 @@ export class ChunkViewPlanner {
   clear() {
     this.resetTracker();
   }
-  plan(input: SchedulerTickInput): SchedulerFramePlan {
+  plan(input: SchedulerViewInput): SchedulerFramePlan {
     this.opts = input.options;
     const nowSeconds = trackerTimeSeconds(input.now);
-    const topDownView = input.topDownView ?? false;
     const cfg = resolveChunkScheduling(input.options.scheduling);
     this.currentConfig = cfg;
     this.ensureTracker(cfg);
 
-    const pose = this.poseFromCamera(input.camera);
+    const pose = this.poseFromView(input.view);
     const ranking = this.rankCells(pose, nowSeconds, cfg);
-    const centerCx = Math.floor(input.camera.position.x / CHUNK_SIZE_BLOCKS);
-    const centerCz = Math.floor(input.camera.position.z / CHUNK_SIZE_BLOCKS);
+    const centerCx = Math.floor(input.view.position.x / CHUNK_SIZE_BLOCKS);
+    const centerCz = Math.floor(input.view.position.z / CHUNK_SIZE_BLOCKS);
     this.currentCenter = { cx: centerCx, cz: centerCz };
     const nearPresenceCells = this.diskCells(centerCx, centerCz, cfg.nearPresenceRadiusChunks);
     const nearPresenceKeys = new Set(nearPresenceCells.map((cell) => input.keyFor(cell.i, cell.j)));
@@ -134,7 +128,7 @@ export class ChunkViewPlanner {
     // gap ranking, which used to leave them at full detail indefinitely. Add
     // explicit downgrade candidates so they can transition to LOD as attention
     // decays, even when they are no longer in the top tracker rankings.
-    const fullDowngradeCells = this.fullDowngradeCells(input.entries.values(), nowSeconds, criticalKeys);
+    const fullDowngradeCells = this.fullDowngradeCells(input.entries.values(), input.demands, nowSeconds, criticalKeys);
     const rankedCells = this.mergeRankedCells(
       criticalRankedCells,
       nearPresenceRankedCells,
@@ -162,6 +156,7 @@ export class ChunkViewPlanner {
     }
     const keepKeys = this.activeDiskKeys(pose, cfg, input.keyFor);
     const protectedKeys = new Set<string>(admitted);
+    const demands: ChunkCandidate[] = [];
     const candidates: ChunkCandidate[] = [];
 
     for (const cell of rankedCells) {
@@ -176,15 +171,13 @@ export class ChunkViewPlanner {
 
       const targetStep = critical
         ? 1
-        : targetLodStep(cell.importance, entry?.lastTargetStep ?? 8, this.opts.disableLod === true);
+        : targetLodStep(cell.importance, input.demands.get(key)?.targetStep ?? 8, this.opts.disableLod === true);
       const shouldSchedule = critical
         ? this.shouldScheduleCriticalCell(entry, info, targetStep)
         : nearPresence
           ? this.shouldScheduleNearPresenceCell(entry, info, targetStep)
           : this.shouldScheduleCell(cell, entry, info, targetStep, cfg);
-      if (!shouldSchedule) continue;
-
-      candidates.push({
+      const candidate: ChunkCandidate = {
         key,
         cx: cell.i,
         cz: cell.j,
@@ -207,7 +200,9 @@ export class ChunkViewPlanner {
                 ? NEAR_PRESENCE_SCORE_BOOST
                 : 0),
         updatedAt: input.now,
-      });
+      };
+      demands.push(candidate);
+      if (shouldSchedule) candidates.push(candidate);
     }
 
     candidates.sort((a, b) => comparePriority(a, b) || a.cx - b.cx || a.cz - b.cz);
@@ -222,19 +217,7 @@ export class ChunkViewPlanner {
     if (candidates.length > frameCandidateLimit) candidates.length = frameCandidateLimit;
     for (const candidate of candidates) protectedKeys.add(candidate.key);
 
-    if (isDebugLoggingEnabled()) {
-      debugLog('scheduler', 'tracker-frame', {
-        mode: topDownView ? 'topDown' : 'perspective',
-        center: [centerCx, centerCz],
-        activeRadiusChunks: cfg.activeRadiusChunks,
-        activeCells: rankedCells.length,
-        criticalCells: criticalCells.length,
-        nearPresenceCells: nearPresenceCells.length,
-        candidates: candidates.length,
-      });
-    }
-
-    return { candidates, keepKeys, protectedKeys, centerCx, centerCz };
+    return { demands, candidates, keepKeys, protectedKeys, fullDetailKeys, centerCx, centerCz };
   }
 
   private rankCells(pose: Pose, nowSeconds: number, cfg: ResolvedChunkScheduling): RankingResult {
@@ -316,6 +299,7 @@ export class ChunkViewPlanner {
 
   private fullDowngradeCells(
     entries: Iterable<ChunkSchedulerEntry>,
+    demands: ReadonlyMap<string, Readonly<import('./contracts').ChunkDemand>>,
     nowSeconds: number,
     forcedFull: ReadonlySet<string>,
   ): RankedCell[] {
@@ -324,6 +308,7 @@ export class ChunkViewPlanner {
 
     const out: RankedCell[] = [];
     for (const entry of entries) {
+      if (!demands.has(entry.key)) continue;
       if (forcedFull.has(entry.key) || entry.displayed !== 'full' || entry.dirty || entry.pendingFull) continue;
       const snapshot = tracker.getCellSnapshot(entry.cx, entry.cz, nowSeconds);
       const gap = snapshot.importance - snapshot.satisfaction;
@@ -335,7 +320,7 @@ export class ChunkViewPlanner {
         satisfaction: snapshot.satisfaction,
         gap,
       };
-      if (targetLodStep(cell.importance, entry?.lastTargetStep ?? 8, false) > 1) out.push(cell);
+      if (targetLodStep(cell.importance, demands.get(entry.key)!.targetStep, false) > 1) out.push(cell);
     }
     return out;
   }
@@ -420,20 +405,16 @@ export class ChunkViewPlanner {
     this.trackerSeeded = false;
   }
 
-  private poseFromCamera(camera: ChunkSchedulerCamera): Pose {
-    camera.updateMatrixWorld(true);
-    camera.getWorldDirection(this.tmpDirection);
-    const direction =
-      this.tmpDirection.lengthSq() > 0 ? this.tmpDirection.normalize() : this.tmpDirection.set(0, 0, -1);
-
+  private poseFromView(view: ViewState): Pose {
+    const length = Math.hypot(view.direction.x, view.direction.y, view.direction.z);
+    if (!(length > 0)) throw new RangeError('view direction must be nonzero');
+    const x = view.direction.x / length;
+    const y = view.direction.y / length;
+    const z = view.direction.z / length;
     return {
-      p: {
-        x: camera.position.x,
-        y: camera.position.y - CHUNK_WORLD_MIN_Y,
-        z: camera.position.z,
-      },
-      yaw: Math.atan2(direction.x, direction.z),
-      pitch: Math.asin(Math.max(-1, Math.min(1, direction.y))),
+      p: { x: view.position.x, y: view.position.y - WORLD_MIN_Y, z: view.position.z },
+      yaw: Math.atan2(x, z),
+      pitch: Math.asin(Math.max(-1, Math.min(1, y))),
     };
   }
 
@@ -469,8 +450,7 @@ export class ChunkViewPlanner {
       return 1;
     }
     if (entry.state === 'error') return 0;
-    if (entry.displayed === 'full') return 1;
-    if (entry.displayed === 'lod') return precisionForStep(entry.displayedLodStep);
+    if (entry.displayed !== 'none') return displayedGeometryPrecision(entry);
     if (entry.dirty) return 0;
     return Number.isFinite(info?.topMapSurfaceY) ? TOP_MAP_PRECISION : EMPTY_PRECISION;
   }

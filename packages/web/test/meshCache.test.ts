@@ -8,8 +8,8 @@ import {
   getMeshCacheStats,
   clearMeshCache,
   setMeshCacheEnabled,
-  type CachedMesh,
-} from '../src/scheduling/meshCache.js';
+} from '../src/resources/meshCache.js';
+import { type TerrainMesh } from '../src/view/terrain.js';
 
 const parts = {
   world: 'test',
@@ -20,7 +20,7 @@ const parts = {
   contentKey: 'c',
   mode: 'full' as const,
 };
-const data: CachedMesh = {
+const data: TerrainMesh = {
   mode: 'full',
   sections: [
     {
@@ -105,7 +105,7 @@ test('one mesh cache API preserves empty LOD, shares warm buffers and accounts m
 
 test('retained backing bytes bound the memory cache and pending writes', async () => {
   const backing = new ArrayBuffer(36 * 1024 ** 2);
-  const large: CachedMesh = {
+  const large: TerrainMesh = {
     mode: 'lod',
     mesh: {
       positions: new Uint16Array(backing, 0, 3),

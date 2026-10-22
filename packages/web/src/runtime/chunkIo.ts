@@ -1,4 +1,4 @@
-import type { ChunkState } from './contracts';
+import type { ChunkState } from '../scheduling/contracts';
 
 interface IoEntry {
   key: string;

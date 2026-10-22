@@ -1,14 +1,17 @@
 import { signal } from '@preact/signals';
-import type { TopClipRange } from '../render/chunkScene';
+import {
+  WORLD_MIN_Y,
+  WORLD_MAX_Y,
+  TOP_CLIP_STEP,
+  normalizeTopClipRange,
+  type TopClipRange,
+} from '../view/worldGeometry';
 import type { ViewMode } from '../render/viewerEngine';
 import { SCHEDULER_PRESETS, type SchedulerPreset } from '../scheduling/profiles';
 
 export type DiagnosticDetail = 'off' | 'simple' | 'standard' | 'detailed';
 
 export const SETTINGS_STORAGE_KEY = 'violet-map:settings';
-export const TOP_CLIP_MIN_Y = -80;
-export const TOP_CLIP_MAX_Y = 384;
-export const TOP_CLIP_STEP = 16;
 
 export interface ViewerSettings {
   world: string;
@@ -35,17 +38,9 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 export function defaultTopClipRange(dimension: string): TopClipRange {
-  if (dimension === 'minecraft:the_nether') return { minY: TOP_CLIP_MIN_Y, maxY: 96 };
-  if (dimension === 'minecraft:overworld') return { minY: 16, maxY: TOP_CLIP_MAX_Y };
-  return { minY: TOP_CLIP_MIN_Y, maxY: TOP_CLIP_MAX_Y };
-}
-
-export function normalizeTopClipRange(range: TopClipRange): TopClipRange {
-  const snap = (value: number) =>
-    Math.max(TOP_CLIP_MIN_Y, Math.min(TOP_CLIP_MAX_Y, Math.round(value / TOP_CLIP_STEP) * TOP_CLIP_STEP));
-  const minY = snap(Number.isFinite(range.minY) ? range.minY : TOP_CLIP_MIN_Y);
-  const maxY = snap(Number.isFinite(range.maxY) ? range.maxY : TOP_CLIP_MAX_Y);
-  return { minY: Math.min(minY, maxY), maxY: Math.max(minY, maxY) };
+  if (dimension === 'minecraft:the_nether') return { minY: WORLD_MIN_Y, maxY: 96 };
+  if (dimension === 'minecraft:overworld') return { minY: 16, maxY: WORLD_MAX_Y };
+  return { minY: WORLD_MIN_Y, maxY: WORLD_MAX_Y };
 }
 
 /** Query overrides are session-local. Saved values retain their existing keys
@@ -84,17 +79,20 @@ export function createSettingsStore(search: string, storage: SettingsStorage | n
         const value = query !== null && query.trim() !== '' ? Number(query) : NaN;
         return Number.isFinite(value) ? value : fallback;
       };
-      return normalizeTopClipRange({
-        minY: coordinate('topClipMinY', fallback.minY),
-        maxY: coordinate('topClipMaxY', fallback.maxY),
-      });
+      return normalizeTopClipRange(
+        {
+          minY: coordinate('topClipMinY', fallback.minY),
+          maxY: coordinate('topClipMaxY', fallback.maxY),
+        },
+        TOP_CLIP_STEP,
+      );
     }
     const range = record(record(read().topClipRanges)[dimension]);
     return typeof range.minY === 'number' &&
       Number.isFinite(range.minY) &&
       typeof range.maxY === 'number' &&
       Number.isFinite(range.maxY)
-      ? normalizeTopClipRange({ minY: range.minY, maxY: range.maxY })
+      ? normalizeTopClipRange({ minY: range.minY, maxY: range.maxY }, TOP_CLIP_STEP)
       : fallback;
   };
   const dimension = string('dimension', 'minecraft:overworld');

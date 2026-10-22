@@ -1,12 +1,15 @@
+import { planFixtureDemands } from './helpers/scheduling.js';
+import { captureView } from '../src/render/viewSnapshot.js';
+import { UNCLIPPED_VIEW } from '../src/view/worldGeometry.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as THREE from 'three';
-import { ChunkIoBatch } from '../src/scheduling/chunkIo.js';
+import { ChunkIoBatch } from '../src/runtime/chunkIo.js';
 import { ChunkScheduler } from '../src/scheduling/chunkScheduler.js';
 import { ChunkViewPlanner } from '../src/scheduling/chunkView.js';
 import { resolveChunkScheduling, diskCellCount } from '../src/scheduling/chunkPolicy.js';
 import { schedulerTuningForPreset } from '../src/scheduling/profiles.js';
-import { LoadingMetrics } from '../src/scheduling/loadingMetrics.js';
+import { LoadingMetrics } from '../src/diagnostics/loadingMetrics.js';
 import type { ChunkSchedulerEntry, ChunkState } from '../src/scheduling/contracts.js';
 
 function entry(key: string, state: ChunkState = 'stored'): ChunkSchedulerEntry {
@@ -15,14 +18,6 @@ function entry(key: string, state: ChunkState = 'stored'): ChunkSchedulerEntry {
     cx: 0,
     cz: 0,
     state,
-    lastWantedAt: 100,
-    lastTier: 0,
-    lastScore: 0,
-    lastTargetStep: 1,
-    lastForcedFull: true,
-    lastImportance: 1,
-    lastSatisfaction: 0,
-    lastGap: 1,
     pendingFull: false,
     pendingLod: false,
     pendingLodStep: 0,
@@ -59,11 +54,12 @@ test('queue and retention tuning preserve the camera attention history', () => {
   camera.lookAt(0, 65, 100);
   const tuning = schedulerTuningForPreset('medium', 8, 12);
   const input = {
-    camera,
+    view: captureView(camera, false, UNCLIPPED_VIEW),
     now: 1000,
     options: { scheduling: tuning },
     keyFor: (x: number, z: number) => `${x},${z}`,
     entries: new Map(),
+    demands: new Map(),
     cellInfoFor: () => ({ hasChunkSource: true, topMapSurfaceY: 64 }),
   };
   view.plan(input);
@@ -81,6 +77,7 @@ test('queue and retention tuning preserve the camera attention history', () => {
 test('invalidations and queued meshes obey the current quality target', () => {
   const scheduler = new ChunkScheduler();
   const chunk = { ...entry('chunk'), displayed: 'full' as const, lastTargetStep: 4 as const, dirty: true };
+  planFixtureDemands(scheduler, new Map([[chunk.key, chunk]]), 100, () => 4);
   scheduler.notify({ type: 'meshInvalidated', entry: chunk, now: 100 });
   const input = {
     now: 100,
@@ -98,7 +95,7 @@ test('invalidations and queued meshes obey the current quality target', () => {
   assert.equal(scheduler.shouldAcceptMeshResult({ entry: chunk, kind: 'full', step: 1, version: 1, now: 100 }), false);
   const upgraded = new ChunkScheduler();
   const pending = { ...entry('chunk'), lastTargetStep: 2 as const };
-  upgraded.notify({ type: 'meshDeferred', key: pending.key, kind: 'lod', step: 8, fallbackTier: -5, now: 100 });
+  planFixtureDemands(upgraded, new Map([[pending.key, pending]]), 100, () => 2);
   assert.equal(upgraded.nextWork({ ...input, entries: new Map([[pending.key, pending]]) }).meshTasks[0].step, 2);
 });
 
@@ -114,10 +111,10 @@ test('backpressure counts completed geometry independently of decoded-input resi
       displayed: i < 6 ? ('full' as const) : ('none' as const),
     }));
     const pending = Array.from({ length: 20 }, (_, i) => entry(`hash${i}`, 'checking'));
-    for (const chunk of pending)
-      scheduler.notify({ type: 'hashNeeded', key: chunk.key, priority: { tier: 0, score: 0, updatedAt: 100 } });
     const entries = [...ready, ...resident, ...pending];
     const byKey = new Map(entries.map((chunk) => [chunk.key, chunk]));
+    planFixtureDemands(scheduler, byKey, 100);
+    for (const chunk of pending) scheduler.notify({ type: 'hashNeeded', key: chunk.key });
     return scheduler.nextWork({
       now: 100,
       activeHashBatches: 0,
@@ -137,6 +134,7 @@ test('in-flight reads cannot be selected as queued work', () => {
   for (const state of ['resolving', 'fetching'] as const) {
     const scheduler = new ChunkScheduler();
     const chunk = entry('chunk', state);
+    planFixtureDemands(scheduler, new Map([[chunk.key, chunk]]), 100);
     scheduler.notify({ type: state === 'resolving' ? 'hashNeeded' : 'fetchNeeded', key: chunk.key });
     const work = scheduler.nextWork({
       now: 100,
@@ -168,6 +166,7 @@ test('delayed diagnostics settle once without becoming a second task lifecycle',
 test('backoff supplies an exact retry wake and waits for active request completion', () => {
   const scheduler = new ChunkScheduler();
   const chunk = { ...entry('retry', 'checking'), retryAt: 5100 };
+  planFixtureDemands(scheduler, new Map([[chunk.key, chunk]]), 100);
   scheduler.notify({ type: 'hashNeeded', key: chunk.key });
   const input = {
     now: 100,
@@ -183,5 +182,6 @@ test('backoff supplies an exact retry wake and waits for active request completi
   assert.deepEqual(waiting.hashBatches, []);
   assert.equal(waiting.hashWakeAt, 5100);
   assert.equal(scheduler.nextWork({ ...input, activeHashBatches: 2 }).hashWakeAt, null);
+  planFixtureDemands(scheduler, input.entries, 5100);
   assert.equal(scheduler.nextWork({ ...input, now: 5100 }).hashBatches[0][0], chunk.key);
 });
