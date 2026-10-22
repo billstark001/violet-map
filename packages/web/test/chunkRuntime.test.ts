@@ -161,8 +161,6 @@ test('reloaded identical columns do not invalidate neighbors, and stale worker r
     state: 'stored',
     dirty: false,
     dirtyToken: 0,
-    lastTier: 6,
-    lastScore: 0,
   };
   const manager = Object.assign(Object.create(ChunkRuntime.prototype), {
     metrics: new LoadingMetrics(),
@@ -325,8 +323,6 @@ test('known neighbors are restored before first display and cancelled read admis
     cx: 0,
     cz: 0,
     state: 'stored',
-    lastScore: 0,
-    lastTier: 0,
   };
   const neighbor = {
     ...center,

@@ -140,26 +140,39 @@ export class ChunkScheduler {
 
   nextWork(input: SchedulerWorkInput): SchedulerWorkBatch {
     this.prune(input.entries, input.now);
-    const workload = this.workload(input.entries, input.now);
-    const loadMore =
-      !(workload.backlog > RENDER_BACKLOG_IO_PAUSE && input.activeMeshTasks < input.maxMeshTasks) &&
-      (workload.resident < MIN_EXISTING_CHUNKS_BEFORE_BALANCE ||
-        workload.backlog <= RENDER_BACKLOG_IO_PAUSE ||
-        workload.readyShare >= IO_RENDER_SHARE_TARGET);
-    const batchSize = (base: number, blocked: number) =>
-      loadMore ? (workload.backlog <= RENDER_BACKLOG_IO_PAUSE ? base : Math.max(4, Math.floor(base / 2))) : blocked;
-    const hash =
-      input.includeHash !== false && input.activeHashBatches < MAX_HASH_BATCHES
-        ? this.takeIo(this.hashQueue, input, 'checking', batchSize(HASH_BATCH_SIZE, BLOCKED_RENDER_HASH_BATCH_SIZE))
-        : [];
-    const fetch =
-      input.includeFetch !== false && input.activeFetchBatches < MAX_FETCH_BATCHES
-        ? this.takeIo(this.fetchQueue, input, 'hashed', batchSize(FETCH_BATCH_SIZE, BLOCKED_RENDER_FETCH_BATCH_SIZE))
-        : [];
-    const mesh =
-      input.includeMesh !== false
-        ? this.meshTasks(input.entries, input.now).slice(0, Math.max(0, input.maxMeshTasks - input.activeMeshTasks))
-        : [];
+    const takeHash =
+      input.includeHash !== false && input.activeHashBatches < MAX_HASH_BATCHES && this.hashQueue.size > 0;
+    const takeFetch =
+      input.includeFetch !== false && input.activeFetchBatches < MAX_FETCH_BATCHES && this.fetchQueue.size > 0;
+    const meshSlots = input.includeMesh !== false ? Math.max(0, input.maxMeshTasks - input.activeMeshTasks) : 0;
+    const candidates = takeHash || takeFetch || meshSlots > 0 ? this.meshTasks(input.entries, input.now) : [];
+    let hash: string[] = [],
+      fetch: string[] = [];
+    if (takeHash || takeFetch) {
+      const workload = this.workload(input.entries, candidates.length);
+      const loadMore =
+        !(workload.backlog > RENDER_BACKLOG_IO_PAUSE && input.activeMeshTasks < input.maxMeshTasks) &&
+        (workload.resident < MIN_EXISTING_CHUNKS_BEFORE_BALANCE ||
+          workload.backlog <= RENDER_BACKLOG_IO_PAUSE ||
+          workload.readyShare >= IO_RENDER_SHARE_TARGET);
+      const batchSize = (base: number, blocked: number) =>
+        loadMore ? (workload.backlog <= RENDER_BACKLOG_IO_PAUSE ? base : Math.max(4, Math.floor(base / 2))) : blocked;
+      if (takeHash)
+        hash = this.takeIo(
+          this.hashQueue,
+          input,
+          'checking',
+          batchSize(HASH_BATCH_SIZE, BLOCKED_RENDER_HASH_BATCH_SIZE),
+        );
+      if (takeFetch)
+        fetch = this.takeIo(
+          this.fetchQueue,
+          input,
+          'hashed',
+          batchSize(FETCH_BATCH_SIZE, BLOCKED_RENDER_FETCH_BATCH_SIZE),
+        );
+    }
+    const mesh = candidates.slice(0, meshSlots);
     for (const task of mesh) {
       const demand = this.demands.get(task.key)!;
       this.demands.set(task.key, { ...demand, meshRetryAt: input.now + MESH_RETRY_COOLDOWN_MS });
@@ -387,7 +400,7 @@ export class ChunkScheduler {
     return out.sort((a, b) => compareMeshTaskPriority(a, b) || a.key.localeCompare(b.key));
   }
 
-  private workload(entries: ReadonlyMap<string, ChunkSchedulerEntry>, now: number): Workload {
+  private workload(entries: ReadonlyMap<string, ChunkSchedulerEntry>, backlog: number): Workload {
     let resident = 0,
       ready = 0;
     for (const entry of entries.values()) {
@@ -395,7 +408,7 @@ export class ChunkScheduler {
       if (entry.state === 'absent' || this.entrySatisfied(entry)) ready++;
     }
     return {
-      backlog: this.meshTasks(entries, now).length,
+      backlog,
       resident,
       readyShare: entries.size ? ready / entries.size : 0,
     };

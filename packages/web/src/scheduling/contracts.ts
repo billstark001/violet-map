@@ -129,7 +129,7 @@ export interface SchedulerFramePlan {
   candidates: ChunkCandidate[];
   keepKeys: Set<string>;
   protectedKeys: Set<string>;
-  fullDetailKeys: Set<string>;
+  fullDetailKeys: ReadonlySet<string>;
   centerCx: number;
   centerCz: number;
 }

@@ -73,6 +73,7 @@ export class ChunkViewPlanner {
   private opts: ChunkSchedulerOptions = {};
   private currentConfig = resolveChunkScheduling();
   private currentCenter = { cx: 0, cz: 0 };
+  private fullDetailKeys: ReadonlySet<string> = new Set();
   get center(): Readonly<{ cx: number; cz: number }> {
     return this.currentCenter;
   }
@@ -81,6 +82,7 @@ export class ChunkViewPlanner {
   }
   clear() {
     this.resetTracker();
+    this.fullDetailKeys = new Set();
   }
   plan(input: SchedulerViewInput): SchedulerFramePlan {
     this.opts = input.options;
@@ -97,7 +99,13 @@ export class ChunkViewPlanner {
     const nearPresenceCells = this.diskCells(centerCx, centerCz, cfg.nearPresenceRadiusChunks);
     const nearPresenceKeys = new Set(nearPresenceCells.map((cell) => input.keyFor(cell.i, cell.j)));
     const fullDetailCells = this.diskCells(centerCx, centerCz, cfg.fullDetailRadiusChunks);
-    const fullDetailKeys = new Set(fullDetailCells.map((cell) => input.keyFor(cell.i, cell.j)));
+    const nextFullDetailKeys = new Set(fullDetailCells.map((cell) => input.keyFor(cell.i, cell.j)));
+    if (
+      nextFullDetailKeys.size !== this.fullDetailKeys.size ||
+      [...nextFullDetailKeys].some((key) => !this.fullDetailKeys.has(key))
+    )
+      this.fullDetailKeys = nextFullDetailKeys;
+    const fullDetailKeys = this.fullDetailKeys;
     const criticalCells = this.criticalCellsForPose(pose, centerCx, centerCz, cfg);
     const criticalKeys = new Set(criticalCells.map((cell) => input.keyFor(cell.i, cell.j)));
 
