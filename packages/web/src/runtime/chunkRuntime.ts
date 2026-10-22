@@ -1399,6 +1399,16 @@ export class ChunkRuntime {
 
   // #region Worker messages
 
+  private matchWorkerMeshReply(key: string, version: number, kind: MeshTaskKind): MeshJob | undefined {
+    const job = this.meshJobs.get(version);
+    if (!job) return undefined;
+    if (job.phase !== 'worker' || job.entry.key !== key || job.kind !== kind) {
+      this.recoverWorkers('mesh worker returned a reply for a different task');
+      return undefined;
+    }
+    return job;
+  }
+
   private handleMessage(msg: WorkerResponse, workerIndex: number) {
     switch (msg.type) {
       case 'chunkReady': {
@@ -1433,6 +1443,7 @@ export class ChunkRuntime {
         break;
       }
       case 'meshError': {
+        if (!this.matchWorkerMeshReply(msg.key, msg.version, msg.kind)) return;
         this.finishActiveMesh(msg.version);
         const e = this.chunks.get(msg.key);
         if (e && (msg.kind === 'full' ? e.pendingFullVersion : e.pendingLodVersion) === msg.version) {
@@ -1443,6 +1454,7 @@ export class ChunkRuntime {
         break;
       }
       case 'meshResult': {
+        if (!this.matchWorkerMeshReply(msg.key, msg.version, 'full')) return;
         this.finishActiveMesh(msg.version, msg.profile?.meshMs);
         const e = this.chunks.get(msg.key);
         if (!e || e.pendingFullVersion !== msg.version) return;
@@ -1479,12 +1491,14 @@ export class ChunkRuntime {
         break;
       }
       case 'lodResult': {
-        this.finishActiveMesh(msg.version, msg.profile?.meshMs);
-        const e = this.chunks.get(msg.key);
-        if (!LOD_STEPS.includes(msg.step as LodStep)) {
-          this.recoverWorkers('mesh worker returned an invalid LOD step');
+        const job = this.matchWorkerMeshReply(msg.key, msg.version, 'lod');
+        if (!job) return;
+        if (!LOD_STEPS.includes(msg.step as LodStep) || msg.step <= 1 || msg.step !== job.step) {
+          this.recoverWorkers('mesh worker returned an invalid or mismatched LOD step');
           return;
         }
+        this.finishActiveMesh(msg.version, msg.profile?.meshMs);
+        const e = this.chunks.get(msg.key);
         const step = msg.step as LodStep;
         let cacheParts: MeshCacheBaseParts | null = null;
         let dirtyToken = -1;

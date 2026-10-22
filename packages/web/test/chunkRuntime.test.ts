@@ -82,6 +82,7 @@ test('a failed Worker send revokes the remaining dispatch plan and releases its 
     clearTimeout(runtime.workerRestartTimer);
   });
   assert.doesNotThrow(() => runtime.flushMeshQueue());
+  clearTimeout(runtime.workerRestartTimer);
   await nextTurn();
   assert.equal(sends, 1, 'remaining decisions belong to the revoked Worker pool');
   assert.equal(terminated, 2);
@@ -160,6 +161,60 @@ test('unavailable IndexedDB falls back to worker meshing for both full and LOD t
   } finally {
     if (previous) Object.defineProperty(globalThis, 'indexedDB', previous);
     else delete (globalThis as { indexedDB?: IDBFactory }).indexedDB;
+  }
+});
+
+test('invalid Worker precision replies rebuild the pool without stranding pending work', async (t) => {
+  for (const returnedStep of [1, 3, 8]) {
+    const entry = {
+      key: 'chunk',
+      state: 'stored',
+      displayed: 'none',
+      displayedLodStep: 0,
+      displayedVersion: -1,
+      dirty: false,
+      dirtyToken: 0,
+      workerPins: 1,
+      pendingFull: false,
+      pendingLod: true,
+      pendingLodStep: 2,
+      pendingLodVersion: 1,
+    };
+    const queued: string[] = [];
+    const runtime = Object.assign(Object.create(ChunkRuntime.prototype), {
+      chunks: new Map([[entry.key, entry]]),
+      disposed: false,
+      workerRestarts: 0,
+      metrics: new LoadingMetrics(),
+      budget: { meshWorkers: 1 },
+      meshFlushScheduled: false,
+      meshJobs: new Map([
+        [1, { entry, kind: 'lod', step: 2, phase: 'worker', dependencies: [entry], startedAt: performance.now() }],
+      ]),
+      workers: [{ terminate() {} }],
+      workerLoads: [1],
+      activeMeshTasks: 1,
+      versionWorker: new Map([[1, 0]]),
+      inFlightMeshVersions: new Set([1]),
+      queueIo(_kind: string, key: string) {
+        queued.push(key);
+      },
+    });
+    t.after(() => {
+      runtime.disposed = true;
+      clearTimeout(runtime.workerRestartTimer);
+    });
+    runtime.handleMessage({ type: 'lodResult', key: entry.key, version: 1, step: returnedStep, mesh: null }, 0);
+    clearTimeout(runtime.workerRestartTimer);
+    await nextTurn();
+    assert.equal(runtime.workerRestarts, 1);
+    assert.equal(runtime.meshJobs.size, 0);
+    assert.equal(runtime.activeMeshTasks, 0);
+    assert.equal(entry.pendingLod, false);
+    assert.equal(entry.pendingLodStep, 0);
+    assert.equal(entry.workerPins, 0);
+    assert.equal(entry.state, 'hashed');
+    assert.deepEqual(queued, ['chunk']);
   }
 });
 
