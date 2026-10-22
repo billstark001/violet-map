@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { TransparencyRenderer } from '../src/render/transparency';
 import { createTransparencyWorld } from './transparency-world';
 import { transparencyGlb } from './transparency-glb';
+import { TopMapScene } from '../src/render/topMapScene';
+import { createSharedUniforms } from '../src/render/materials';
+import type { PreparedTopMapTile, TopMapTilePayload } from '@violet-map/core/formats/top-map';
 
 THREE.ColorManagement.enabled = false;
 
@@ -381,6 +384,56 @@ const harness = {
     await restored;
     draw();
     return { before, after: pixel(), lostStatus, restoredStatus: transparency.diagnosticSnapshot().contextLost };
+  },
+  topMapOwnership() {
+    clear();
+    renderer.setSize(640, 480);
+    const view = new THREE.OrthographicCamera(-40, 40, 30, -30, 0.1, 200);
+    view.position.set(32, 90, 32);
+    view.up.set(0, 0, -1);
+    view.lookAt(32, 10, 32);
+    renderer.render(scene, view);
+    const before = { ...renderer.info.memory };
+    const colors = new Uint8Array(64 * 64 * 4);
+    for (let offset = 0; offset < colors.length; offset += 4) colors.set([32, 224, 64, 255], offset);
+    const data: PreparedTopMapTile = {
+      payload: {
+        size: { blocks: 64, samples: 64, colorSamples: 64, lightSamples: 64 },
+        origin: { x: 0, z: 0 },
+        sampleStride: 1,
+        colorStride: 1,
+        lightStride: 1,
+        minY: 0,
+        approach: 'top',
+      } as TopMapTilePayload,
+      heights: new Int16Array(64 * 64).fill(10),
+      colors,
+      lights: new Uint8Array(64 * 64 * 2).fill(15),
+    };
+    const cycles = [];
+    for (let cycle = 0; cycle < 5; cycle++) {
+      const display = new TopMapScene(scene, createSharedUniforms());
+      display.setEnabled(true);
+      display.add('tile', data);
+      const frames = [];
+      for (const step of [8, 4, 2, 8]) {
+        display.update('tile', step, '', undefined);
+        renderer.render(scene, view);
+        frames.push({ step, center: pixel(), memory: { ...renderer.info.memory } });
+      }
+      display.setWanted(new Set());
+      renderer.render(scene, view);
+      const hidden = pixel();
+      display.setWanted(new Set(['tile']));
+      renderer.render(scene, view);
+      const restored = pixel();
+      display.remove('tile');
+      display.dispose();
+      display.dispose();
+      renderer.render(scene, view);
+      cycles.push({ frames, hidden, restored, after: { ...renderer.info.memory } });
+    }
+    return { before, cycles };
   },
   dispose() {
     clear();

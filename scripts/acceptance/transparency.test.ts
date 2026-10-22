@@ -153,6 +153,21 @@ test(
     assert.equal(recovery.lostStatus, true);
     assert.equal(recovery.restoredStatus, false);
     near(recovery.after, recovery.before);
+    const topMap = await page.evaluate(() => window.transparencyHarness.topMapOwnership());
+    for (const cycle of topMap.cycles) {
+      for (const frame of cycle.frames) {
+        assert.ok(
+          frame.center[1] > frame.center[0] * 2 && frame.center[1] > frame.center[2],
+          'Top Map terrain disappeared',
+        );
+        near(frame.center, cycle.frames[0].center, 0);
+        assert.equal(frame.memory.geometries, topMap.before.geometries + 1);
+        assert.equal(frame.memory.textures, topMap.before.textures + 1);
+      }
+      near(cycle.hidden, [0, 0, 0, 255], 0);
+      near(cycle.restored, cycle.frames[0].center, 0);
+      assert.deepEqual(cycle.after, topMap.before, 'Top Map retained GPU resources after disposal');
+    }
     const disposed = await page.evaluate(() => window.transparencyHarness.dispose());
     assert.equal(disposed.geometries, 0);
     // MeshStandardMaterial's renderer-owned BRDF LUT survives until renderer.dispose().
@@ -190,6 +205,7 @@ test(
           pointSize,
           nested,
           recovery,
+          topMap,
           disposed,
           errors,
         },

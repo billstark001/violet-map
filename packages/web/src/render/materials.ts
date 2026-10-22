@@ -129,17 +129,20 @@ uniform float fogNear;
 uniform float fogFar;
 uniform float alphaTest;
 uniform float opacity;
+#ifdef VIOLET_TEXTURE_ANIMATION
 uniform sampler2D animationInfo;
 uniform sampler2D animationFrames;
 uniform vec2 animationInfoSize;
 uniform vec2 animationFrameSize;
 uniform float animationTime;
+#endif
 varying vec2 vUv;
 varying vec3 vColor;
 varying vec2 vLight;
 varying vec3 vWorldPos;
 varying vec2 vOverlayPosition;
 varying float vAnimationId;
+#ifdef VIOLET_TEXTURE_ANIMATION
 vec2 animationLookupUv(float index, vec2 size) {
   return (vec2(mod(index, size.x), floor(index / size.x)) + 0.5) / size;
 }
@@ -166,6 +169,11 @@ vec4 animatedTexture(vec2 baseUv) {
   vec2 localUv = clamp((baseUv - baseMin) / max(baseMax - baseMin, vec2(0.00001)), 0.0, 1.0);
   return texture2D(map, mix(frameMin, frameMax, localUv));
 }
+#else
+vec4 animatedTexture(vec2 baseUv) {
+  return texture2D(map, baseUv);
+}
+#endif
 
 uniform sampler2D overlayMaskMap;
 uniform float overlayMaskEnabled;
@@ -314,7 +322,6 @@ interface TerrainMaterialOptions {
   alphaTest?: number;
   transparent?: boolean;
   opacity?: number;
-  map?: THREE.Texture;
   tiled?: boolean;
   colorOnly?: boolean;
   positionScale?: THREE.Vector3;
@@ -327,27 +334,32 @@ interface TerrainMaterialOptions {
 function makeTerrainMaterial(
   atlas: THREE.Texture,
   shared: SharedUniforms,
-  animation: TextureAnimationUniforms,
+  animation: TextureAnimationUniforms | null,
   opts: TerrainMaterialOptions,
 ): THREE.ShaderMaterial {
   const transparent = opts.transparent ?? false;
   const material = new THREE.ShaderMaterial({
+    defines: animation ? { VIOLET_TEXTURE_ANIMATION: 1 } : {},
     vertexShader: opts.colorOnly ? COLOR_VERT : opts.tiled ? TILED_VERT : VERT,
     fragmentShader: opts.colorOnly ? COLOR_FRAG : opts.tiled ? TILED_FRAG : FRAG,
     uniforms: {
       ...(opts.colorOnly
         ? {}
         : {
-            map: { value: opts.map ?? atlas },
+            map: { value: atlas },
             alphaTest: { value: opts.alphaTest ?? 0 },
             opacity: { value: opts.opacity ?? 1 },
           }),
       positionScale: { value: opts.positionScale ?? new THREE.Vector3(18, 18, 18) },
       positionOffset: { value: opts.positionOffset ?? new THREE.Vector3(-1, -1, -1) },
-      animationInfo: { value: animation.info },
-      animationFrames: { value: animation.frames },
-      animationInfoSize: { value: animation.infoSize },
-      animationFrameSize: { value: animation.frameSize },
+      ...(animation
+        ? {
+            animationInfo: { value: animation.info },
+            animationFrames: { value: animation.frames },
+            animationInfoSize: { value: animation.infoSize },
+            animationFrameSize: { value: animation.frameSize },
+          }
+        : {}),
       ...shared,
       overlayModelOffset: { value: new THREE.Vector2() },
     },
@@ -395,21 +407,8 @@ export function createMaterials(
   return { ...materials, all: Object.values(materials) };
 }
 
-let emptyTextureAnimationUniforms: TextureAnimationUniforms | null = null;
-
-function emptyAnimations(): TextureAnimationUniforms {
-  return (emptyTextureAnimationUniforms ??= createTextureAnimationUniforms({
-    ids: {},
-    info: new Uint8Array(4),
-    infoSize: [1, 1],
-    frames: new Uint8Array(4),
-    frameSize: [1, 1],
-  }));
-}
-
 export function createTopMapMaterial(map: THREE.Texture, shared: SharedUniforms): THREE.ShaderMaterial {
-  return makeTerrainMaterial(map, shared, emptyAnimations(), {
-    map,
+  return makeTerrainMaterial(map, shared, null, {
     alphaTest: 0.05,
     positionScale: new THREE.Vector3(...TOP_MAP_POSITION_SCALE),
     positionOffset: new THREE.Vector3(...TOP_MAP_POSITION_OFFSET),
