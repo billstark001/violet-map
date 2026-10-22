@@ -53,7 +53,7 @@ Source absence, transient errors, pending work and completed empty geometry are 
 
 A Worker send failure revokes the rest of the dispatch plan for that pool. Cleanup releases execution slots and dependency pins before a replacement pool can consume a newly ranked plan. Static Top Map materials use a static shader and own no placeholder animation textures.
 
-Each mesh job owns its execution phase and, once dispatched, its Worker index. Worker loads and active-task counts are observations of those jobs, with no parallel version registry or mutable counters. Replies must match that Worker as well as the task's version, chunk, kind and LOD step before releasing ownership.
+Each mesh job owns its execution phase, cache identity, dirty token and, once dispatched, its Worker index. Worker loads and active-task counts are observations of those jobs, with no parallel version registry or mutable counters. The entry records only its current pending version and scheduling-visible work flags. Finishing an obsolete job cannot clear a replacement's flags, and an unresolved cache lookup loses ownership when its job is revoked. Replies must match the assigned Worker as well as the task's version, chunk, kind and LOD step before releasing ownership.
 
 Eviction plans include pending work and dependency pins. Tracked-entry eviction and decoded-input release share the same active-work predicate. The executor validates that precondition when applying an eviction; a violated precondition is an explicit error.
 

@@ -23,7 +23,7 @@ test('a failed Worker send revokes the remaining dispatch plan and releases its 
     pendingFull: true,
     pendingLod: false,
     pendingLodStep: 0,
-    pendingFullVersion: index + 1,
+    pendingMeshVersion: index + 1,
     dirty: false,
     dirtyToken: 0,
     workerPins: 0,
@@ -104,8 +104,7 @@ test('unavailable IndexedDB falls back to worker meshing for both full and LOD t
         state: 'stored',
         dirtyToken: 0,
         contentDigest: 'nbt',
-        pendingFullVersion: -1,
-        pendingLodVersion: -1,
+        pendingMeshVersion: null,
       };
       let resolve!: (value: { kind: string; version: number }) => void;
       const started = new Promise<{ kind: string; version: number }>((done) => {
@@ -157,6 +156,87 @@ test('unavailable IndexedDB falls back to worker meshing for both full and LOD t
   }
 });
 
+test('Worker restart revokes an unresolved cache lookup without failing the recovering chunk', async (t) => {
+  const entry = {
+    key: 'chunk',
+    state: 'stored',
+    pendingFull: false,
+    pendingLod: false,
+    workerPins: 0,
+    dirtyToken: 0,
+  };
+  const failures: unknown[] = [];
+  const runtime = Object.assign(Object.create(ChunkRuntime.prototype), {
+    chunks: new Map([[entry.key, entry]]),
+    meshJobs: new Map(),
+    metrics: new LoadingMetrics(),
+    versionCounter: 0,
+    workerRestarts: 0,
+    workers: [{ terminate() {} }],
+    budget: { meshWorkers: 1 },
+    disposed: false,
+    meshFlushScheduled: false,
+    neighborhoodCacheParts: () => ({ stable: false, parts: {} }),
+    flushMeshQueue() {},
+    queueIo() {},
+    lastMeshFailure(_entry: unknown, error: unknown) {
+      failures.push(error);
+    },
+  });
+  t.after(() => {
+    runtime.disposed = true;
+    clearTimeout(runtime.workerRestartTimer);
+  });
+  runtime.requestMesh(entry, 'full', 1);
+  runtime.recoverWorkers('restart while cache lookup is unresolved');
+  clearTimeout(runtime.workerRestartTimer);
+  await nextTurn();
+  assert.deepEqual(failures, []);
+  assert.equal(runtime.meshJobs.size, 0);
+  assert.equal(entry.state, 'hashed');
+  assert.equal(entry.pendingFull, false);
+});
+
+test('superseded cache completion cannot clear the replacement job or its dirty token', async () => {
+  const entry = { key: 'chunk', pendingFull: false, pendingLod: false, dirtyToken: 1 };
+  const prepared: number[] = [];
+  const runtime = Object.assign(Object.create(ChunkRuntime.prototype), {
+    chunks: new Map([[entry.key, entry]]),
+    meshJobs: new Map(),
+    metrics: new LoadingMetrics(),
+    versionCounter: 0,
+    workers: [{}],
+    disposed: false,
+    meshFlushScheduled: false,
+    fullCacheMisses: 0,
+    neighborhoodCacheParts: () => ({ stable: false, parts: {} }),
+    flushMeshQueue() {
+      for (const [version, job] of this.meshJobs) {
+        assert.equal(version, 2);
+        assert.equal(job.dirtyToken, 2);
+        prepared.push(version);
+      }
+    },
+    lastMeshFailure() {
+      assert.fail('an obsolete cache lookup failed the replacement');
+    },
+  });
+  runtime.requestMesh(entry, 'full', 1);
+  runtime.invalidatePendingMeshes(entry);
+  entry.dirtyToken = 2;
+  runtime.requestMesh(entry, 'full', 1);
+  await nextTurn();
+  assert.ok(prepared.length > 0);
+  assert.equal(runtime.meshJobs.size, 1);
+  assert.equal(entry.pendingFull, true);
+  assert.equal(runtime.fullCacheMisses, 1);
+  runtime.finishMeshJob(1);
+  assert.equal(entry.pendingFull, true);
+  runtime.finishMeshJob(2);
+  await nextTurn();
+  assert.equal(entry.pendingFull, false);
+});
+
 test('invalid Worker precision or ownership replies rebuild the pool without stranding pending work', async (t) => {
   for (const [returnedStep, workerIndex] of [
     [1, 0],
@@ -176,7 +256,7 @@ test('invalid Worker precision or ownership replies rebuild the pool without str
       pendingFull: false,
       pendingLod: true,
       pendingLodStep: 2,
-      pendingLodVersion: 1,
+      pendingMeshVersion: 1,
     };
     const queued: string[] = [];
     const runtime = Object.assign(Object.create(ChunkRuntime.prototype), {
@@ -358,7 +438,10 @@ test('active neighborhood pins prevent eviction and settle exactly once', async 
   const drops: unknown[] = [];
   const manager = Object.assign(Object.create(ChunkRuntime.prototype), {
     metrics: new LoadingMetrics(),
-    meshJobs: new Map([[1, { dependencies: [dependency], state: { phase: 'worker', workerIndex: 0 } }]]),
+    chunks: new Map([[dependency.key, dependency]]),
+    meshJobs: new Map([
+      [1, { entry: dependency, dependencies: [dependency], state: { phase: 'worker', workerIndex: 0 } }],
+    ]),
     workers: [{}],
     meshFlushScheduled: false,
     disposed: false,
@@ -368,8 +451,8 @@ test('active neighborhood pins prevent eviction and settle exactly once', async 
     flushMeshQueue() {},
   });
   assert.equal(manager.releaseWorkerData(dependency), false);
-  manager.finishActiveMesh(1);
-  manager.finishActiveMesh(1);
+  manager.finishMeshJob(1);
+  manager.finishMeshJob(1);
   await Promise.resolve();
   assert.equal(dependency.workerPins, 0);
   assert.equal(manager.workerExecution().activeTasks, 0);

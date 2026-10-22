@@ -165,12 +165,7 @@ interface ChunkEntry extends ChunkSchedulerEntry, ChunkDisplayState {
   estimatedColumnBytes: number;
   workerReadyMask: number;
   workerKeepUntil: number;
-  pendingFullVersion: number;
-  pendingLodVersion: number;
-  pendingFullCacheParts: MeshCacheBaseParts | null;
-  pendingLodCacheParts: MeshCacheBaseParts | null;
-  pendingFullDirtyToken: number;
-  pendingLodDirtyToken: number;
+  pendingMeshVersion: number | null;
   dirtyToken: number;
   biome: string;
   surfaceY: number;
@@ -184,6 +179,8 @@ interface MeshJob {
   kind: MeshTaskKind;
   step: LodStep;
   state: { phase: 'cache' | 'waiting-input' | 'ready' } | { phase: 'worker'; workerIndex: number };
+  cacheParts: MeshCacheBaseParts | null;
+  dirtyToken: number;
   startedAt: number;
   dependencies: ChunkEntry[];
 }
@@ -285,10 +282,7 @@ export class ChunkRuntime {
     if (this.disposed || this.workerRestartTimer) return;
     const count = this.budget.meshWorkers;
     const affected = new Set([...this.meshJobs.values()].map((job) => job.entry));
-    for (const [version, job] of this.meshJobs) {
-      this.clearPendingMesh(job.entry, job.kind);
-      this.finishActiveMesh(version);
-    }
+    for (const version of this.meshJobs.keys()) this.finishMeshJob(version);
     for (const worker of this.workers) worker.terminate();
     this.workers = [];
     this.workerRestarts++;
@@ -587,15 +581,10 @@ export class ChunkRuntime {
       estimatedColumnBytes: 0,
       workerReadyMask: 0,
       workerKeepUntil: 0,
-      pendingFullVersion: -1,
-      pendingLodVersion: -1,
+      pendingMeshVersion: null,
       pendingFull: false,
       pendingLod: false,
       pendingLodStep: 0,
-      pendingFullCacheParts: null,
-      pendingLodCacheParts: null,
-      pendingFullDirtyToken: 0,
-      pendingLodDirtyToken: 0,
       displayed: 'none',
       displayedVersion: -1,
       displayedLodStep: 0,
@@ -630,6 +619,7 @@ export class ChunkRuntime {
       for (const [version, job] of this.meshJobs) {
         if (job.state.phase === 'cache' || job.state.phase === 'worker') continue;
         if (
+          !this.isCurrentMeshJob(version, job) ||
           !this.scheduler.shouldAcceptMeshResult({
             entry: job.entry,
             kind: job.kind,
@@ -638,8 +628,7 @@ export class ChunkRuntime {
             now,
           })
         ) {
-          this.clearPendingMesh(job.entry, job.kind);
-          this.finishActiveMesh(version);
+          this.finishMeshJob(version);
           continue;
         }
         job.state = { phase: this.ensureNeighborhoodWorkerData(job.entry, now) ? 'ready' : 'waiting-input' };
@@ -659,9 +648,7 @@ export class ChunkRuntime {
           })),
       });
       for (const version of dispatch.discard) {
-        const job = this.meshJobs.get(version)!;
-        this.clearPendingMesh(job.entry, job.kind);
-        this.finishActiveMesh(version);
+        this.finishMeshJob(version);
       }
       for (const { task, workerIndex } of dispatch.start)
         if (!this.dispatchWorkerMesh(task.entry as ChunkEntry, task.kind, task.step, task.version, workerIndex)) return;
@@ -696,9 +683,15 @@ export class ChunkRuntime {
     return this.workers.length;
   }
 
-  private finishActiveMesh(version: number, durationMs?: number) {
+  private isCurrentMeshJob(version: number, job: MeshJob): boolean {
+    return this.chunks.get(job.entry.key) === job.entry && job.entry.pendingMeshVersion === version;
+  }
+
+  private finishMeshJob(version: number, durationMs?: number): MeshJob | undefined {
     const job = this.meshJobs.get(version);
     if (!job) return;
+    const current = this.isCurrentMeshJob(version, job);
+    if (current) this.invalidatePendingMeshes(job.entry);
     if (job.diagnosticId !== undefined) this.metrics.finish(job.diagnosticId, durationMs);
     this.meshJobs.delete(version);
     for (const dependency of job.dependencies) dependency.workerPins--;
@@ -711,6 +704,7 @@ export class ChunkRuntime {
         if (!this.disposed) this.flushMeshQueue();
       });
     }
+    return current ? job : undefined;
   }
 
   private deferMesh(entry: ChunkEntry) {
@@ -734,33 +728,19 @@ export class ChunkRuntime {
       kind,
       step,
       state: { phase: 'cache' },
+      cacheParts: cache.stable ? cache.parts : null,
+      dirtyToken: e.dirtyToken,
       startedAt: performance.now(),
       dependencies: [],
     });
+    e.pendingMeshVersion = version;
     if (kind === 'full') {
       e.pendingFull = true;
-      e.pendingFullCacheParts = cache.stable ? cache.parts : null;
-      e.pendingFullDirtyToken = e.dirtyToken;
-      e.pendingFullVersion = version;
     } else {
       e.pendingLod = true;
       e.pendingLodStep = step;
-      e.pendingLodCacheParts = cache.stable ? cache.parts : null;
-      e.pendingLodDirtyToken = e.dirtyToken;
-      e.pendingLodVersion = version;
     }
     return version;
-  }
-
-  private clearPendingMesh(e: ChunkEntry, kind: MeshTaskKind) {
-    if (kind === 'full') {
-      e.pendingFull = false;
-      e.pendingFullCacheParts = null;
-      return;
-    }
-    e.pendingLod = false;
-    e.pendingLodStep = 0;
-    e.pendingLodCacheParts = null;
   }
 
   private recoverMissingWorkerInput(e: ChunkEntry) {
@@ -785,13 +765,8 @@ export class ChunkRuntime {
   ): boolean {
     const job = this.meshJobs.get(version)!;
     const cache = this.neighborhoodCacheParts(e);
-    if (kind === 'full') {
-      e.pendingFullCacheParts = cache?.stable ? cache.parts : null;
-      e.pendingFullDirtyToken = e.dirtyToken;
-    } else {
-      e.pendingLodCacheParts = cache?.stable ? cache.parts : null;
-      e.pendingLodDirtyToken = e.dirtyToken;
-    }
+    job.cacheParts = cache?.stable ? cache.parts : null;
+    job.dirtyToken = e.dirtyToken;
     for (let dz = -1; dz <= 1; dz++)
       for (let dx = -1; dx <= 1; dx++) {
         const n = this.chunks.get(this.key(e.cx + dx, e.cz + dz));
@@ -850,10 +825,7 @@ export class ChunkRuntime {
     e.pendingFull = false;
     e.pendingLod = false;
     e.pendingLodStep = 0;
-    e.pendingFullCacheParts = null;
-    e.pendingLodCacheParts = null;
-    e.pendingFullVersion = -1;
-    e.pendingLodVersion = -1;
+    e.pendingMeshVersion = null;
   }
 
   private markDirty(e: ChunkEntry) {
@@ -962,22 +934,18 @@ export class ChunkRuntime {
       : Promise.resolve(undefined);
     void lookup
       .then((hit) => {
-        if (
-          this.disposed ||
-          this.chunks.get(e.key) !== e ||
-          (kind === 'full' ? e.pendingFullVersion : e.pendingLodVersion) !== version
-        ) {
-          this.finishActiveMesh(version);
+        const job = this.meshJobs.get(version);
+        if (this.disposed || !job || !this.isCurrentMeshJob(version, job)) {
+          this.finishMeshJob(version);
           return;
         }
         if (!hit) {
           if (kind === 'full') this.fullCacheMisses++;
           else this.lodCacheMisses++;
-          this.meshJobs.get(version)!.state = { phase: 'waiting-input' };
+          job.state = { phase: 'waiting-input' };
           this.flushMeshQueue();
           return;
         }
-        this.clearPendingMesh(e, kind);
         if (
           this.scheduler.shouldAcceptMeshResult({
             entry: e,
@@ -994,14 +962,13 @@ export class ChunkRuntime {
             this.lodCacheHits++;
             this.applyMesh(e, { mode: 'lod', mesh: hit.mesh }, version, step as LodStep);
           }
-          this.clearDirtyIfUnchanged(e, kind === 'full' ? e.pendingFullDirtyToken : e.pendingLodDirtyToken);
+          this.clearDirtyIfUnchanged(e, job.dirtyToken);
         }
-        this.finishActiveMesh(version);
+        this.finishMeshJob(version);
       })
       .catch((error) => {
-        this.clearPendingMesh(e, kind);
-        this.finishActiveMesh(version);
-        this.lastMeshFailure(e, error);
+        const job = this.finishMeshJob(version);
+        if (!this.disposed && job) this.lastMeshFailure(job.entry, error);
       });
     return true;
   }
@@ -1442,10 +1409,9 @@ export class ChunkRuntime {
       }
       case 'meshError': {
         if (!this.matchWorkerMeshReply(msg.key, msg.version, msg.kind, workerIndex)) return;
-        this.finishActiveMesh(msg.version);
-        const e = this.chunks.get(msg.key);
-        if (e && (msg.kind === 'full' ? e.pendingFullVersion : e.pendingLodVersion) === msg.version) {
-          this.lastMeshFailure(e, new Error(msg.error));
+        const job = this.finishMeshJob(msg.version);
+        if (job) {
+          this.lastMeshFailure(job.entry, new Error(msg.error));
           this.reportStats();
         }
         console.warn('chunk mesh error', msg.key, msg.kind, msg.error);
@@ -1453,12 +1419,9 @@ export class ChunkRuntime {
       }
       case 'meshResult': {
         if (!this.matchWorkerMeshReply(msg.key, msg.version, 'full', workerIndex)) return;
-        this.finishActiveMesh(msg.version, msg.profile?.meshMs);
-        const e = this.chunks.get(msg.key);
-        if (!e || e.pendingFullVersion !== msg.version) return;
-        const cacheParts = e.pendingFullCacheParts;
-        const dirtyToken = e.pendingFullDirtyToken;
-        this.clearPendingMesh(e, 'full');
+        const job = this.finishMeshJob(msg.version, msg.profile?.meshMs);
+        if (!job) return;
+        const { entry: e, cacheParts, dirtyToken } = job;
         if (msg.profile?.missingInput) {
           this.recoverMissingWorkerInput(e);
           return;
@@ -1484,7 +1447,7 @@ export class ChunkRuntime {
           return;
         }
         this.applyMesh(e, { mode: 'full', sections: msg.sections }, msg.version, 1);
-        if (dirtyToken >= 0) this.clearDirtyIfUnchanged(e, dirtyToken);
+        this.clearDirtyIfUnchanged(e, dirtyToken);
         this.reportStats();
         break;
       }
@@ -1495,17 +1458,10 @@ export class ChunkRuntime {
           this.recoverWorkers('mesh worker returned an invalid or mismatched LOD step');
           return;
         }
-        this.finishActiveMesh(msg.version, msg.profile?.meshMs);
-        const e = this.chunks.get(msg.key);
+        if (!this.finishMeshJob(msg.version, msg.profile?.meshMs)) return;
+        const { entry: e, cacheParts, dirtyToken } = job;
         const step = msg.step as LodStep;
-        let cacheParts: MeshCacheBaseParts | null = null;
-        let dirtyToken = -1;
-        if (e && e.pendingLodStep === step && e.pendingLodVersion === msg.version) {
-          cacheParts = e.pendingLodCacheParts;
-          dirtyToken = e.pendingLodDirtyToken;
-          this.clearPendingMesh(e, 'lod');
-        }
-        if (!e || dirtyToken < 0 || msg.version < e.displayedVersion) return;
+        if (msg.version < e.displayedVersion) return;
         if (msg.profile?.missingInput) {
           this.recoverMissingWorkerInput(e);
           return;
@@ -1529,7 +1485,7 @@ export class ChunkRuntime {
           return;
         }
         this.applyMesh(e, { mode: 'lod', mesh: msg.mesh }, msg.version, step as LodStep);
-        if (dirtyToken >= 0) this.clearDirtyIfUnchanged(e, dirtyToken);
+        this.clearDirtyIfUnchanged(e, dirtyToken);
         this.reportStats();
         break;
       }
