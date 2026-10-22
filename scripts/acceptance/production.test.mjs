@@ -172,7 +172,7 @@ test('server production deployment is self-contained; public/sync/full and start
 test('packed library/CLI exports exist and workspace versions are converted for publication', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-pack-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  for (const name of ['core', 'render', 'storage', 'server', 'cli']) {
+  for (const name of ['core', 'render', 'storage', 'resources', 'server', 'cli']) {
     const archive = path.join(root, name + '.tgz');
     await execute('pnpm', ['pack', '--out', archive], { cwd: path.join(project, 'packages', name) });
     const unpack = path.join(root, name);

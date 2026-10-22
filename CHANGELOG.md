@@ -24,21 +24,37 @@ All notable changes to Violet Map are documented in this file. Entries follow th
 
 ## [Unreleased]
 
-### Changed (coordinated 0.4.0 release candidate)
+## [0.4.0] - 2026-10-23
 
-- All packages use the 0.4 line, capabilities protocol 2 and overlay display manifest 2. Viewer, admin, CLI and server must be updated together; old resource protocols/configuration are rejected.
+### Changed
+
+- All workspace packages are synchronized at 0.4.0, with capabilities protocol 2 and overlay display manifest 2. Viewer, admin, CLI and server must be updated together; old resource protocols/configuration are rejected.
 - Chunks, atlases/textures/colormaps, top-map tiles and overlay media share deterministic action keys, SHA-256 objects, bounded caching, publication and integrity downloads. Every optional cache permits zero bytes; local files, workspaces and SQLite require explicit selection.
 - Delivery is explicitly `server` or `public`, with one resource URL. Remove old media delivery configuration, `url`/`publicUrl` dual references, public-to-proxy fallback, temporary atlas image URLs and atlas-to-individual-texture fallback.
 - Baking includes effective override terrain and complete pack/data/light dependencies. Existing v6 payloads remain supported; old freshness records require an explicit rebake.
+- Browser scheduling, resource/Worker execution and GPU ownership have explicit module boundaries. One demand record owns requested chunk quality, and one final dispatcher ranks all Worker starts, including prepared cache misses. The render package contains CPU rendering algorithms; browser scheduling and graphics owners live in the web package without forwarding aliases.
+- Top Map GPU resources and tile planning have separate owners. Overlay admission, ordering, suppression and curve budgets use pure planners independently of source refresh and GPU execution.
+- Static terrain is culled once per frame across transparency passes, with world bounds reused until their matrix or geometry changes. Attention queries remain observational, and inactive attention history has a bounded lifetime. Sixteen transparency bins and the original 192 MiB attachment budget are preserved.
 
 ### Added
 
 - The resources package, source-free public reader, separate publisher, durable prepared/retained/backup roots and conditional head commits. Source synchronization requires an explicit completed snapshot/publication; content commits report publication pending/failed separately.
 - Resources CLI management uses the online writer by default. Offline operations require `--via local`, explicit configuration and quiescence. See [resource operations](docs/resources.md) and [implementation acceptance](docs/resource-implementation-acceptance.md).
+- Optional user-initiated fullscreen keyboard lock captures navigation shortcuts in supporting browsers. Ctrl and R both accelerate all camera modes; Escape remains available to exit. R provides acceleration without relying on browser-reserved modifier combinations.
+- Real-world loading acceptance checks complete full-detail coverage, stationary convergence, cache-policy geometry comparisons, transport/lease failures, Worker restart/send/watchdog recovery, WebGL restoration and view/height-slice transitions. Architecture and validation evidence are documented in [viewer architecture](docs/viewer-architecture.md) and [loading performance](docs/loading-performance.md).
+
+### Fixed
+
+- Every scheduling profile preserves the configured full-detail disk regardless of attention, completion or resource pressure. Height slices require complete block models instead of unusable surface-only LOD or Top Map representations; perspective Top Map demand includes camera zoom.
+- Mesh jobs own cache/execution state and dependency pins. Obsolete cache callbacks and malformed or misassigned Worker replies cannot clear replacement jobs, consume execution slots indefinitely or strand terrain after recovery.
+- Shared resource requests cancel per caller; only the last owner cancels transport. Retiring canceled downloads retain admission budgets until settlement and cannot remove replacement requests. World switches during bootstrap use the latest selection and reject obsolete completions.
+- Malformed source coverage cannot fabricate missing chunks. Top Map manifests, artifact identity, resource errors and cache precision are validated explicitly. Verified sky resources retry bounded transient failures before terrain admission instead of retaining substitute celestial images.
+- Clicking terrain transfers keyboard focus from forms, and navigation consumes delivered shortcuts in the capture phase across Control/Command modifiers. Native editing and input-method composition remain available; Command release clears potentially stuck movement keys.
+- Native Windows paths, portable save names, empty region files, bounded region reads, asynchronous process supervision and graceful Windows shutdown work consistently with explicit storage/resource identities.
 
 ### Preserved business contracts
 
-- World/archive identity, override precedence, entity sidecars, asset pack precedence, fixed media versions, retained originals/tombstones, authorization, If-Match and protected world management remain intact. A standalone static runtime configuration may still use the documented 404 behavior. No deployment has been performed for this change.
+- World/archive identity, override precedence, entity sidecars, asset pack precedence, fixed media versions, retained originals/tombstones, authorization, If-Match and protected world management remain intact. A standalone static runtime configuration may still use the documented 404 behavior.
 
 ## @violet-map/web [0.3.1] - 2026-10-18
 

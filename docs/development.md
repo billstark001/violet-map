@@ -9,6 +9,7 @@
 | `@violet-map/core` | Neutral world data, NBT/region codecs, top-map formats, HTTP contracts, storage interfaces and concurrency utilities. |
 | `@violet-map/render` | CPU models, lighting, colors, meshes and top-map sampling/geometry; depends only on core. |
 | `@violet-map/storage` | Local/S3/HTTP adapters, caching, prefixes and synchronization; depends only on core. |
+| `@violet-map/resources` | Resource generators, bounded object/action repositories, views, publication and optional persistence; depends on core/storage. |
 | `@violet-map/cli` | The `violet-map` CLI: assets, maps, profiles, credentials, and API/direct user administration. |
 | `@violet-map/server` | Hono API, world service, database/user services, and a side-effect-free optional `server/admin` library. |
 | `@violet-map/web` | Browser viewer with separate scheduling, execution, resource, display and diagnostic owners; see [viewer architecture](viewer-architecture.md). |
