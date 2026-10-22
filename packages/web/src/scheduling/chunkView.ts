@@ -1,0 +1,609 @@
+import * as THREE from 'three';
+import { CameraGridTracker, type Pose, type RankedCell, type RankingResult } from './cameraGridTracker';
+import { debugLog, isDebugLoggingEnabled } from '../logger';
+import {
+  type LodStep,
+  type ChunkSchedulerCamera,
+  type ChunkSchedulerOptions,
+  type SchedulerCellInfo,
+  type ChunkCandidate,
+  type CriticalCell,
+  type ChunkSchedulerEntry,
+  type SchedulerFramePlan,
+  type SchedulerTickInput,
+  type SchedulerCellDiagnostic,
+  type ResolvedChunkScheduling,
+} from './contracts';
+import {
+  CHUNK_SIZE_BLOCKS,
+  CHUNK_WORLD_MIN_Y,
+  DEFAULT_SURFACE_Y,
+  TRACKER_CHUNK_SIZE,
+  TRACKER_SEED_SECONDS,
+  CRITICAL_CENTER_RAY_MAX_CHUNKS,
+  CRITICAL_CENTER_RAY_STEP_CHUNKS,
+  MIN_CRITICAL_RAY_HORIZONTAL,
+  CRITICAL_SCORE_BOOST,
+  FULL_DETAIL_SCORE_BOOST,
+  NEAR_PRESENCE_SCORE_BOOST,
+  TOP_MAP_PRECISION,
+  EMPTY_PRECISION,
+  ACTIVE_KEEP_EPSILON,
+  activeCellCapacity,
+  heightForSurfaceY,
+  precisionForStep,
+  trackerTimeSeconds,
+  targetLodStep,
+  meshCoversTarget,
+  meshSatisfiesTarget,
+  needsFullDowngrade,
+  resolveChunkScheduling,
+  comparePriority,
+} from './chunkPolicy';
+
+function emptyRankingResult(time: number): RankingResult {
+  return {
+    time,
+    activeCount: 0,
+    importance: { top: [], bottom: [] },
+    satisfaction: { top: [], bottom: [] },
+    gap: { top: [], bottom: [] },
+  };
+}
+
+function trackerConfigKey(cfg: ResolvedChunkScheduling): string {
+  return [
+    cfg.activeRadiusChunks,
+    cfg.tauImportance,
+    cfg.nearImportanceHalfLife,
+    cfg.farImportanceHalfLife,
+    cfg.importanceDecayDistancePower,
+    cfg.tauSatisfaction,
+    cfg.angleSigmaRad,
+    cfg.fovRadiusRad ?? 'none',
+    cfg.distanceWeightPower,
+    cfg.distanceInverseSquareRadiusBlocks ?? 'none',
+    cfg.overshootEta,
+    cfg.neighborPrecisionEpsilon,
+    cfg.neighborSatisfactionPenaltyByCount.join(','),
+    cfg.minSatisfaction,
+  ].join('|');
+}
+
+export class ChunkViewPlanner {
+  private tracker: CameraGridTracker | null = null;
+  private trackerKey = '';
+  private trackerSeeded = false;
+  private tmpDirection = new THREE.Vector3();
+  private opts: ChunkSchedulerOptions = {};
+  private currentConfig = resolveChunkScheduling();
+  private currentCenter = { cx: 0, cz: 0 };
+  get center(): Readonly<{ cx: number; cz: number }> {
+    return this.currentCenter;
+  }
+  get config(): Readonly<ResolvedChunkScheduling> {
+    return this.currentConfig;
+  }
+  clear() {
+    this.resetTracker();
+  }
+  plan(input: SchedulerTickInput): SchedulerFramePlan {
+    this.opts = input.options;
+    const nowSeconds = trackerTimeSeconds(input.now);
+    const topDownView = input.topDownView ?? false;
+    const cfg = resolveChunkScheduling(input.options.scheduling);
+    this.currentConfig = cfg;
+    this.ensureTracker(cfg);
+
+    const pose = this.poseFromCamera(input.camera);
+    const ranking = this.rankCells(pose, nowSeconds, cfg);
+    const centerCx = Math.floor(input.camera.position.x / CHUNK_SIZE_BLOCKS);
+    const centerCz = Math.floor(input.camera.position.z / CHUNK_SIZE_BLOCKS);
+    this.currentCenter = { cx: centerCx, cz: centerCz };
+    const nearPresenceCells = this.diskCells(centerCx, centerCz, cfg.nearPresenceRadiusChunks);
+    const nearPresenceKeys = new Set(nearPresenceCells.map((cell) => input.keyFor(cell.i, cell.j)));
+    const fullDetailCells = this.diskCells(centerCx, centerCz, cfg.fullDetailRadiusChunks);
+    const fullDetailKeys = new Set(fullDetailCells.map((cell) => input.keyFor(cell.i, cell.j)));
+    const criticalCells = this.criticalCellsForPose(pose, centerCx, centerCz, cfg);
+    const criticalKeys = new Set(criticalCells.map((cell) => input.keyFor(cell.i, cell.j)));
+
+    for (const cell of this.mergeRankedCells(ranking.gap.top, ranking.importance.top)) {
+      this.syncTrackerCell(
+        cell.i,
+        cell.j,
+        input.entries.get(input.keyFor(cell.i, cell.j)) ?? null,
+        input.cellInfoFor?.(cell.i, cell.j) ?? null,
+        nowSeconds,
+      );
+    }
+
+    for (const cell of nearPresenceCells) {
+      this.syncTrackerCell(
+        cell.i,
+        cell.j,
+        input.entries.get(input.keyFor(cell.i, cell.j)) ?? null,
+        input.cellInfoFor?.(cell.i, cell.j) ?? null,
+        nowSeconds,
+      );
+    }
+
+    const reranking = this.tracker?.query(cfg.maxCandidates, nowSeconds, { importance: 'top', gap: 'top' }) ?? ranking;
+    const criticalRankedCells = this.snapshotCriticalCells(criticalCells, nowSeconds);
+    const nearPresenceRankedCells = this.snapshotCriticalCells(nearPresenceCells, nowSeconds);
+    // Completed full meshes have negative gaps and normally disappear from the
+    // gap ranking, which used to leave them at full detail indefinitely. Add
+    // explicit downgrade candidates so they can transition to LOD as attention
+    // decays, even when they are no longer in the top tracker rankings.
+    const fullDowngradeCells = this.fullDowngradeCells(input.entries.values(), nowSeconds, criticalKeys);
+    const rankedCells = this.mergeRankedCells(
+      criticalRankedCells,
+      nearPresenceRankedCells,
+      fullDowngradeCells,
+      reranking.gap.top,
+      reranking.importance.top,
+    );
+    // Admission is based on camera demand, independently of completion/gap.
+    // Evicting completed cells to admit ever more unsatisfied cells makes a
+    // stationary, capacity-limited view cycle forever.
+    const admitted = new Set<string>();
+    for (const cell of [...criticalCells, ...nearPresenceCells])
+      if (input.cellInfoFor?.(cell.i, cell.j)?.hasChunkSource !== false) admitted.add(input.keyFor(cell.i, cell.j));
+    const admissionOrder = rankedCells
+      .map((cell) => {
+        const key = input.keyFor(cell.i, cell.j);
+        const entry = input.entries.get(key) ?? null;
+        return { cell, key, demand: cell.importance + (entry && entry.displayed !== 'none' ? 0.02 : 0) };
+      })
+      .sort((a, b) => b.demand - a.demand || a.cell.i - b.cell.i || a.cell.j - b.cell.j);
+    for (const { cell, key } of admissionOrder) {
+      if (admitted.size >= cfg.maxTrackedChunks) break;
+      if (input.cellInfoFor?.(cell.i, cell.j)?.hasChunkSource === false) continue;
+      admitted.add(key);
+    }
+    const keepKeys = this.activeDiskKeys(pose, cfg, input.keyFor);
+    const protectedKeys = new Set<string>(admitted);
+    const candidates: ChunkCandidate[] = [];
+
+    for (const cell of rankedCells) {
+      const key = input.keyFor(cell.i, cell.j);
+      if (!admitted.has(key)) continue;
+      const entry = input.entries.get(key) ?? null;
+      const info = input.cellInfoFor?.(cell.i, cell.j) ?? null;
+      const critical = criticalKeys.has(key);
+      const fullDetail = fullDetailKeys.has(key);
+      const nearPresence = nearPresenceKeys.has(key);
+      keepKeys.add(key);
+
+      const targetStep = critical
+        ? 1
+        : targetLodStep(cell.importance, entry?.lastTargetStep ?? 8, this.opts.disableLod === true);
+      const shouldSchedule = critical
+        ? this.shouldScheduleCriticalCell(entry, info, targetStep)
+        : nearPresence
+          ? this.shouldScheduleNearPresenceCell(entry, info, targetStep)
+          : this.shouldScheduleCell(cell, entry, info, targetStep, cfg);
+      if (!shouldSchedule) continue;
+
+      candidates.push({
+        key,
+        cx: cell.i,
+        cz: cell.j,
+        targetStep,
+        importance: cell.importance,
+        satisfaction: cell.satisfaction,
+        gap: cell.gap,
+        tier: critical
+          ? this.tierForCriticalCell(entry, targetStep, fullDetail)
+          : nearPresence
+            ? this.tierForNearPresenceCell(entry, targetStep)
+            : this.tierForCell(cell, entry, targetStep),
+        score:
+          this.scoreForCell(cell, entry, targetStep, centerCx, centerCz) +
+          (fullDetail
+            ? FULL_DETAIL_SCORE_BOOST
+            : critical
+              ? CRITICAL_SCORE_BOOST
+              : nearPresence
+                ? NEAR_PRESENCE_SCORE_BOOST
+                : 0),
+        updatedAt: input.now,
+      });
+    }
+
+    candidates.sort((a, b) => comparePriority(a, b) || a.cx - b.cx || a.cz - b.cz);
+    // Preserve every nearby presence candidate even when the normal frame
+    // budget is saturated; otherwise the edge of the close disk can still
+    // wait for a camera turn.
+    const guaranteedCandidateCount = candidates.reduce(
+      (count, candidate) => count + (nearPresenceKeys.has(candidate.key) ? 1 : 0),
+      0,
+    );
+    const frameCandidateLimit = Math.max(cfg.maxFrameCandidates, guaranteedCandidateCount);
+    if (candidates.length > frameCandidateLimit) candidates.length = frameCandidateLimit;
+    for (const candidate of candidates) protectedKeys.add(candidate.key);
+
+    if (isDebugLoggingEnabled()) {
+      debugLog('scheduler', 'tracker-frame', {
+        mode: topDownView ? 'topDown' : 'perspective',
+        center: [centerCx, centerCz],
+        activeRadiusChunks: cfg.activeRadiusChunks,
+        activeCells: rankedCells.length,
+        criticalCells: criticalCells.length,
+        nearPresenceCells: nearPresenceCells.length,
+        candidates: candidates.length,
+      });
+    }
+
+    return { candidates, keepKeys, protectedKeys, centerCx, centerCz };
+  }
+
+  private rankCells(pose: Pose, nowSeconds: number, cfg: ResolvedChunkScheduling): RankingResult {
+    const tracker = this.tracker;
+    if (!tracker) return emptyRankingResult(nowSeconds);
+
+    if (!this.trackerSeeded) {
+      const seedTime = Math.max(0, nowSeconds - TRACKER_SEED_SECONDS);
+      tracker.updateCamera(seedTime, pose, 0);
+      this.trackerSeeded = true;
+      return tracker.advanceTime(nowSeconds, cfg.maxCandidates, { importance: 'top', gap: 'top' });
+    }
+
+    return tracker.updateCamera(nowSeconds, pose, cfg.maxCandidates, { importance: 'top', gap: 'top' });
+  }
+
+  private criticalCellsForPose(
+    pose: Pose,
+    centerCx: number,
+    centerCz: number,
+    cfg: ResolvedChunkScheduling,
+  ): CriticalCell[] {
+    const out = this.diskCells(centerCx, centerCz, cfg.fullDetailRadiusChunks);
+    const seen = new Set(out.map((cell) => `${cell.i},${cell.j}`));
+    const add = (i: number, j: number): void => {
+      const key = `${i},${j}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ i, j });
+    };
+
+    const horizontal = Math.cos(pose.pitch);
+    const dx = horizontal * Math.sin(pose.yaw);
+    const dz = horizontal * Math.cos(pose.yaw);
+    const len = Math.hypot(dx, dz);
+    if (len < MIN_CRITICAL_RAY_HORIZONTAL) return out;
+
+    const ux = dx / len;
+    const uz = dz / len;
+    const maxChunks = Math.min(cfg.activeRadiusChunks, CRITICAL_CENTER_RAY_MAX_CHUNKS);
+    for (let d = CRITICAL_CENTER_RAY_STEP_CHUNKS; d <= maxChunks; d += CRITICAL_CENTER_RAY_STEP_CHUNKS) {
+      add(
+        Math.floor((pose.p.x + ux * d * CHUNK_SIZE_BLOCKS) / CHUNK_SIZE_BLOCKS),
+        Math.floor((pose.p.z + uz * d * CHUNK_SIZE_BLOCKS) / CHUNK_SIZE_BLOCKS),
+      );
+    }
+
+    return out;
+  }
+
+  private diskCells(centerCx: number, centerCz: number, radius: number): CriticalCell[] {
+    const out: CriticalCell[] = [];
+    for (let di = -radius; di <= radius; di++) {
+      for (let dj = -radius; dj <= radius; dj++) {
+        if (di * di + dj * dj > radius * radius) continue;
+        out.push({ i: centerCx + di, j: centerCz + dj });
+      }
+    }
+    return out;
+  }
+
+  private snapshotCriticalCells(cells: CriticalCell[], nowSeconds: number): RankedCell[] {
+    const tracker = this.tracker;
+    if (!tracker) return [];
+
+    return cells.map((cell) => {
+      const snapshot = tracker.getCellSnapshot(cell.i, cell.j, nowSeconds);
+      const gap = snapshot.importance - snapshot.satisfaction;
+      return {
+        i: cell.i,
+        j: cell.j,
+        score: gap,
+        importance: snapshot.importance,
+        satisfaction: snapshot.satisfaction,
+        gap,
+      };
+    });
+  }
+
+  private fullDowngradeCells(
+    entries: Iterable<ChunkSchedulerEntry>,
+    nowSeconds: number,
+    forcedFull: ReadonlySet<string>,
+  ): RankedCell[] {
+    const tracker = this.tracker;
+    if (!tracker || this.opts.disableLod === true) return [];
+
+    const out: RankedCell[] = [];
+    for (const entry of entries) {
+      if (forcedFull.has(entry.key) || entry.displayed !== 'full' || entry.dirty || entry.pendingFull) continue;
+      const snapshot = tracker.getCellSnapshot(entry.cx, entry.cz, nowSeconds);
+      const gap = snapshot.importance - snapshot.satisfaction;
+      const cell: RankedCell = {
+        i: entry.cx,
+        j: entry.cz,
+        score: gap,
+        importance: snapshot.importance,
+        satisfaction: snapshot.satisfaction,
+        gap,
+      };
+      if (targetLodStep(cell.importance, entry?.lastTargetStep ?? 8, false) > 1) out.push(cell);
+    }
+    return out;
+  }
+
+  private mergeRankedCells(...groups: RankedCell[][]): RankedCell[] {
+    const out: RankedCell[] = [];
+    const seen = new Set<string>();
+    for (const group of groups) {
+      for (const cell of group) {
+        const key = `${cell.i},${cell.j}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(cell);
+      }
+    }
+    return out;
+  }
+
+  private activeDiskKeys(
+    pose: Pose,
+    cfg: ResolvedChunkScheduling,
+    keyFor: (cx: number, cz: number) => string,
+  ): Set<string> {
+    const out = new Set<string>();
+    const radius = cfg.activeRadiusBlocks;
+    const radius2 = radius * radius;
+    const px = pose.p.x;
+    const pz = pose.p.z;
+
+    const i0 = Math.ceil((px - radius) / CHUNK_SIZE_BLOCKS - 0.5 - ACTIVE_KEEP_EPSILON);
+    const i1 = Math.floor((px + radius) / CHUNK_SIZE_BLOCKS - 0.5 + ACTIVE_KEEP_EPSILON);
+
+    for (let i = i0; i <= i1; i++) {
+      const xc = (i + 0.5) * CHUNK_SIZE_BLOCKS;
+      const dx = xc - px;
+      const remain = radius2 - dx * dx;
+      if (remain < -ACTIVE_KEEP_EPSILON) continue;
+
+      const zLimit = Math.sqrt(Math.max(0, remain));
+      const j0 = Math.ceil((pz - zLimit) / CHUNK_SIZE_BLOCKS - 0.5 - ACTIVE_KEEP_EPSILON);
+      const j1 = Math.floor((pz + zLimit) / CHUNK_SIZE_BLOCKS - 0.5 + ACTIVE_KEEP_EPSILON);
+
+      for (let j = j0; j <= j1; j++) out.add(keyFor(i, j));
+    }
+
+    return out;
+  }
+
+  private ensureTracker(cfg: ResolvedChunkScheduling) {
+    const key = trackerConfigKey(cfg);
+    if (this.tracker && this.trackerKey === key) return;
+
+    this.tracker = new CameraGridTracker({
+      k: CHUNK_SIZE_BLOCKS,
+      m: cfg.activeRadiusBlocks,
+      chunkSize: TRACKER_CHUNK_SIZE,
+      tauImportance: cfg.tauImportance,
+      nearImportanceHalfLife: cfg.nearImportanceHalfLife,
+      farImportanceHalfLife: cfg.farImportanceHalfLife,
+      importanceDecayDistancePower: cfg.importanceDecayDistancePower,
+      tauSatisfaction: cfg.tauSatisfaction,
+      angleSigmaRad: cfg.angleSigmaRad,
+      fovRadiusRad: cfg.fovRadiusRad,
+      distanceWeightPower: cfg.distanceWeightPower,
+      distanceInverseSquareRadius: cfg.distanceInverseSquareRadiusBlocks,
+      overshootEta: cfg.overshootEta,
+      maxActiveCells: activeCellCapacity(cfg.activeRadiusChunks),
+      initialHeight: heightForSurfaceY(DEFAULT_SURFACE_Y),
+      initialPrecision: EMPTY_PRECISION,
+      precisionToSatisfaction: (precision) => precision,
+      neighborPrecisionEpsilon: cfg.neighborPrecisionEpsilon,
+      neighborSatisfactionPenaltyByCount: cfg.neighborSatisfactionPenaltyByCount,
+      minSatisfaction: cfg.minSatisfaction,
+    });
+    this.trackerKey = key;
+    this.trackerSeeded = false;
+  }
+
+  private resetTracker() {
+    this.tracker = null;
+    this.trackerKey = '';
+    this.trackerSeeded = false;
+  }
+
+  private poseFromCamera(camera: ChunkSchedulerCamera): Pose {
+    camera.updateMatrixWorld(true);
+    camera.getWorldDirection(this.tmpDirection);
+    const direction =
+      this.tmpDirection.lengthSq() > 0 ? this.tmpDirection.normalize() : this.tmpDirection.set(0, 0, -1);
+
+    return {
+      p: {
+        x: camera.position.x,
+        y: camera.position.y - CHUNK_WORLD_MIN_Y,
+        z: camera.position.z,
+      },
+      yaw: Math.atan2(direction.x, direction.z),
+      pitch: Math.asin(Math.max(-1, Math.min(1, direction.y))),
+    };
+  }
+
+  private syncTrackerCell(
+    i: number,
+    j: number,
+    entry: ChunkSchedulerEntry | null,
+    info: SchedulerCellInfo | null,
+    nowSeconds: number,
+  ) {
+    if (!this.tracker) return;
+    this.tracker.setHeight(i, j, this.heightForCell(entry, info), nowSeconds);
+    this.tracker.setPrecision(i, j, this.precisionForCell(entry, info), nowSeconds);
+  }
+
+  syncEntry(entry: ChunkSchedulerEntry, nowSeconds: number) {
+    if (!this.tracker) return;
+    this.tracker.setHeight(entry.cx, entry.cz, this.heightForCell(entry, null), nowSeconds);
+    this.tracker.setPrecision(entry.cx, entry.cz, this.precisionForCell(entry, null), nowSeconds);
+  }
+
+  private heightForCell(entry: ChunkSchedulerEntry | null, info: SchedulerCellInfo | null): number {
+    const entrySurfaceY = (entry as (ChunkSchedulerEntry & { surfaceY?: number }) | null)?.surfaceY;
+    if (Number.isFinite(entrySurfaceY)) return heightForSurfaceY(entrySurfaceY!);
+    if (Number.isFinite(info?.topMapSurfaceY)) return heightForSurfaceY(info!.topMapSurfaceY!);
+    return heightForSurfaceY(DEFAULT_SURFACE_Y);
+  }
+
+  private precisionForCell(entry: ChunkSchedulerEntry | null, info: SchedulerCellInfo | null): number {
+    if (info?.hasChunkSource === false) return 1;
+    if (!entry) return Number.isFinite(info?.topMapSurfaceY) ? TOP_MAP_PRECISION : EMPTY_PRECISION;
+    if (entry.state === 'absent') {
+      return 1;
+    }
+    if (entry.state === 'error') return 0;
+    if (entry.displayed === 'full') return 1;
+    if (entry.displayed === 'lod') return precisionForStep(entry.displayedLodStep);
+    if (entry.dirty) return 0;
+    return Number.isFinite(info?.topMapSurfaceY) ? TOP_MAP_PRECISION : EMPTY_PRECISION;
+  }
+
+  private shouldScheduleCell(
+    cell: RankedCell,
+    entry: ChunkSchedulerEntry | null,
+    info: SchedulerCellInfo | null,
+    targetStep: LodStep,
+    cfg: ResolvedChunkScheduling,
+  ): boolean {
+    if (info?.hasChunkSource === false) return false;
+    if (entry?.state === 'absent' || entry?.state === 'error') return false;
+    if (
+      entry &&
+      (!meshCoversTarget(entry, targetStep) || needsFullDowngrade(entry, targetStep, this.opts.disableLod === true))
+    )
+      return true;
+    if (!entry) {
+      return cell.importance >= cfg.minImportanceToSchedule || cell.gap >= cfg.minGapToSchedule;
+    }
+    return entry.dirty || cell.gap >= cfg.minGapToSchedule;
+  }
+
+  private shouldScheduleCriticalCell(
+    entry: ChunkSchedulerEntry | null,
+    info: SchedulerCellInfo | null,
+    targetStep: LodStep,
+  ): boolean {
+    if (info?.hasChunkSource === false) return false;
+    if (entry?.state === 'absent' || entry?.state === 'error') return false;
+    if (!entry) return true;
+    return entry.dirty || !meshCoversTarget(entry, targetStep);
+  }
+
+  private shouldScheduleNearPresenceCell(
+    entry: ChunkSchedulerEntry | null,
+    info: SchedulerCellInfo | null,
+    targetStep: LodStep,
+  ): boolean {
+    if (info?.hasChunkSource === false) return false;
+    if (entry?.state === 'absent' || entry?.state === 'error') return false;
+    if (!entry) return true;
+    return !meshSatisfiesTarget(entry, targetStep, this.opts.disableLod === true);
+  }
+
+  private tierForCell(cell: RankedCell, entry: ChunkSchedulerEntry | null, targetStep: LodStep): number {
+    if (entry?.state === 'stored' && !meshCoversTarget(entry, targetStep)) return 0;
+    // Let a stale full -> LOD replacement run before ordinary background work;
+    // otherwise an old full mesh can monopolize memory while it waits behind
+    // newly discovered distant chunks.
+    if (entry?.state === 'stored' && needsFullDowngrade(entry, targetStep, this.opts.disableLod === true)) return 1;
+    if (entry?.dirty) return entry.displayed === 'none' ? 1 : 4;
+    if (!entry) return 2;
+    if (
+      entry.state === 'checking' ||
+      entry.state === 'resolving' ||
+      entry.state === 'hashed' ||
+      entry.state === 'fetching'
+    )
+      return 2;
+    if (targetStep === 1 && entry.displayed !== 'full') return 1;
+    if (cell.gap > 0.2) return 4;
+    return 5;
+  }
+
+  private tierForCriticalCell(entry: ChunkSchedulerEntry | null, targetStep: LodStep, near: boolean): number {
+    const boost = near ? -2 : 0;
+    if (entry?.dirty) return meshCoversTarget(entry, targetStep) ? 1 + boost : -3 + boost;
+    if (entry?.state === 'stored' && !meshCoversTarget(entry, targetStep)) return -3 + boost;
+    if (!entry) return -2 + boost;
+    if (
+      entry.state === 'checking' ||
+      entry.state === 'resolving' ||
+      entry.state === 'hashed' ||
+      entry.state === 'fetching'
+    )
+      return -2 + boost;
+    if (!meshCoversTarget(entry, targetStep)) return -1 + boost;
+    return 0;
+  }
+
+  private tierForNearPresenceCell(entry: ChunkSchedulerEntry | null, targetStep: LodStep): number {
+    if (!entry) return -1;
+    if (
+      entry.state === 'checking' ||
+      entry.state === 'resolving' ||
+      entry.state === 'hashed' ||
+      entry.state === 'fetching'
+    )
+      return -1;
+    if (entry.state === 'stored' && !meshSatisfiesTarget(entry, targetStep, this.opts.disableLod === true)) {
+      return entry.displayed === 'none' ? -1 : 2;
+    }
+    return 3;
+  }
+
+  private scoreForCell(
+    cell: RankedCell,
+    entry: ChunkSchedulerEntry | null,
+    targetStep: LodStep,
+    centerCx: number,
+    centerCz: number,
+  ): number {
+    const distance = Math.hypot(cell.i + 0.5 - (centerCx + 0.5), cell.j + 0.5 - (centerCz + 0.5));
+    const renderBoost =
+      entry?.state === 'stored' && !meshSatisfiesTarget(entry, targetStep, this.opts.disableLod === true) ? -300 : 0;
+    const ioPenalty =
+      !entry ||
+      entry.state === 'checking' ||
+      entry.state === 'resolving' ||
+      entry.state === 'hashed' ||
+      entry.state === 'fetching'
+        ? 120
+        : 0;
+    return renderBoost + ioPenalty - cell.gap * 1200 - cell.importance * 320 + distance * 0.7;
+  }
+
+  diagnosticCell(cx: number, cz: number): SchedulerCellDiagnostic | null {
+    const tracker = this.tracker;
+    if (!tracker) return null;
+    // Do not advance the tracker here: diagnostics must not change the camera
+    // integration interval that the next scheduler tick will consume.
+    const snapshot = tracker.getCellSnapshot(cx, cz, tracker.currentTime);
+    return {
+      cx,
+      cz,
+      height: snapshot.height,
+      precision: snapshot.precision,
+      importance: snapshot.importance,
+      satisfaction: snapshot.satisfaction,
+      gap: snapshot.importance - snapshot.satisfaction,
+      bump: snapshot.bump,
+    };
+  }
+}

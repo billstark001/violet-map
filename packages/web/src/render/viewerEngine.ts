@@ -1,3 +1,5 @@
+import type { TopClipRange } from './chunkScene';
+import { schedulerTuningForPreset, type SchedulerPreset } from '../scheduling/profiles';
 import { collectTextureIds } from '@violet-map/core/assets';
 import { type WorldCapabilities } from '@violet-map/core/contracts';
 import type { BiomeMap, DimensionMap } from '@violet-map/core/domain';
@@ -17,13 +19,8 @@ import {
   VIEW_STORAGE_KEY,
   type InitialView,
 } from './cameraState';
-import { ChunkManager, type ChunkManagerDiagnosticSnapshot, type TopClipRange } from './chunkManager';
-import {
-  EMPTY_CHUNK_SCHEDULER_STATS,
-  schedulerTuningForPreset,
-  type ChunkSchedulerStats,
-  type SchedulerPreset,
-} from './chunkScheduler';
+import { ChunkManager, type ChunkManagerDiagnosticSnapshot } from '../scheduling/chunkManager';
+import { EMPTY_CHUNK_SCHEDULER_STATS, type ChunkSchedulerStats } from '../scheduling/contracts';
 import { clampFlyPitch, FlyControls, normalizeFlyYaw, TopDownControls, type FlyView } from './controls';
 import {
   createMaterials,
@@ -849,13 +846,13 @@ function updateChunksAndTopMap(
   const offlineTopMap = topMapAvailable(capabilities, props.dimension);
 
   engine.topMap.configure(props.world, props.dimension, offlineTopMap);
-  if (manager) manager.root.visible = true;
+  if (manager) manager.terrain.root.visible = true;
   manager?.update(engine.activeCamera, now, false, topView, props.topClipRange);
   engine.topMap.update(engine.activeCamera, now, {
     mode: topView ? 'top' : 'perspective',
     radiusBlocks: TOP_MAP_FREE_VIEW_MAX_DISTANCE_BLOCKS,
     maxDistanceBlocks: TOP_MAP_FREE_VIEW_MAX_DISTANCE_BLOCKS,
-    onlineChunks: manager?.displayedChunkKeys(),
+    onlineChunks: manager?.terrain.displayedChunkKeys(),
   });
 
   return dimDef;

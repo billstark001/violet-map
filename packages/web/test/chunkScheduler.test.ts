@@ -1,7 +1,9 @@
+import { schedulerTuningForPreset } from '../src/scheduling/profiles.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as THREE from 'three';
-import { ChunkScheduler, type ChunkSchedulerEntry, schedulerTuningForPreset } from '../src/render/chunkScheduler.js';
+import { ChunkScheduler } from '../src/scheduling/chunkScheduler.js';
+import { type ChunkSchedulerEntry } from '../src/scheduling/contracts.js';
 
 test('scheduler presets keep finite radii for invalid distance settings', () => {
   for (const preset of ['potato', 'low', 'medium', 'high', 'extreme'] as const) {
@@ -23,17 +25,17 @@ test('a capacity-limited stationary view admits a stable set instead of evicting
   let admissions = 0;
   let stableAdmissions = 0;
   let stableEvictions = 0;
+  let fullChecks = 0;
   for (let frame = 0; frame < 400; frame++) {
     const now = frame * 100;
     const result = scheduler.tick({
       camera,
       now,
-      force: false,
       options,
       keyFor,
-      entryFor: (key) => entries.get(key) ?? null,
+
       cellInfoFor: () => ({ hasChunkSource: true, topMapSurfaceY: 64 }),
-      entries: [...entries.values()],
+      entries,
     });
     const updates = new Map(result.entryUpdates.map((u) => [u.key, u]));
     for (const action of result.actions) {
@@ -65,6 +67,12 @@ test('a capacity-limited stationary view admits a stable set instead of evicting
       const entry = entries.get(update.key);
       if (!entry) continue;
       Object.assign(entry, update);
+      const dx = entry.cx - result.centerCx,
+        dz = entry.cz - result.centerCz;
+      if (dx * dx + dz * dz <= 64) {
+        assert.equal(update.lastTargetStep, 1, 'full view distance must survive completed neighbors and falling gaps');
+        fullChecks++;
+      }
       entry.displayed = update.lastTargetStep === 1 ? 'full' : 'lod';
       entry.displayedLodStep = update.lastTargetStep === 1 ? 0 : update.lastTargetStep;
       entry.displayedVersion = frame;
@@ -78,8 +86,34 @@ test('a capacity-limited stationary view admits a stable set instead of evicting
       });
     }
     assert.ok(entries.size <= 384);
+    if (now > 20000)
+      for (const entry of entries.values()) {
+        const dx = entry.cx - result.centerCx,
+          dz = entry.cz - result.centerCz;
+        if (dx * dx + dz * dz <= 64) assert.equal(entry.displayed, 'full', 'settled quality was downgraded');
+      }
   }
   assert.ok(admissions > 197, 'the test must exercise capacity beyond the guaranteed near disk');
   assert.equal(stableAdmissions, 0);
   assert.equal(stableEvictions, 0);
+  assert.ok(fullChecks >= 197, 'the complete full-detail disk was requested');
+  for (let dx = -8; dx <= 8; dx++)
+    for (let dz = -8; dz <= 8; dz++) {
+      if (dx * dx + dz * dz > 64) continue;
+      const entry = entries.get(keyFor(-2 + dx, -2 + dz));
+      assert.equal(entry?.displayed, 'full', `view-distance hole at ${dx},${dz}`);
+    }
+});
+
+test('all scheduling profiles preserve requested quality and reserve capacity for the full disk', () => {
+  for (const preset of ['potato', 'low', 'medium', 'high', 'extreme'] as const)
+    for (const radius of [2, 8, 16, 32]) {
+      const tuning = schedulerTuningForPreset(preset, radius, 12);
+      assert.equal(tuning.fullDetailRadiusChunks, radius);
+      assert.ok(tuning.activeRadiusChunks! >= radius);
+      let count = 0;
+      for (let x = -radius; x <= radius; x++)
+        for (let z = -radius; z <= radius; z++) if (x * x + z * z <= radius * radius) count++;
+      assert.ok(tuning.maxTrackedChunks! >= count, `${preset} cannot retain its promised quality`);
+    }
 });

@@ -9,7 +9,7 @@ import {
   clearMeshCache,
   setMeshCacheEnabled,
   type CachedMesh,
-} from '../src/meshCache.js';
+} from '../src/scheduling/meshCache.js';
 
 const parts = {
   world: 'test',

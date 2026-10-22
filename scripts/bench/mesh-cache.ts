@@ -28,10 +28,10 @@ try {
     assert.ok(Number.isSafeInteger(rounds) && rounds > 0 && rounds <= 10000, 'rounds must be 1..10000');
     const result = await page.evaluate(
       async ({ rounds }) => {
-        const modulePath = '/src/meshCache.ts';
+        const modulePath = '/src/scheduling/meshCache.ts';
         const { clearMeshCache, getCachedMesh, putCachedMesh, setMeshCacheEnabled } = (await import(
           modulePath
-        )) as typeof import('../../packages/web/src/meshCache.js');
+        )) as typeof import('../../packages/web/src/scheduling/meshCache.js');
         const summaries = [];
         const parts = {
           world: 'benchmark',

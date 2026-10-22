@@ -1,7 +1,7 @@
 import { signal } from '@preact/signals';
-import type { TopClipRange } from '../render/chunkManager';
+import type { TopClipRange } from '../render/chunkScene';
 import type { ViewMode } from '../render/viewerEngine';
-import type { SchedulerPreset } from '../render/chunkScheduler';
+import { SCHEDULER_PRESETS, type SchedulerPreset } from '../scheduling/profiles';
 
 export type DiagnosticDetail = 'off' | 'simple' | 'standard' | 'detailed';
 
@@ -112,7 +112,7 @@ export function createSettingsStore(search: string, storage: SettingsStorage | n
     timeOfDay: number('timeOfDay', 0, 0, 1),
     debugLoggingEnabled: bool('debugLoggingEnabled', false),
     diagnosticDetail: choice('diagnosticDetail', 'standard', ['off', 'simple', 'standard', 'detailed']),
-    schedulerPreset: choice('schedulerPreset', 'medium', ['potato', 'low', 'medium', 'high', 'extreme']),
+    schedulerPreset: choice('schedulerPreset', 'medium', SCHEDULER_PRESETS),
     idbCacheEnabled: bool('idbCacheEnabled', true),
   });
   return {

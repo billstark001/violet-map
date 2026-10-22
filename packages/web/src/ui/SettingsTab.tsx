@@ -1,6 +1,7 @@
+import { SCHEDULER_PRESETS } from '../scheduling/profiles';
 import i18n, { language, languageOptions, t } from '../i18n';
 import { clearDebugLog } from '../logger';
-import { clearMeshCache } from '../meshCache';
+import { clearMeshCache } from '../scheduling/meshCache';
 import { serviceCapabilities } from '../runtime';
 import { cacheStats, diagnosticProvider, refreshCacheStats, settings } from '../state/viewer';
 import { browserStorage } from '../browserStorage';
@@ -157,7 +158,7 @@ export function SettingsTab() {
         id="scheduler-preset"
         label={t('schedulerPreset')}
         value={value.schedulerPreset}
-        options={(['potato', 'low', 'medium', 'high', 'extreme'] as const).map((preset) => ({
+        options={SCHEDULER_PRESETS.map((preset) => ({
           value: preset,
           label: t(`schedulerPreset_${preset}`),
         }))}

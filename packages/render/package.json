@@ -46,11 +46,6 @@
       "types": "./dist/top-map/mesh.d.ts",
       "default": "./dist/top-map/mesh.js"
     },
-    "./scheduler": {
-      "development": "./src/scheduler/cameraGridTracker.ts",
-      "types": "./dist/scheduler/cameraGridTracker.d.ts",
-      "default": "./dist/scheduler/cameraGridTracker.js"
-    },
     "./overlays": {
       "development": "./src/overlays.ts",
       "types": "./dist/overlays.d.ts",

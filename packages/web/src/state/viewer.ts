@@ -3,8 +3,8 @@ import type { WorldInfo } from '@violet-map/core/contracts';
 import { fetchWorlds } from '../api';
 import { browserStorage, readStored } from '../browserStorage';
 import { setDebugLoggingEnabled } from '../logger';
-import { getMeshCacheStats, setMeshCacheEnabled } from '../meshCache';
-import { EMPTY_CHUNK_SCHEDULER_STATS } from '../render/chunkScheduler';
+import { getMeshCacheStats, setMeshCacheEnabled } from '../scheduling/meshCache';
+import { EMPTY_CHUNK_SCHEDULER_STATS } from '../scheduling/contracts';
 import type { OverlayDiagnosticSnapshot } from '../render/overlayManager';
 import type {
   CameraPositionRequest,
