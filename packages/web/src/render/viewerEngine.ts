@@ -32,7 +32,7 @@ import {
 } from './materials';
 import { OverlayManager, type OverlayDiagnosticSnapshot } from './overlayManager';
 import { buildRenderKey } from './resourceKey';
-import { TopMapManager, type TopMapDiagnosticSnapshot } from './topMapManager';
+import { TopMapManager, type TopMapDiagnosticSnapshot } from '../scheduling/topMapManager';
 import { TransparencyRenderer, type TransparencyDiagnosticSnapshot } from './transparency';
 
 // Fluid UVs, exterior AO for partial models, and special-model transforms all

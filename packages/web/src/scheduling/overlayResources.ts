@@ -1,4 +1,4 @@
-import { OVERLAY_LIMITS } from './overlayLimits';
+import { OVERLAY_LIMITS } from '../render/overlayLimits';
 
 export interface DisposableOverlayResource {
   readonly bytes: number;

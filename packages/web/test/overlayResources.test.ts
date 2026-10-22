@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setImmediate } from 'node:timers/promises';
-import { OverlayResourcePool } from '../src/render/overlayResources.js';
+import { OverlayResourcePool } from '../src/scheduling/overlayResources.js';
 
 test('media resources coalesce loads and dispose exactly once after the last owner', async () => {
   let loads = 0,

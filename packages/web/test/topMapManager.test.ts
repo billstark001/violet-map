@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { setImmediate } from 'node:timers/promises';
 import { test } from 'node:test';
 import * as THREE from 'three';
-import { TopMapManager } from '../src/render/topMapManager.js';
+import { TopMapManager } from '../src/scheduling/topMapManager.js';
 
 test('a transient manifest failure is retried on a later update', async () => {
   const originalFetch = globalThis.fetch;
@@ -110,4 +110,75 @@ test('digest and archive scope switches abort pending tiles and dispose prior GP
   assert.equal(priorArchive.signal.aborted, true);
   assert.equal(state.tiles.has('0,0'), false);
   assert.equal(disposed, 6);
+});
+
+test('an obsolete tile failure cannot poison the replacement request or release its slot', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const { resourceClient } = await import('../src/resources/client.js');
+  const generation = resourceClient.current('archive')?.generation ?? 0;
+  let fail!: (error: Error) => void;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes('/views/current'))
+      return Response.json({
+        schemaVersion: 1,
+        viewId: '7'.repeat(64),
+        mode: 'server',
+        sourceScope: 'old-tile-error',
+        generation,
+        renderRoot: 'b'.repeat(64),
+      });
+    if (url.endsWith('/resolve'))
+      return new Promise<Response>((_, reject) => {
+        fail = reject;
+      });
+    return Response.json({
+      hasTopMap: true,
+      world: 'old-tile-error',
+      dimension: 'minecraft:overworld',
+      topMap: {
+        regions: [
+          {
+            x: 0,
+            z: 0,
+            hash: 'c'.repeat(64),
+            artifact: {
+              digest: 'c'.repeat(64),
+              bytes: 1,
+              mediaType: 'application/msgpack',
+              format: 'topmap-msgpack-v6',
+            },
+          },
+        ],
+      },
+    });
+  };
+  const manager = new TopMapManager(new THREE.Scene(), {} as never);
+  t.after(() => {
+    manager.dispose();
+    globalThis.fetch = originalFetch;
+  });
+  manager.configure('old-tile-error', 'minecraft:overworld', true);
+  await setImmediate();
+  assert.equal(manager.diagnosticSnapshot().manifestLoaded, true);
+  const state = manager as any;
+  let load!: Promise<void>;
+  const loadTile = state.loadTile.bind(state);
+  state.loadTile = (...args: unknown[]) => (load = loadTile(...args));
+  const camera = new THREE.OrthographicCamera(-10, 10, 10, -10);
+  camera.position.set(0, 100, 0);
+  manager.update(camera, performance.now(), { mode: 'top' });
+  assert.deepEqual(manager.diagnosticSnapshot().wantedTiles, ['0,0']);
+  await setImmediate();
+  assert.ok(fail, 'the original resolve must be in flight');
+  const previous = state.tileAborts.get('0,0');
+  previous.abort();
+  const replacement = new AbortController();
+  state.tileAborts.set('0,0', replacement);
+  state.tileDigests.set('0,0', 'd'.repeat(64));
+  fail(new Error('late transport error from an obsolete request'));
+  await load;
+  assert.equal(state.failedTiles.has('0,0'), false);
+  assert.equal(state.tileAborts.get('0,0'), replacement);
+  assert.equal(state.pendingTiles.has('0,0'), true);
 });

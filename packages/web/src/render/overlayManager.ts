@@ -26,7 +26,7 @@ import type { SharedUniforms } from './materials';
 import { OVERLAY_LIMITS } from './overlayLimits';
 import { OverlayMask, createMaskMaterial } from './overlayMask';
 import { loadOverlayMedia, type OverlayMediaResource } from './overlayMedia';
-import { OverlayResourcePool, type ResourceLease } from './overlayResources';
+import { OverlayResourcePool, type ResourceLease } from '../scheduling/overlayResources';
 
 const REFRESH_MS = 30_000;
 const RETRY_MS = 12_000;

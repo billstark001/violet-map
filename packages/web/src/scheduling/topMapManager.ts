@@ -11,21 +11,16 @@ import * as THREE from 'three';
 import { fetchTopMapManifest, fetchTopMapTile } from '../api';
 import { debugLog } from '../logger';
 import { resourceClient } from '../resources/client';
-import { createTopMapMaterial, type SharedUniforms } from './materials';
-import { candidateRegionCoords, type RegionCoordinate } from './tileCandidates';
+import { createTopMapMaterial, type SharedUniforms } from '../render/materials';
+import { planTopMapTiles, topMapLodStep, type RegionCoordinate } from './topMapPlanner';
 
 const MAX_RESIDENT_TILES = 96;
 const MAX_WANTED_TILES = 96;
 const MAX_PENDING_TILES = 6;
-const LOD4_ZOOM_THRESHOLD = 1.15;
-const LOD2_ZOOM_THRESHOLD = 2.25;
-const FREE_VIEW_LOD2_DISTANCE_BLOCKS = 32 * 16;
-const FREE_VIEW_LOD4_DISTANCE_BLOCKS = 128 * 16;
 const FAILED_TILE_RETRY_MS = 12000;
 const FAILED_MANIFEST_RETRY_MS = 5000;
 const UPDATE_INTERVAL_MS = 100;
 const FULL_COVERAGE_KEY = '*';
-const TILE_HALF_DIAGONAL_BLOCKS = (TOP_MAP_TILE_BLOCKS * Math.SQRT2) / 2;
 const TOP_MAP_CHUNKS_PER_AXIS = TOP_MAP_TILE_BLOCKS / 16;
 const TOP_MAP_CHUNK_MASK_BYTES = (TOP_MAP_CHUNKS_PER_AXIS * TOP_MAP_CHUNKS_PER_AXIS) / 8;
 
@@ -281,36 +276,20 @@ export class TopMapManager {
     const maxRx = Math.floor((camera.position.x + radiusX) / TOP_MAP_TILE_BLOCKS);
     const minRz = Math.floor((camera.position.z - radiusZ) / TOP_MAP_TILE_BLOCKS);
     const maxRz = Math.floor((camera.position.z + radiusZ) / TOP_MAP_TILE_BLOCKS);
-    const candidates: { rx: number; rz: number; key: string; distance: number }[] = [];
-    const maxDistance =
-      typeof options.maxDistanceBlocks === 'number' && Number.isFinite(options.maxDistanceBlocks)
-        ? Math.max(0, options.maxDistanceBlocks)
-        : Infinity;
-
-    for (const { rx, rz, key } of candidateRegionCoords(this.regions, { minRx, maxRx, minRz, maxRz })) {
-      const centerX = rx * TOP_MAP_TILE_BLOCKS + TOP_MAP_TILE_BLOCKS / 2;
-      const centerZ = rz * TOP_MAP_TILE_BLOCKS + TOP_MAP_TILE_BLOCKS / 2;
-      const distance = Math.hypot(centerX - camera.position.x, centerZ - camera.position.z);
-      // Keep the complete tile inside the cutoff. This avoids a coarse tile
-      // leaking geometry beyond the requested chunk-distance clamp.
-      if (distance + TILE_HALF_DIAGONAL_BLOCKS > maxDistance) continue;
-      candidates.push({
-        rx,
-        rz,
-        key,
-        distance,
-      });
-    }
-    candidates.sort((a, b) => a.distance - b.distance);
-    if (candidates.length > Math.min(MAX_WANTED_TILES, this.residentLimit)) {
-      candidates.length = Math.min(MAX_WANTED_TILES, this.residentLimit);
-    }
-    const activeCandidates = candidates;
+    const activeCandidates = planTopMapTiles(this.regions, {
+      bounds: { minRx, maxRx, minRz, maxRz },
+      cameraX: camera.position.x,
+      cameraZ: camera.position.z,
+      maxDistanceBlocks: options.maxDistanceBlocks,
+      limit: Math.min(MAX_WANTED_TILES, this.residentLimit),
+      mode: options.mode,
+      zoom: view.zoom,
+    });
 
     const wanted = new Set<string>();
     for (const candidate of activeCandidates) {
       const tile = this.tiles.get(candidate.key);
-      const step = this.stepForDistance(candidate.distance, options.mode, view.zoom);
+      const step = candidate.step;
       const coverage = this.latestCoverage.get(candidate.key);
       const coverageKey = coverage?.key ?? '';
       if (!tile && coverageKey === FULL_COVERAGE_KEY) continue;
@@ -342,7 +321,6 @@ export class TopMapManager {
     debugLog('top-map', 'update', {
       mode: options.mode,
       candidates: activeCandidates.length,
-      totalCandidates: candidates.length,
       resident: this.tiles.size,
       pending: this.pendingTiles.size,
     });
@@ -502,7 +480,7 @@ export class TopMapManager {
       }
       debugLog('top-map', 'tile-loaded', { key, rx, rz, chunks: payload.chunks, step, approach: payload.approach });
     } catch (error) {
-      if (isAbortError(error)) return;
+      if (isAbortError(error) || abort.signal.aborted || this.tileAborts.get(key) !== abort) return;
       if (this.disposed || world !== this.world || dimension !== this.dimension) return;
       this.failedTiles.set(key, performance.now());
       debugLog('top-map', 'tile-error', { key, rx, rz, error: error instanceof Error ? error.message : String(error) });
@@ -547,20 +525,10 @@ export class TopMapManager {
     tile.mesh.visible = true;
   }
 
-  private stepForDistance(distance: number, mode: TopMapUpdateOptions['mode'], zoom: number): number {
-    if (mode === 'perspective') {
-      if (distance <= FREE_VIEW_LOD2_DISTANCE_BLOCKS) return 2;
-      if (distance <= FREE_VIEW_LOD4_DISTANCE_BLOCKS) return 4;
-      return 8;
-    }
-    if (zoom >= LOD2_ZOOM_THRESHOLD) return 2;
-    return zoom >= LOD4_ZOOM_THRESHOLD ? 4 : 8;
-  }
-
   private latestStepForTile(rx: number, rz: number): number {
     const centerX = rx * TOP_MAP_TILE_BLOCKS + TOP_MAP_TILE_BLOCKS / 2;
     const centerZ = rz * TOP_MAP_TILE_BLOCKS + TOP_MAP_TILE_BLOCKS / 2;
-    return this.stepForDistance(
+    return topMapLodStep(
       Math.hypot(centerX - this.latestCameraX, centerZ - this.latestCameraZ),
       this.latestMode,
       this.latestZoom,
