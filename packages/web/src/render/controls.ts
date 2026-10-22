@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { FAST_MOVEMENT_KEYS, FLY_MOVEMENT_KEYS, TOP_MOVEMENT_KEYS } from '../view/navigationKeys';
 
 export interface FlyView {
   x: number;
@@ -17,10 +18,8 @@ export interface TopView {
 
 export type TopDownCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 
-const HORIZONTAL_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD'];
-const FAST_KEYS = ['ControlLeft', 'ControlRight'];
-const FLY_KEYS = new Set([...HORIZONTAL_KEYS, ...FAST_KEYS, 'Space', 'ShiftLeft', 'ShiftRight']);
-const TOP_KEYS = new Set([...HORIZONTAL_KEYS, ...FAST_KEYS, 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+const FLY_KEYS = new Set<string>(FLY_MOVEMENT_KEYS);
+const TOP_KEYS = new Set<string>(TOP_MOVEMENT_KEYS);
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -39,11 +38,18 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
 function handleMovementKey(e: KeyboardEvent, keys: Set<string>, supported: ReadonlySet<string>): void {
   if (e.type === 'keyup') {
     keys.delete(e.code);
+    // macOS may omit the other key releases while Command is held.
+    if (e.code === 'MetaLeft' || e.code === 'MetaRight') keys.clear();
     return;
   }
-  if (e.defaultPrevented || !supported.has(e.code) || isInteractiveTarget(e.target)) return;
+  if (e.defaultPrevented || e.isComposing || !supported.has(e.code) || isInteractiveTarget(e.target)) return;
   e.preventDefault();
   keys.add(e.code);
+}
+
+function focusViewport(dom: HTMLElement): void {
+  if (dom.tabIndex < 0) dom.tabIndex = -1;
+  dom.focus({ preventScroll: true });
 }
 
 export function normalizeFlyYaw(yaw: number): number {
@@ -56,7 +62,7 @@ export function clampFlyPitch(pitch: number): number {
   return Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, Number.isFinite(pitch) ? pitch : 0));
 }
 
-/** Pointer-lock flight with WASD, Space/Shift and Control acceleration. Call
+/** Pointer-lock flight with WASD, Space/Shift and Control/R acceleration. Call
  * update with elapsed seconds; dispose disables movement and releases the lock. */
 export class FlyControls {
   private keys = new Set<string>();
@@ -84,6 +90,7 @@ export class FlyControls {
   };
   private onClick = () => {
     if (!this.enabled) return;
+    focusViewport(this.dom);
     try {
       void this.dom.requestPointerLock?.()?.catch(() => {});
     } catch {
@@ -105,15 +112,15 @@ export class FlyControls {
     else this.syncFromCamera();
     dom.addEventListener('click', this.onClick);
     document.addEventListener('mousemove', this.onMouseMove);
-    document.addEventListener('keydown', this.onKey);
-    document.addEventListener('keyup', this.onKey);
+    document.addEventListener('keydown', this.onKey, { capture: true, passive: false });
+    document.addEventListener('keyup', this.onKey, true);
     window.addEventListener('blur', this.onBlur);
   }
 
   update(dt: number) {
     if (!this.enabled) return;
     this.camera.rotation.set(this.pitch, this.yaw, 0);
-    const multiplier = this.keys.has('ControlLeft') || this.keys.has('ControlRight') ? this.fastMultiplier : 1;
+    const multiplier = FAST_MOVEMENT_KEYS.some((key) => this.keys.has(key)) ? this.fastMultiplier : 1;
     const speed = this.baseSpeed * multiplier;
     this.forward.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     this.right.set(-this.forward.z, 0, this.forward.x);
@@ -188,8 +195,8 @@ export class FlyControls {
     this.setEnabled(false);
     this.dom.removeEventListener('click', this.onClick);
     document.removeEventListener('mousemove', this.onMouseMove);
-    document.removeEventListener('keydown', this.onKey);
-    document.removeEventListener('keyup', this.onKey);
+    document.removeEventListener('keydown', this.onKey, true);
+    document.removeEventListener('keyup', this.onKey, true);
     window.removeEventListener('blur', this.onBlur);
   }
 }
@@ -222,6 +229,7 @@ export class TopDownControls {
   private readonly onPointerDown = (e: PointerEvent) => {
     if (!this.enabled) return;
     if (isInteractiveTarget(e.target) || e.button !== 0) return;
+    focusViewport(this.dom);
     this.dragging = true;
     this.dom.setPointerCapture(e.pointerId);
     this.capturedPointerId = e.pointerId;
@@ -262,8 +270,8 @@ export class TopDownControls {
       }
       this.camera.updateProjectionMatrix();
     }
-    document.addEventListener('keydown', this.onKey);
-    document.addEventListener('keyup', this.onKey);
+    document.addEventListener('keydown', this.onKey, { capture: true, passive: false });
+    document.addEventListener('keyup', this.onKey, true);
     dom.addEventListener('wheel', this.onWheel, { passive: false });
     dom.addEventListener('pointerdown', this.onPointerDown);
     dom.addEventListener('pointermove', this.onPointerMove);
@@ -276,7 +284,7 @@ export class TopDownControls {
   update(dt: number) {
     if (!this.enabled) return;
     this.lockTopDown();
-    const multiplier = this.keys.has('ControlLeft') || this.keys.has('ControlRight') ? this.fastMultiplier : 1;
+    const multiplier = FAST_MOVEMENT_KEYS.some((key) => this.keys.has(key)) ? this.fastMultiplier : 1;
     this.move.set(0, 0, 0);
     if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) this.move.z -= 1;
     if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) this.move.z += 1;
@@ -334,8 +342,8 @@ export class TopDownControls {
 
   dispose() {
     this.setEnabled(false);
-    document.removeEventListener('keydown', this.onKey);
-    document.removeEventListener('keyup', this.onKey);
+    document.removeEventListener('keydown', this.onKey, true);
+    document.removeEventListener('keyup', this.onKey, true);
     this.dom.removeEventListener('wheel', this.onWheel);
     this.dom.removeEventListener('pointerdown', this.onPointerDown);
     this.dom.removeEventListener('pointermove', this.onPointerMove);

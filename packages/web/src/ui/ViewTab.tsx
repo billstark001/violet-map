@@ -14,6 +14,7 @@ import {
 import { defaultTopClipRange } from '../state/settings';
 import type { ViewMode } from '../render/viewerEngine';
 import { CameraFields } from './CameraFields';
+import { KeyboardLockControl } from './KeyboardLockControl';
 import { FieldGroup, RangeField, SelectField, ToggleField } from './fields';
 import controls from './controls.module.css';
 
@@ -131,6 +132,8 @@ export function ViewTab() {
         step={0.5}
         onChange={(fastMoveMultiplier) => settings.update({ fastMoveMultiplier })}
       />
+      <p className={controls.text}>{t('movementKeys')}</p>
+      <KeyboardLockControl />
       <ToggleField
         id="inertia-toggle"
         label={t('inertia')}

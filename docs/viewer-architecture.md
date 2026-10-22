@@ -38,6 +38,7 @@ Resource-head requests and body downloads share the same per-caller cancellation
 | `runtime/topMapRuntime.ts` | Manifest/tile identity, requests, cancellation and applying tile plans through a display port |
 | `runtime/overlayRuntime.ts`, `overlayMediaLoader.ts` | Overlay source/ETag/refresh lifetime and pinned media byte loading |
 | `runtime/viewerResources.ts`, `skyTextures.ts`, `resources/load.ts` | Complete render-root preparation, supported sky texture layouts, bounded admission retries and cancellation |
+| `runtime/keyboardLock.ts`, `view/navigationKeys.ts` | User-initiated fullscreen/keyboard capture lifetime and the shared navigation key contract; no scheduling or GPU ownership |
 | `resources/` | Shared verified downloads, resource-view identity/renewal, mesh cache and reference-counted media resource pool |
 | `render/chunkScene.ts`, `topMapScene.ts`, `overlayScene.ts` | GPU ownership, geometry replacement, clip/connectivity/frustum visibility and display feedback |
 | `render/viewSnapshot.ts` | Three.js camera to immutable view-state conversion |

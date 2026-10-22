@@ -81,6 +81,21 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
   const context = await browser.newContext({ locale: 'en-US' });
   await context.addInitScript('globalThis.__name = (fn) => fn');
   const viewer = await context.newPage();
+  await viewer.addInitScript(() => {
+    const probe = { keys: [] as string[], unlocks: 0 };
+    Object.assign(window, { keyboardLockProbe: probe });
+    Object.defineProperty(navigator, 'keyboard', {
+      configurable: true,
+      value: {
+        async lock(keys: string[]) {
+          probe.keys = keys;
+        },
+        unlock() {
+          probe.unlocks++;
+        },
+      },
+    });
+  });
   const errors: string[] = [];
   viewer.on('pageerror', (error) => errors.push(error.message));
   let releaseBundle!: () => void;
@@ -181,6 +196,65 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
   await viewer.locator('#coord-x').fill('123');
   await viewer.locator('#coord-x').press('Control+a');
   assert.equal(await viewer.locator('#coord-x').evaluate((node: HTMLInputElement) => node.value), '123');
+  await viewer.locator('#coord-x').press('4');
+  assert.equal(
+    await viewer.locator('#coord-x').inputValue(),
+    '4',
+    'native select-all remains available while editing coordinates',
+  );
+  await viewer.locator('#coord-x').fill('123');
+  for (const mode of ['perspective', 'topPerspective', 'topOrthographic']) {
+    await viewer.locator('#view-mode').selectOption(mode);
+    await viewer.locator('#coord-x').focus();
+    await viewer
+      .locator('canvas')
+      .first()
+      .click({ position: { x: 700, y: 500 } });
+    assert.equal(
+      await viewer.evaluate(() => document.activeElement === document.querySelector('canvas')),
+      true,
+      `${mode}: clicking terrain must release form focus`,
+    );
+    const consumed = await viewer.evaluate(() => {
+      const canvas = document.querySelector('canvas')!;
+      const stop = (event: Event) => event.stopPropagation();
+      canvas.addEventListener('keydown', stop);
+      try {
+        return ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR'].flatMap((code) =>
+          [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { ctrlKey: true, shiftKey: true }].map(
+            (modifiers) => {
+              const event = new KeyboardEvent('keydown', { code, bubbles: true, cancelable: true, ...modifiers });
+              canvas.dispatchEvent(event);
+              canvas.dispatchEvent(new KeyboardEvent('keyup', { code, bubbles: true }));
+              return event.defaultPrevented;
+            },
+          ),
+        );
+      } finally {
+        canvas.removeEventListener('keydown', stop);
+      }
+    });
+    assert.ok(consumed.every(Boolean), `${mode}: navigation must be cancelled before target/bubble handlers`);
+    await viewer.evaluate(() => document.exitPointerLock());
+  }
+  await viewer.locator('#view-mode').selectOption('perspective');
+  // Exercise real fullscreen and the UI lifecycle with a deterministic keyboard
+  // adapter; reserved accelerators are not portable Playwright input events.
+  await viewer.getByRole('button', { name: '全屏并锁定导航快捷键', exact: true }).click();
+  await viewer.getByRole('button', { name: '释放键盘锁', exact: true }).waitFor();
+  assert.equal(await viewer.evaluate(() => document.fullscreenElement === document.documentElement), true);
+  const lockedKeys = await viewer.evaluate(
+    () => (window as unknown as { keyboardLockProbe: { keys: string[] } }).keyboardLockProbe.keys,
+  );
+  assert.ok(lockedKeys.includes('KeyW') && lockedKeys.includes('KeyR'));
+  assert.ok(!lockedKeys.includes('Escape') && !lockedKeys.includes('Tab'));
+  await viewer.evaluate(() => document.exitFullscreen());
+  await viewer.getByRole('button', { name: '全屏并锁定导航快捷键', exact: true }).waitFor();
+  assert.ok(
+    await viewer.evaluate(
+      () => (window as unknown as { keyboardLockProbe: { unlocks: number } }).keyboardLockProbe.unlocks > 0,
+    ),
+  );
   await viewer.getByRole('button', { name: '前往', exact: true }).click();
   await viewer.waitForFunction(() => JSON.parse(localStorage.getItem('violet-map:view') ?? '{}').x === 123);
   assert.equal(await originalCanvas!.evaluate((canvas) => canvas.isConnected), true);

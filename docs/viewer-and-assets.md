@@ -33,6 +33,10 @@ The viewer persists its selected world, camera, scheduler, diagnostics, and sett
 
 The web UI uses native Preact controls and CSS Modules. Shared loading, capabilities, settings and diagnostics are coordinated through signals. The canvas is mounted in a separate `#viewport` outside the UI's `#root`; changing panels, languages or settings does not recreate the renderer. URL settings override saved values for the current session without overwriting those saved values. Clip ranges are saved separately for each dimension. Failed world-list requests show a retry action, and keyboard shortcuts remain available in form controls while camera movement consumes its own browser shortcuts.
 
+Click the map to give navigation keyboard focus. WASD moves, Space/Shift moves up/down in flight, and either Ctrl or R applies the selected fast-movement multiplier in all camera modes. Camera keys cancel their delivered browser defaults in the capture phase, including Control/Command combinations; text editing and native panel navigation retain their shortcuts.
+
+The View panel offers an optional **Fullscreen with keyboard lock** action when the browser supports it. It requests fullscreen and permission only after a click, captures the navigation key set and releases it on fullscreen exit or UI disposal. Escape is never captured. Permission failures are shown explicitly. Browsers and operating systems can reserve combinations such as Ctrl+W/Command+W without delivering them to ordinary webpages; keyboard lock is also subject to platform restrictions. R acceleration avoids relying on those modifiers. See the [Keyboard Lock specification](https://wicg.github.io/keyboard-lock/).
+
 ```bash
 pnpm violet-map --help
 ```
