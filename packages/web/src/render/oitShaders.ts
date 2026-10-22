@@ -3,7 +3,7 @@
 // independently implemented for WebGL2. See docs/transparency.md.
 export const OIT_BIN_COUNT = 16;
 export const OIT_ATTACHMENT_COUNT = OIT_BIN_COUNT / 4;
-export const OIT_MAX_PIXELS = 1_572_864;
+export const OIT_MAX_PIXELS = 3_145_728;
 export const OIT_BYTES_PER_PIXEL = 64; // color/depth 8, bounds 16, bins 32, accumulation 8
 
 export type OitPhase = 'base' | 'bounds' | 'bins' | 'color';

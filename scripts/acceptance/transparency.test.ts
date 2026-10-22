@@ -121,6 +121,12 @@ test(
       const benchmark = await page.evaluate(() => window.transparencyHarness.benchmark());
       worlds.push({ projection, ...world, order, benchmark });
     }
+    const nativeResolution = await page.evaluate(() => window.transparencyHarness.resize(2560, 1080));
+    assert.deepEqual(
+      [nativeResolution.width, nativeResolution.height],
+      [2560, 1080],
+      'original render resolution was reduced',
+    );
     const large = await page.evaluate(() => window.transparencyHarness.resize(3840, 2160));
     assert.ok(large.width * large.height <= OIT_MAX_PIXELS);
     assert.equal(large.bufferBytes, large.width * large.height * OIT_BYTES_PER_PIXEL);

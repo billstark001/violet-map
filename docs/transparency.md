@@ -35,7 +35,7 @@ WebGL2 must expose `EXT_color_buffer_float`, `EXT_float_blend` and four draw buf
 | Weighted color/alpha                       | RGBA16F                        |           8 |
 | Total                                      |                                |          64 |
 
-Targets retain aspect ratio and are capped at 1,572,864 pixels: 96 MiB before driver overhead. Larger canvases receive an upscaled composite; depth-disabled annotations draw at destination resolution. At 960×720 the targets use 44,236,800 bytes (42.19 MiB). Meshes, assets, masks, the canvas and renderer lookup textures are additional allocations.
+Targets retain aspect ratio and are capped at 3,145,728 pixels: 192 MiB before driver overhead. Larger canvases receive an upscaled composite; depth-disabled annotations draw at destination resolution. At 960×720 the targets use 44,236,800 bytes (42.19 MiB). Meshes, assets, masks, the canvas and renderer lookup textures are additional allocations.
 
 ## Rendering acceptance
 
