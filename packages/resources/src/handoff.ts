@@ -90,6 +90,14 @@ export class HandoffStore {
     entry.until = Math.max(entry.until, this.now() + this.lifetimeMs);
     return entry.until;
   }
+  /** Renew an existing owner's promise without adding another claim. */
+  renew(key: string): number {
+    this.sweep();
+    const entry = this.entries.get(key);
+    if (!entry) throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'handoff expired during batch preparation', true);
+    entry.until = Math.max(entry.until, this.now() + this.lifetimeMs);
+    return entry.until;
+  }
   consume(key: string) {
     const entry = this.entries.get(key);
     if (!entry) return;

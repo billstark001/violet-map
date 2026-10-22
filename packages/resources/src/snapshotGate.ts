@@ -32,7 +32,9 @@ export class SnapshotGate {
     write: boolean,
     operation: (token: SnapshotToken) => Promise<T>,
     existing?: SnapshotToken,
+    signal?: AbortSignal,
   ): Promise<T> {
+    signal?.throwIfAborted();
     if (existing) {
       if (!this.tokens.has(existing))
         throw new ResourceError('SOURCE_SNAPSHOT_CHANGED', 'snapshot token is no longer active');
@@ -40,18 +42,31 @@ export class SnapshotGate {
     }
     if (this.queue.length >= this.maxQueued)
       throw new ResourceError('RESOURCE_BUSY', 'source snapshot queue exhausted', true);
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
+      const abort = () => {
+        const index = this.queue.indexOf(waiting);
+        if (index >= 0) this.queue.splice(index, 1);
+        reject(signal!.reason);
+        this.drain();
+      };
       const start = () => {
+        signal?.removeEventListener('abort', abort);
         if (write) this.writer = true;
         else this.readers++;
         resolve();
       };
+      const waiting = { write, start };
       if (!this.writer && !this.queue.length && (write ? this.readers === 0 : this.readers < this.maxReaders)) start();
-      else this.queue.push({ write, start });
+      else {
+        this.queue.push(waiting);
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) abort();
+      }
     });
     const token = { id: ++this.nextToken };
     this.tokens.add(token);
     try {
+      signal?.throwIfAborted();
       return await operation(token);
     } finally {
       this.tokens.delete(token);
@@ -60,10 +75,10 @@ export class SnapshotGate {
       this.drain();
     }
   }
-  read<T>(operation: (token: SnapshotToken) => Promise<T>, token?: SnapshotToken) {
-    return this.run(false, operation, token);
+  read<T>(operation: (token: SnapshotToken) => Promise<T>, token?: SnapshotToken, signal?: AbortSignal) {
+    return this.run(false, operation, token, signal);
   }
-  write<T>(operation: (token: SnapshotToken) => Promise<T>) {
-    return this.run(true, operation);
+  write<T>(operation: (token: SnapshotToken) => Promise<T>, signal?: AbortSignal) {
+    return this.run(true, operation, undefined, signal);
   }
 }

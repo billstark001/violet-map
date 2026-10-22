@@ -12,11 +12,234 @@ import {
   ResourceCache,
   ResourceDelivery,
   Singleflight,
+  RevisionMemo,
   type PreparedResource,
 } from '../src/index.js';
 
 const bytes = new TextEncoder().encode('deterministic payload');
 const key = sha256('action');
+
+const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+test('a fast consumer cannot consume the producer pin before a signal-owning shared waiter acquires it', async (t) => {
+  const f = fixture();
+  t.after(() => f.repository.close());
+  for (let round = 0; round < 40; round++) {
+    const immediate = f.repository.ensure(f.action).then((lease) => lease.release());
+    const delayed = f.repository.ensure(f.action, new AbortController().signal);
+    const [, lease] = await Promise.all([immediate, delayed]);
+    assert.deepEqual(f.repository.open(lease.artifact), bytes);
+    lease.release();
+    assert.equal(f.repository.handoff.budget.bytes, 0);
+  }
+});
+
+test('shared tasks cancel owners independently, retain retiring slots and dispose abandoned results once', async () => {
+  const tasks = new Singleflight(2);
+  const first = new AbortController();
+  const second = new AbortController();
+  let complete!: (value: number) => void;
+  let lifetime!: AbortSignal;
+  let disposed = 0;
+  const run = (signal: AbortSignal) =>
+    tasks.run(
+      'same',
+      async (owned) => {
+        lifetime = owned;
+        return new Promise<number>((resolve) => {
+          complete = resolve;
+        });
+      },
+      signal,
+      {
+        release: () => {
+          disposed++;
+        },
+      },
+    );
+  const a = run(first.signal),
+    b = run(second.signal);
+  await tick();
+  first.abort(new Error('first owner left'));
+  await assert.rejects(a, /first owner left/);
+  assert.equal(lifetime.aborted, false);
+  second.abort(new Error('last owner left'));
+  await assert.rejects(b, /last owner left/);
+  assert.equal(lifetime.aborted, true);
+  assert.equal(tasks.size, 1);
+  let replace!: (value: number) => void;
+  const replacement = tasks.run(
+    'same',
+    async () =>
+      new Promise<number>((resolve) => {
+        replace = resolve;
+      }),
+  );
+  await tick();
+  complete(1);
+  await tick();
+  assert.equal(disposed, 1);
+  assert.equal(tasks.size, 1);
+  const joined = tasks.run('same', async () => {
+    throw new Error('retired cleanup removed replacement');
+  });
+  replace(2);
+  assert.deepEqual(await Promise.all([replacement, joined]), [2, 2]);
+  await tasks.close();
+});
+
+test('dependency memo retains only reliable unchanged revisions within its byte budget', async () => {
+  let current: string | undefined = 'one',
+    loads = 0;
+  const memo = new RevisionMemo(4096);
+  const read = () =>
+    memo.get(
+      'region',
+      async () => current,
+      async () => String(++loads),
+    );
+  assert.equal(await read(), '1');
+  assert.equal(await read(), '1');
+  current = 'two';
+  assert.equal(await read(), '2');
+  current = undefined;
+  assert.equal(await read(), '3');
+  assert.equal(await read(), '4');
+  current = 'three';
+  await assert.rejects(
+    memo.get(
+      'changing',
+      async () => current,
+      async () => {
+        current = 'four';
+        return 'digest';
+      },
+    ),
+    { code: 'SOURCE_SNAPSHOT_CHANGED' },
+  );
+  const zero = new RevisionMemo(0);
+  await zero.get(
+    'zero',
+    async () => 'same',
+    async () => String(++loads),
+  );
+  await zero.get(
+    'zero',
+    async () => 'same',
+    async () => String(++loads),
+  );
+  assert.equal(loads, 6);
+});
+
+test('dependency validation is admitted before expensive revision probes', async () => {
+  const memo = new RevisionMemo(4096);
+  let finish!: () => void,
+    probes = 0;
+  const barrier = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const pending = Array.from({ length: 16 }, (_, i) =>
+    memo.get(
+      String(i),
+      async () => {
+        probes++;
+        await barrier;
+        return 'revision';
+      },
+      async () => 'digest',
+    ),
+  );
+  await assert.rejects(
+    memo.get(
+      'overflow',
+      async () => {
+        probes++;
+        return 'revision';
+      },
+      async () => 'digest',
+    ),
+    { code: 'RESOURCE_BUSY' },
+  );
+  assert.equal(probes, 16);
+  finish();
+  await Promise.all(pending);
+  assert.equal(
+    await memo.get(
+      'next',
+      async () => 'revision',
+      async () => 'next digest',
+    ),
+    'next digest',
+  );
+});
+
+test('a canceled logical owner cannot release a shared action reservation still used by another owner', async (t) => {
+  const f = fixture();
+  t.after(() => f.repository.close());
+  let finish!: () => void;
+  let actionSignal!: AbortSignal;
+  const action = {
+    ...f.action,
+    generate: async (signal: AbortSignal) => {
+      actionSignal = signal;
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      return bytes;
+    },
+  };
+  const controller = new AbortController();
+  const a = f.repository.build('a', 0, action.maxBytes, action.workBytes, async () => action, 1, controller.signal);
+  await tick();
+  // An ensure waiter borrows the materializer without owning a second
+  // preparation reservation that could mask premature release of the first.
+  const b = f.repository.ensure(action);
+  await tick();
+  controller.abort(new Error('owner left'));
+  await assert.rejects(a, /owner left/);
+  await tick();
+  assert.equal(actionSignal.aborted, false);
+  assert.ok(f.repository.work.bytes >= action.workBytes);
+  finish();
+  const lease = await b;
+  assert.ok(lease);
+  lease.release();
+  assert.equal(f.repository.work.bytes, 0);
+  assert.equal(f.repository.handoff.budget.bytes, 0);
+});
+
+test('handoff renewal extends the final delivery window without creating another claim', () => {
+  let now = 100;
+  const handoff = new HandoffStore(1024, 30, () => now);
+  handoff.put('object', bytes);
+  handoff.claim('object');
+  now = 120;
+  assert.equal(handoff.renew('object'), 150);
+  handoff.consume('object');
+  assert.equal(handoff.budget.bytes, 0);
+  handoff.put('expired', bytes);
+  now = 151;
+  assert.throws(() => handoff.renew('expired'), { code: 'RESOURCE_VIEW_EXPIRED' });
+  handoff.close();
+});
+
+test('a canceled publisher body read leaves its queued work budget and promise owned by the remaining consumer', async (t) => {
+  const f = fixture();
+  t.after(() => f.repository.close());
+  const held = await f.repository.ensure(f.action);
+  const occupy = f.repository.work.reserve(f.repository.work.capacity);
+  const controller = new AbortController();
+  const reading = f.repository.acquire(held.artifact, false, controller.signal);
+  await tick();
+  assert.equal(f.repository.work.queuedTasks, 1);
+  controller.abort(new Error('publisher stopped'));
+  await assert.rejects(reading, /publisher stopped/);
+  assert.equal(f.repository.work.queuedTasks, 0);
+  occupy();
+  assert.ok(f.repository.lease(held.artifact));
+  held.release();
+  assert.equal(f.repository.handoff.budget.bytes, 0);
+});
 
 function fixture(memoryBytes = 0, handoffBytes = 1024) {
   const source = new InvalidationCoordinator();

@@ -60,6 +60,7 @@ export interface RepositoryOptions {
 }
 
 interface Reservation {
+  ownedByTask?: boolean;
   releaseWork(): void;
   releaseHandoff(): void;
   maxBytes: number;
@@ -96,7 +97,12 @@ export class BlobRepository {
     this.tasks = new Singleflight(options.maxTasks);
     this.prepares = new Singleflight(options.maxTasks);
   }
-  private async reserve(maxBytes: number, workBytes: number, maxArtifacts = 1): Promise<Reservation> {
+  private async reserve(
+    maxBytes: number,
+    workBytes: number,
+    maxArtifacts = 1,
+    signal = this.controller.signal,
+  ): Promise<Reservation> {
     byteCapacity(maxBytes);
     byteCapacity(workBytes);
     if (maxBytes < 1) throw new RangeError('invalid generator budget');
@@ -104,14 +110,9 @@ export class BlobRepository {
       throw new ResourceError('RESOURCE_BUSY', 'generator output exceeds available work budget', true);
     // Delivery can drain while a producer waits for handoff space. Never occupy
     // work bytes first: GETs need that budget to consume the existing promises.
-    const releaseHandoff = await this.handoff.reserve(
-      maxBytes,
-      maxArtifacts,
-      this.options.maxTasks,
-      this.controller.signal,
-    );
+    const releaseHandoff = await this.handoff.reserve(maxBytes, maxArtifacts, this.options.maxTasks, signal);
     try {
-      const releaseWork = await this.work.waitReserve(workBytes, this.options.maxTasks, this.controller.signal);
+      const releaseWork = await this.work.waitReserve(workBytes, this.options.maxTasks, signal);
       return {
         releaseWork,
         releaseHandoff,
@@ -145,37 +146,48 @@ export class BlobRepository {
   cancelPromise(ref: ArtifactRef) {
     this.handoff.consume(ref.digest);
   }
+  renewPromise(ref: ArtifactRef) {
+    return this.handoff.renew(ref.digest);
+  }
   async build(
     logicalKey: string,
     generation: number,
     maxBytes: number,
     workBytes: number,
-    prepare: () => Promise<PreparedResource | null>,
+    prepare: (signal: AbortSignal) => Promise<PreparedResource | null>,
     maxArtifacts = 1,
+    signal?: AbortSignal,
   ): Promise<(ResourceLease & { actionKey: string }) | null> {
     this.options.source.assert(generation);
-    const held = await this.prepares.run(`${generation}:${logicalKey}`, async () => {
-      const reservation = await this.reserve(maxBytes, workBytes, maxArtifacts);
-      try {
-        this.controller.signal.throwIfAborted();
-        const action = await prepare();
-        if (!action) return null;
-        if (action.maxBytes > maxBytes || action.workBytes > workBytes || (action.maxArtifacts ?? 1) > maxArtifacts)
-          throw new ResourceError('RESOURCE_BUSY', 'prepared action exceeds reserved work');
-        return { ...(await this.run(action, reservation)), actionKey: action.actionKey };
-      } finally {
-        reservation.releaseHandoff();
-        reservation.releaseWork();
-      }
-    });
-    if (!held) return null;
-    try {
-      return { ...this.hold(held.artifacts), actionKey: held.actionKey };
-    } finally {
-      held.release();
-    }
+    return this.prepares.run(
+      `${generation}:${logicalKey}`,
+      async (taskSignal) => {
+        const lifetime = AbortSignal.any([taskSignal, this.controller.signal]);
+        const reservation = await this.reserve(maxBytes, workBytes, maxArtifacts, lifetime);
+        try {
+          lifetime.throwIfAborted();
+          const action = await prepare(lifetime);
+          lifetime.throwIfAborted();
+          if (!action) return null;
+          if (action.maxBytes > maxBytes || action.workBytes > workBytes || (action.maxArtifacts ?? 1) > maxArtifacts)
+            throw new ResourceError('RESOURCE_BUSY', 'prepared action exceeds reserved work');
+          return { ...(await this.run(action, reservation, lifetime)), actionKey: action.actionKey };
+        } finally {
+          if (!reservation.ownedByTask) {
+            reservation.releaseHandoff();
+            reservation.releaseWork();
+          }
+        }
+      },
+      signal,
+      {
+        acquire: (lease) => (lease ? { ...this.hold(lease.artifacts), actionKey: lease.actionKey } : null),
+        release: (lease) => lease?.release(),
+      },
+    );
   }
-  private hold(artifacts: readonly ArtifactRef[]): ResourceLease {
+  /** Independent ownership of already admitted outputs; no new byte copies. */
+  hold(artifacts: readonly ArtifactRef[]): ResourceLease {
     const claimed: ArtifactRef[] = [];
     let validUntil = Infinity;
     try {
@@ -200,29 +212,41 @@ export class BlobRepository {
       },
     };
   }
-  async ensure(action: PreparedResource): Promise<ResourceLease> {
-    const held = await this.run(action);
-    try {
-      return this.hold(held.artifacts);
-    } finally {
-      held.release();
-    }
+  async ensure(action: PreparedResource, signal?: AbortSignal): Promise<ResourceLease> {
+    return this.run(action, undefined, signal);
   }
-  private run(action: PreparedResource, reservation?: Reservation): Promise<ResourceLease> {
+  private run(action: PreparedResource, reservation?: Reservation, signal?: AbortSignal): Promise<ResourceLease> {
     if (!/^[a-f0-9]{64}$/.test(action.actionKey)) throw new TypeError('invalid action key');
     this.options.source.assert(action.generation);
-    return this.tasks.run(`${action.generation}:${action.actionKey}`, () => this.materialize(action, reservation));
+    return this.tasks.run(
+      `${action.generation}:${action.actionKey}`,
+      async (taskSignal) => {
+        if (reservation) reservation.ownedByTask = true;
+        try {
+          return await this.materialize(action, reservation, AbortSignal.any([taskSignal, this.controller.signal]));
+        } finally {
+          reservation?.releaseHandoff();
+          reservation?.releaseWork();
+        }
+      },
+      signal,
+      { acquire: (lease) => this.hold(lease.artifacts), release: (lease) => lease.release() },
+    );
   }
-  private async materialize(action: PreparedResource, reservation?: Reservation): Promise<ResourceLease> {
+  private async materialize(
+    action: PreparedResource,
+    reservation: Reservation | undefined,
+    signal: AbortSignal,
+  ): Promise<ResourceLease> {
     this.options.source.assert(action.generation);
-    this.controller.signal.throwIfAborted();
+    signal.throwIfAborted();
     let known = await this.options.index.get(action.actionKey);
     for (const layer of this.options.layers ?? []) {
       if (known) break;
       known = await layer.action(action.actionKey);
     }
     this.options.source.assert(action.generation);
-    this.controller.signal.throwIfAborted();
+    signal.throwIfAborted();
     if (known && (known.mediaType !== action.mediaType || known.format !== action.format))
       throw new ResourceError('RESOURCE_INTEGRITY_FAILED', 'action representation changed');
     if (known) {
@@ -234,7 +258,8 @@ export class BlobRepository {
         return this.hold([known, ...(action.related?.(this.open(known)) ?? [])]);
       }
     }
-    const owned = reservation ?? (await this.reserve(action.maxBytes, action.workBytes, action.maxArtifacts ?? 1));
+    const owned =
+      reservation ?? (await this.reserve(action.maxBytes, action.workBytes, action.maxArtifacts ?? 1, signal));
     try {
       if (known) {
         const load = async (ref: ArtifactRef): Promise<Uint8Array | null> => {
@@ -264,10 +289,13 @@ export class BlobRepository {
             outputs.push({ ref, bytes });
           }
           if (complete) {
+            signal.throwIfAborted();
             this.options.source.assert(action.generation);
             const held = this.retainOutputs(outputs, owned);
             try {
+              signal.throwIfAborted();
               await this.options.index.set(action.actionKey, known);
+              signal.throwIfAborted();
               this.options.source.assert(action.generation);
               this.metrics.actionHit++;
               return held;
@@ -280,8 +308,8 @@ export class BlobRepository {
       }
       this.metrics.actionMiss++;
       this.metrics.generation++;
-      const generated = await action.generate(this.controller.signal);
-      this.controller.signal.throwIfAborted();
+      const generated = await action.generate(signal);
+      signal.throwIfAborted();
       const bytes = generated instanceof Uint8Array ? generated : generated.bytes;
       const related = generated instanceof Uint8Array ? [] : generated.related;
       if (
@@ -302,11 +330,14 @@ export class BlobRepository {
       const held = this.retainOutputs([{ ref, bytes }, ...outputs], owned);
       try {
         for (const layer of this.options.layers ?? []) {
+          signal.throwIfAborted();
           for (const output of outputs) await layer.retain(output.ref.digest, output.ref, output.bytes);
           await layer.retain(action.actionKey, ref, bytes);
         }
         this.options.source.assert(action.generation);
+        signal.throwIfAborted();
         await this.options.index.set(action.actionKey, ref);
+        signal.throwIfAborted();
         this.options.source.assert(action.generation);
         return held;
       } catch (error) {
@@ -337,9 +368,11 @@ export class BlobRepository {
     verifyArtifact(ref, bytes);
     return bytes;
   }
-  async acquire(ref: ArtifactRef, consumePromise = true): Promise<ArtifactRead> {
-    const release = await this.work.waitReserve(ref.bytes, this.options.maxTasks, this.controller.signal);
+  async acquire(ref: ArtifactRef, consumePromise = true, signal?: AbortSignal): Promise<ArtifactRead> {
+    const lifetime = signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal;
+    const release = await this.work.waitReserve(ref.bytes, this.options.maxTasks, lifetime);
     try {
+      lifetime.throwIfAborted();
       const bytes = this.open(ref);
       let active = true;
       return {

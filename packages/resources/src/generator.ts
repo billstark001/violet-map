@@ -7,6 +7,7 @@ import {
   ResourceError,
   type PublicationEntry,
   type ResourceSelector,
+  type ArtifactRef,
 } from '@violet-map/core/resources';
 import { sha256 } from '@violet-map/storage';
 import type { BlobRepository, PreparedResource } from './blobRepository.js';
@@ -17,6 +18,11 @@ import { selectorKey } from './publication.js';
 import { type Singleflight } from './singleflight.js';
 import { type SnapshotGate, type SnapshotToken } from './snapshotGate.js';
 import { type ByteBudget } from './budget.js';
+
+export interface GenerationInputs {
+  bundle?: ArtifactRef;
+  blocks?: ArtifactRef;
+}
 
 /** Owns generation inputs, temporary output leases and explicit atlas sets. */
 export class ResourceGenerator {
@@ -60,17 +66,41 @@ export class ResourceGenerator {
     selector: ResourceSelector,
     generation: number,
     token?: SnapshotToken,
+    signal?: AbortSignal,
+    inputs?: GenerationInputs,
   ): Promise<PublicationEntry | null> {
     if (token)
       return this.sourceGate.read(
         (snapshot) =>
-          this.operations.run('snapshot-generate:' + token.id + ':' + generation + selectorKey(selector), () =>
-            this.generateSnapshot(selector, generation, snapshot),
+          this.operations.run(
+            'snapshot-generate:' + token.id + ':' + generation + selectorKey(selector),
+            (taskSignal) => this.generateSnapshot(selector, generation, snapshot, taskSignal, inputs),
+            signal,
+            {
+              acquire: (entry) => this.retain(entry),
+              release: (entry) => {
+                if (entry) this.release(entry);
+              },
+            },
           ),
         token,
+        signal,
       );
-    return this.operations.run('generate:' + generation + selectorKey(selector), () =>
-      this.sourceGate.read((snapshot) => this.generateSnapshot(selector, generation, snapshot)),
+    return this.operations.run(
+      'generate:' + generation + selectorKey(selector),
+      (taskSignal) =>
+        this.sourceGate.read(
+          (snapshot) => this.generateSnapshot(selector, generation, snapshot, taskSignal, inputs),
+          undefined,
+          taskSignal,
+        ),
+      signal,
+      {
+        acquire: (entry) => this.retain(entry),
+        release: (entry) => {
+          if (entry) this.release(entry);
+        },
+      },
     );
   }
 
@@ -78,6 +108,8 @@ export class ResourceGenerator {
     selector: ResourceSelector,
     generation: number,
     _token: SnapshotToken,
+    signal: AbortSignal,
+    inputs?: GenerationInputs,
   ): Promise<PublicationEntry | null> {
     const repo = this.repo();
     const dynamic = this.dynamic;
@@ -118,14 +150,26 @@ export class ResourceGenerator {
       generation,
       maxBytes,
       workBytes,
-      async () => {
+      async (prepareSignal) => {
+        prepareSignal.throwIfAborted();
         if (selector.kind === 'atlas') {
           const supplied = this.textureSets.get(selector.textureSetId);
           if (selector.textureSetId !== 'default' && !supplied)
             throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'explicit atlas texture set expired', true);
-          const bundle = await dynamic.assets.buildAssetBundle();
-          const blocks = await dynamic.gameData.buildBlockInfo();
-          const prepared = await dynamic.assets.prepareTextureAtlas(supplied?.ids ?? collectTextureIds(bundle, blocks));
+          const bundle = inputs?.bundle
+            ? (JSON.parse(
+                new TextDecoder().decode(repo.open(inputs.bundle)),
+              ) as import('@violet-map/core/assets').AssetBundle)
+            : await dynamic.assets.buildAssetBundle();
+          const blocks = inputs?.blocks
+            ? (JSON.parse(
+                new TextDecoder().decode(repo.open(inputs.blocks)),
+              ) as import('@violet-map/core/assets').BlockInfoMap)
+            : await dynamic.gameData.buildBlockInfo();
+          const prepared = await dynamic.assets.prepareTextureAtlas(
+            supplied?.ids ?? collectTextureIds(bundle, blocks),
+            bundle,
+          );
           return {
             actionKey: prepared.key,
             generation,
@@ -241,15 +285,32 @@ export class ResourceGenerator {
         } satisfies PreparedResource;
       },
       selector.kind === 'atlas' ? 2 : 1,
+      signal,
     );
     if (!result) return null;
     const entry: PublicationEntry = { selector, artifact: result.artifact, actionKey: result.actionKey, ...extra };
-    this.generationLeases.set(entry, result.release);
-    if (selector.kind === 'atlas') {
-      const atlasData = JSON.parse(new TextDecoder().decode(repo.open(result.artifact))) as AtlasDocument;
-      entry.image = parseArtifactRef(atlasData.image);
+    try {
+      if (selector.kind === 'atlas') {
+        const atlasData = JSON.parse(new TextDecoder().decode(repo.open(result.artifact))) as AtlasDocument;
+        entry.image = parseArtifactRef(atlasData.image);
+      }
+      signal.throwIfAborted();
+      this.generationLeases.set(entry, result.release);
+      return entry;
+    } catch (error) {
+      result.release();
+      throw error;
     }
-    return entry;
+  }
+
+  private retain(entry: PublicationEntry | null): PublicationEntry | null {
+    if (!entry) return null;
+    const copy = { ...entry };
+    if (entry.selector.kind !== 'overlay-media') {
+      const held = this.repo().hold([entry.artifact, ...(entry.image ? [entry.image] : [])]);
+      this.generationLeases.set(copy, held.release);
+    }
+    return copy;
   }
 
   release(entry: PublicationEntry) {

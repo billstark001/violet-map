@@ -572,7 +572,7 @@ export function createAssetPack(config: AssetPackOptions) {
     return { key, png: bytes, manifest };
   }
 
-  async function prepareTextureAtlas(ids: string[]) {
+  async function prepareTextureAtlas(ids: string[], bundle?: AssetBundle) {
     const normalized = [
       '__missing__',
       ...Array.from(new Set(ids.map(normalizeId)))
@@ -580,7 +580,7 @@ export function createAssetPack(config: AssetPackOptions) {
         .sort(),
     ];
     if (normalized.length - 1 > MAX_ATLAS_TEXTURES) throw new RangeError('atlas texture set exceeds limits');
-    const textureAnimations = (await buildAssetBundle()).textureAnimations;
+    const textureAnimations = (bundle ?? (await buildAssetBundle())).textureAnimations;
     const textures: ({ bytes: Uint8Array } | null)[] = [];
     let inputBytes = 0,
       decodedBytes = 0;
