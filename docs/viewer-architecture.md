@@ -20,6 +20,8 @@ Optional cache misses, transient transport retries, source lease renewal, absent
 
 Resource kinds and error codes each have one shared runtime/type definition in core. Browser clients validate complete error documents instead of casting arbitrary strings or inferring missing retry flags. Invalid error documents are reported explicitly as HTTP transport failures; they never select another resource or delivery target.
 
+Shared downloads are owned by individual job records. Only a live, non-aborted job may accept another owner. A retiring canceled transfer continues to consume its byte/request budget until it settles, and cleanup removes that exact job. Active bytes are derived from those records; an old completion cannot remove a replacement or release its budget.
+
 ## Ownership
 
 | Owner | Responsibilities |

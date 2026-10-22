@@ -137,3 +137,49 @@ test('cached and coalesced downloads still enforce each reference byte length', 
   assert.equal(results[0].status, 'fulfilled');
   assert.equal(results[1].status, 'rejected');
 });
+
+test('a new owner cannot inherit an aborted transfer while cancellation is still settling', async (t) => {
+  const completions: ((response: Response) => void)[] = [];
+  t.mock.method(globalThis, 'fetch', () => new Promise<Response>((resolve) => completions.push(resolve)));
+  const downloader = new ResourceDownloader(0, 6, 2);
+  const controller = new AbortController();
+  const old = downloader.download(ref(), controller.signal);
+  controller.abort();
+  await assert.rejects(old, { name: 'AbortError' });
+  const replacement = downloader.download(ref()).then(
+    (value) => ({ value }),
+    (error) => ({ error }),
+  );
+  completions[0](new Response(bytes, { headers: { 'content-type': 'image/png' } }));
+  // The old transport ignores cancellation; finish it before checking ownership.
+  if (completions[1]) completions[1](new Response(bytes, { headers: { 'content-type': 'image/png' } }));
+  const result = await replacement;
+  assert.equal(completions.length, 2, 'replacement work must have a fresh transport owner');
+  assert.deepEqual(result, { value: bytes });
+});
+
+test('retiring transfers keep their admission budget and completion cannot revoke a replacement', async (t) => {
+  for (const capacity of [1, 2]) {
+    const completions: ((response: Response) => void)[] = [];
+    t.mock.method(globalThis, 'fetch', () => new Promise<Response>((resolve) => completions.push(resolve)));
+    const downloader = new ResourceDownloader(0, capacity * 3, capacity);
+    const controller = new AbortController();
+    const old = downloader.download(ref(), controller.signal);
+    const job = [...Reflect.get(downloader, 'pending')][0];
+    controller.abort();
+    await assert.rejects(old, { name: 'AbortError' });
+    if (capacity === 1) {
+      await assert.rejects(downloader.download(ref()), { code: 'RESOURCE_BUSY', retryable: true });
+      assert.equal(completions.length, 1);
+    }
+    const replacement = capacity === 2 ? downloader.download(ref()) : undefined;
+    completions[0](new Response(bytes, { headers: { 'content-type': 'image/png' } }));
+    await assert.rejects(job.promise, { name: 'AbortError' });
+    const current = replacement ?? downloader.download(ref());
+    const coalesced = downloader.download(ref());
+    assert.equal(completions.length, 2, 'old completion must preserve the live replacement');
+    completions[1](new Response(bytes, { headers: { 'content-type': 'image/png' } }));
+    assert.deepEqual(await current, bytes);
+    assert.deepEqual(await coalesced, bytes);
+  }
+});
