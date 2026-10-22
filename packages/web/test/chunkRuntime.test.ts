@@ -119,7 +119,6 @@ test('unavailable IndexedDB falls back to worker meshing for both full and LOD t
         fullCacheMisses: 0,
         lodCacheMisses: 0,
         disposed: false,
-        maxActiveMeshTasks: () => 1,
         ensureNeighborhoodWorkerData: () => true,
 
         neighborhoodCacheParts: () => ({
@@ -539,6 +538,10 @@ test('transient IO backs off without discarding displayed terrain; a worker dead
   manager.meshJobs.set(1, { state: { phase: 'worker', workerIndex: 0 }, startedAt: performance.now() - 30001 });
   manager.checkWorkerHealth();
   assert.equal(queued, 2);
+  manager.meshJobs.clear();
+  manager.chunks.set('invalid-decode', { state: 'decoding' });
+  manager.checkWorkerHealth();
+  assert.equal(queued, 3, 'a missing decode timestamp cannot reset its deadline to now forever');
 });
 
 test('known neighbors are restored before first display and cancelled read admission remains retryable', () => {

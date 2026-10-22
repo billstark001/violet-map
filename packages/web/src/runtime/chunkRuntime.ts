@@ -1,4 +1,9 @@
-import { chunkRetryDelayMs, chunkWorkIdle, MESH_PREPARATIONS_PER_WORKER } from '../scheduling/chunkPolicy';
+import {
+  chunkRetryDelayMs,
+  chunkWorkIdle,
+  workerProgressExpired,
+  MESH_PREPARATIONS_PER_WORKER,
+} from '../scheduling/chunkPolicy';
 import type { ViewerResourceBudget } from '../scheduling/resourceBudget';
 import { selectResidencyReleases, workerDataReleasable, WORKER_NEIGHBOR_HOLD_MS } from '../scheduling/chunkResidency';
 import { EMPTY_CHUNK_DISPLAY, type ChunkDisplayState } from '../view/terrain';
@@ -116,7 +121,7 @@ interface ChunkEntry extends ChunkSchedulerEntry, ChunkDisplayState {
   retryAttempts: number;
   lastError?: string;
   readyContentDigest?: string;
-  decodingStartedAt?: number;
+  decodingStartedAt: number | null;
   estimatedColumnBytes: number;
   workerReadyMask: number;
   workerKeepUntil: number;
@@ -227,11 +232,16 @@ export class ChunkRuntime {
   private checkWorkerHealth() {
     if (this.disposed) return;
     const now = performance.now();
-    if (
-      [...this.meshJobs.values()].some((job) => job.state.phase === 'worker' && now - job.startedAt > 30000) ||
-      [...this.chunks.values()].some((e) => e.state === 'decoding' && now - (e.decodingStartedAt ?? now) > 30000)
-    )
-      this.recoverWorkers('mesh worker exceeded its progress deadline');
+    for (const job of this.meshJobs.values())
+      if (job.state.phase === 'worker' && workerProgressExpired(job.startedAt, now)) {
+        this.recoverWorkers('mesh worker exceeded its progress deadline');
+        return;
+      }
+    for (const entry of this.chunks.values())
+      if (entry.state === 'decoding' && workerProgressExpired(entry.decodingStartedAt, now)) {
+        this.recoverWorkers('chunk decode lost its progress deadline');
+        return;
+      }
   }
 
   private recoverWorkers(reason: string) {
@@ -245,7 +255,7 @@ export class ChunkRuntime {
     for (const e of this.chunks.values()) {
       if (e.state === 'stored' || e.state === 'decoding') e.state = 'hashed';
       e.workerReadyMask = 0;
-      e.decodingStartedAt = undefined;
+      e.decodingStartedAt = null;
       if (affected.has(e)) {
         e.dirty = true;
         e.dirtyToken++;
@@ -532,6 +542,7 @@ export class ChunkRuntime {
       retryAttempts: 0,
       workerPins: 0,
       estimatedColumnBytes: 0,
+      decodingStartedAt: null,
       workerReadyMask: 0,
       workerKeepUntil: 0,
       pendingMeshVersion: null,
@@ -586,7 +597,7 @@ export class ChunkRuntime {
       }
       const dispatch = this.scheduler.dispatchWorkers({
         now,
-        maxTasks: this.maxActiveMeshTasks(),
+        maxTasks: this.workers.length,
         workerLoads: this.workerExecution().loads,
         entries: this.chunks,
         ready: [...this.meshJobs]
@@ -603,13 +614,13 @@ export class ChunkRuntime {
       }
       for (const { task, workerIndex } of dispatch.start)
         if (!this.dispatchWorkerMesh(task.entry as ChunkEntry, task.kind, task.step, task.version, workerIndex)) return;
-      while (this.meshJobs.size < this.maxActiveMeshTasks() * MESH_PREPARATIONS_PER_WORKER) {
+      while (this.meshJobs.size < this.workers.length * MESH_PREPARATIONS_PER_WORKER) {
         const work = this.scheduler.nextWork({
           now: performance.now(),
           activeHashBatches: this.checking,
           activeFetchBatches: this.fetching,
           activeMeshTasks: this.meshJobs.size,
-          maxMeshTasks: this.maxActiveMeshTasks() * MESH_PREPARATIONS_PER_WORKER,
+          maxMeshTasks: this.workers.length * MESH_PREPARATIONS_PER_WORKER,
           entries: this.chunks,
           includeHash: false,
           includeFetch: false,
@@ -628,10 +639,6 @@ export class ChunkRuntime {
     } finally {
       this.meshFlushing = false;
     }
-  }
-
-  private maxActiveMeshTasks(): number {
-    return this.workers.length;
   }
 
   private isCurrentMeshJob(version: number, job: MeshJob): boolean {
@@ -872,7 +879,7 @@ export class ChunkRuntime {
   // #region Mesh requests
 
   private requestMesh(e: ChunkEntry, kind: MeshTaskKind, step: LodStep): boolean {
-    if (e.pendingFull || e.pendingLod || this.meshJobs.size >= this.maxActiveMeshTasks() * MESH_PREPARATIONS_PER_WORKER)
+    if (e.pendingFull || e.pendingLod || this.meshJobs.size >= this.workers.length * MESH_PREPARATIONS_PER_WORKER)
       return false;
     const cache = this.neighborhoodCacheParts(e);
     if (!cache) {
@@ -946,7 +953,7 @@ export class ChunkRuntime {
         activeHashBatches: this.checking,
         activeFetchBatches: this.fetching,
         activeMeshTasks: this.workerExecution().activeTasks,
-        maxMeshTasks: this.maxActiveMeshTasks(),
+        maxMeshTasks: this.workers.length,
         entries: this.chunks,
         includeHash: kind === 'hash',
         includeFetch: kind === 'fetch',
@@ -1333,7 +1340,7 @@ export class ChunkRuntime {
         this.terrain.updateSurface(e.key, e.surfaceY);
         if (e.workerReadyMask !== this.allWorkersMask()) break;
         e.state = 'stored';
-        e.decodingStartedAt = undefined;
+        e.decodingStartedAt = null;
         if (e.readyContentDigest !== msg.contentDigest) {
           e.readyContentDigest = msg.contentDigest;
           this.markNeighborsDirty(e);

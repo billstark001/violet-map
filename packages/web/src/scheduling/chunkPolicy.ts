@@ -167,6 +167,10 @@ export function trackerTimeSeconds(now: number): number {
   return now / 1000;
 }
 
+export function workerProgressExpired(startedAt: number | null, now: number): boolean {
+  return startedAt === null || !Number.isFinite(startedAt) || now - startedAt > 30_000;
+}
+
 export function resolveChunkScheduling(scheduling: ChunkSchedulingTuning = {}): ResolvedChunkScheduling {
   const fullDetailRadiusChunks = Math.max(
     1,

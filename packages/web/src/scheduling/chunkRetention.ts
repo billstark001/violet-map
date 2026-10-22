@@ -157,9 +157,8 @@ export function selectChunkEvictions(input: ChunkRetentionInput): string[] {
     (count, entry) => count + (protectedKeys.has(entry.key) || !chunkWorkIdle(entry) ? 1 : 0),
     0,
   );
-  const softLimit = Math.max(existingProtectedCount, residentLimit - Math.max(0, reservedSlots));
-  const hardLimit = softLimit;
-  if (all.length - out.length <= softLimit) return out;
+  const trackedLimit = Math.max(existingProtectedCount, residentLimit - Math.max(0, reservedSlots));
+  if (all.length - out.length <= trackedLimit) return out;
 
   let tracked = all.length - out.length;
   const dropVictim = (victim: ChunkSchedulerEntry): void => {
@@ -172,14 +171,14 @@ export function selectChunkEvictions(input: ChunkRetentionInput): string[] {
   const victims = evictionVictims(
     releasable.filter((entry) => !keepKeys.has(entry.key) && !already.has(entry.key)),
     now,
-    tracked - softLimit,
+    tracked - trackedLimit,
   );
   for (const victim of victims) {
-    if (tracked <= softLimit) break;
+    if (tracked <= trackedLimit) break;
     dropVictim(victim);
   }
 
-  if (tracked > softLimit) {
+  if (tracked > trackedLimit) {
     const staleActiveVictims = evictionVictims(
       releasable.filter(
         (entry) =>
@@ -189,22 +188,22 @@ export function selectChunkEvictions(input: ChunkRetentionInput): string[] {
           !isDemandFresh(demandFor(entry), now),
       ),
       now,
-      tracked - softLimit,
+      tracked - trackedLimit,
     );
     for (const victim of staleActiveVictims) {
-      if (tracked <= softLimit) break;
+      if (tracked <= trackedLimit) break;
       dropVictim(victim);
     }
   }
 
-  if (tracked > hardLimit) {
+  if (tracked > trackedLimit) {
     const activeVictims = evictionVictims(
       releasable.filter((entry) => keepKeys.has(entry.key) && !protectedKeys.has(entry.key) && !already.has(entry.key)),
       now,
-      tracked - hardLimit,
+      tracked - trackedLimit,
     );
     for (const victim of activeVictims) {
-      if (tracked <= hardLimit) break;
+      if (tracked <= trackedLimit) break;
       dropVictim(victim);
     }
   }
