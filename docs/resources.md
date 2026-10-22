@@ -100,4 +100,34 @@ Run `test:resources`, `test:resources:browser`, `test:resources:roles` and `benc
 
 Controlled source synchronization does not trigger an intermediate publication. Source mutations mark `requiresSourceSnapshot`; complete the synchronization, freeze the source, then explicitly prepare/publish. This marker survives publisher restart and prevents an unrelated content debounce from publishing a partially synchronized source. Content revisions remain committed even while their publication is pending.
 
+## Online preparation and public links
+
+A server with public delivery and the `publish` role can prepare the complete frozen source online, upload missing derived objects to its configured S3/HTTP target, verify their anonymous HTTP representation, then conditionally commit the publication head. The ordinary public head and resolve APIs continue to read committed publications. A missing public selector does not trigger source generation.
+
+With the existing admin API and `ci` authorization enabled, send:
+
+```http
+POST /api/admin/resources/readiness
+Authorization: Bearer <existing CI credential>
+Content-Type: application/json
+
+{"expectedHead":null,"world":"world","selectors":[{"kind":"chunk","world":"world","dimension":"minecraft:overworld","cx":0,"cz":0}]}
+```
+
+Use `null` only for the first publication; otherwise supply the current publication ID. The response is `202` with `{id,state:"pending",startedAt}` and a `Location` header. Poll `GET /api/admin/resources/readiness/:id` with the same authorization. Only `state:"ready"` includes `result:{head,resources}`. Resources use the existing single public URL contract, including the atlas manifest/image pair; the browser downloads bodies anonymously from S3/CDN with the existing integrity downloader. Requested selectors, at most 128, choose the returned references, not the scope of the uploaded closure. Omitted selectors return the ready public head alone. A genuine missing chunk/texture retains the ordinary `missing:true` result.
+
+The server owns one online task, independent of the initiating connection. Identical pending requests join that task; another intent while it runs receives retryable `RESOURCE_BUSY`. It retains one bounded result, whose status expires after 24 hours; starting another replaces the previous terminal task and revalidates the frozen source, even with identical parameters. A completed task cannot suppress publication of later source changes while the head is unchanged. IDs/status are process-local and disappear on restart. Committed heads and existing prepared-publication recovery remain durable. After a lost status or restart, inspect the authoritative head before retrying with its expected parent. Failed tasks contain a resource error and no partial links; the head remains the visibility authority, including if result projection fails after a successful commit. Repeating a stable publication still performs no object/control writes.
+
+`resources.publication.warmup: startup` (ENV `RESOURCES_PUBLICATION_WARMUP=startup`) opts into online preparation when no head or pending state exists. The default is `manual`. Startup warmup requires public delivery, `publish` and `snapshot`; service startup does not wait for the upload. Existing pending reconciliation and `requiresSourceSnapshot` rules still apply. Pure public readers never initialize an uploader or writable source.
+
+## Bounded read paths
+
+Immutable publication documents and selector/region indexes share a bounded metadata cache. Head/retention checks remain authoritative. Top-map terrain/environment dependency digests are memoized only against reliable unchanged revisions; weak terrain revisions bypass retention, and a changed revision during validation fails explicitly. Portable content digests and output formats are unchanged. Top-map preparation reads two terrain columns per batch and retains no decoded terrain between operations. Render-root preparation reuses its admitted bundle/block artifacts for atlas preparation without adding a persistent parsed-data cache.
+
+Resolve cancellation belongs to each caller; shared work ends when its last owner leaves, while uninterruptible backend reads remain charged until settlement. A 25-second resolve deadline is shorter than the browser transport deadline. Handoff availability is renewed after the complete batch is ready; an intermediate expired pin produces an explicit retry instead of dead references. Server body membership has a bounded index owned by the same member lifetime. Game-data inputs are limited to 8 MiB before body reads and checked again after bounded reading. Browser world owners release old heads on navigation/disposal, so polling and the active-head limit do not accumulate navigation history.
+
+Coalesced results acquire an independent lease for each caller before that caller can release it. Batch membership stays owned until the whole batch settles. Dependency revision probes admit at most 16 concurrent operations before source IO. Automatic reconciliation waits for foreground builds and rechecks durable source-snapshot requirements after snapshot admission; failure markers share the same write barrier. Cancellation/source checks remain effective until the conditional head write begins, after which the storage outcome determines visibility.
+
+Resolve observation and view lookup also use bounded shared coordination. A canceled caller detaches promptly during control-store IO while surviving callers keep their read; retiring work remains charged until settlement and is drained during shutdown.
+
 For a source-free reader, `compose.resources-reader.yaml` demonstrates a read-only root and only a read-only configuration bind. Select a private environment file containing reader credentials; no local cache/workspace/user database is required. The application must have explicit read access to committed control/objects. Do not use writer credentials for this reader.

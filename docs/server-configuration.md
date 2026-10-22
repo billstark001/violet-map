@@ -100,7 +100,7 @@ Media import capacity is reserved before reading request bytes, decoding images/
 
 Metadata mutations (maps, layer documents, bindings and media deletion) have a separate capacity budget. They reserve a slot before reading JSON; queued requests keep their bodies unread and excess requests return the same retryable `CONTENT_BUSY` response. This bounds HTTP buffering, while the content service still serializes metadata publication within its single writer. Increasing HTTP concurrency does not introduce parallel metadata commits.
 
-Online body retention is configured only through `resources.cache`; active generation and task admission use `resources.work.memoryBytes` and `resources.work.maxTasks` (ENV `RESOURCES_WORK_MAX_TASKS`, default 16). Server factories explicitly disable long-lived source region/NBT/texture/world-list caches. Top-map verification retains at most 32 MiB of regions during a single generation operation, within its work budget. Independent source tools configure their typed cache options directly. Removed source cache byte/TTL settings and chunk/atlas concurrency/queue settings fail startup rather than being accepted and ignored.
+Online body retention is configured only through `resources.cache`; active generation and task admission use `resources.work.memoryBytes` and `resources.work.maxTasks` (ENV `RESOURCES_WORK_MAX_TASKS`, default 16). Server factories explicitly disable long-lived source region/NBT/texture/world-list caches. Top-map verification reads bounded sector spans and keeps only a small header/layout working set during one admitted operation. Reliable dependency digests use bounded metadata retention. Independent source tools configure their typed cache options directly. Removed source cache byte/TTL settings and chunk/atlas concurrency/queue settings fail startup rather than being accepted and ignored.
 
 Chunk generation reads bounded region sectors and reserves 64 MiB per active task. Atlas and top-map tasks reserve 128 MiB. Source observation reserves memory according to the configured metadata budget instead of occupying a 128 MiB generation slot. Increasing task count alone does not increase the memory budget. See [loading performance verification](loading-performance.md) for browser residency, recovery and sustained-load checks.
 
@@ -128,5 +128,7 @@ data:
 ```
 
 For sync use `deployment.profile: sync` and supply `STATIC_API_TOKEN` in ENV. For independent artifacts, static runtime config, containers and database maintenance, see [deployment](deployment.md).
+
+Public publishers may set `resources.publication.warmup: startup` (`RESOURCES_PUBLICATION_WARMUP=startup`, default `manual`) to upload and verify a complete initial publication asynchronously on startup. This requires `resources.delivery.mode: public`, the `publish` role and snapshot consistency. It never overrides a pending source-synchronization marker. Alternatively, the authenticated [online readiness API](resources.md#online-preparation-and-public-links) starts preparation explicitly and returns public references after commit. Target/control mounts and existing credentials use the same publisher configuration as CLI publication; a pure `serve` reader remains read-only.
 
 See [external overlays and named storage mounts](overlays.md) for the object storage, content API, CLI, configuration and persistence contract.

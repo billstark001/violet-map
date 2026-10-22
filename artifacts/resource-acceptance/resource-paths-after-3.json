@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "node": "v26.8.1",
+  "platform": "win32",
+  "arch": "x64",
+  "implementationDigest": "9af72e819d146e20c0599dd05f60fdd9ca7aed83ddfb06033d7e0a6c32e3be15",
+  "sourceFiles": [
+    "packages/resources/src/topMapDependencies.ts",
+    "packages/resources/src/revisionMemo.ts",
+    "packages/resources/src/publication.ts",
+    "packages/resources/src/singleflight.ts",
+    "packages/core/src/cache.ts",
+    "packages/storage/src/contentAddressed.ts"
+  ],
+  "measuredAt": "2026-10-22T20:39:28.935Z",
+  "cases": [
+    {
+      "name": "top-map-region-dependencies",
+      "rounds": 30,
+      "p50Ms": 2.602800000000002,
+      "p95Ms": 4.352999999999952,
+      "cpuUs": 3666.6666666666665,
+      "sourceCalls": 17920,
+      "outputDigest": "44b71f2293ef3182ca5720387bde4e2b5800383e965181ba9af507fc04e3015e"
+    },
+    {
+      "name": "immutable-publication-read",
+      "rounds": 30,
+      "p50Ms": 0.0036999999999807187,
+      "p95Ms": 0.007099999999923057,
+      "cpuUs": 0,
+      "manifestGets": 1,
+      "manifestBytes": 145533
+    },
+    {
+      "name": "unchanged-top-map-dependencies",
+      "rounds": 30,
+      "p50Ms": 0.0009000000000014552,
+      "p95Ms": 0.007699999999999818,
+      "cpuUs": 0,
+      "sourceCalls": 512,
+      "outputDigest": "44b71f2293ef3182ca5720387bde4e2b5800383e965181ba9af507fc04e3015e"
+    }
+  ]
+}

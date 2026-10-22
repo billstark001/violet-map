@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "node": "v26.8.1",
+  "measuredAt": "2026-10-22T19:29:19.131Z",
+  "cases": [
+    {
+      "name": "top-map-region-dependencies",
+      "rounds": 30,
+      "p50Ms": 2.7165999999999713,
+      "p95Ms": 3.1592000000000553,
+      "cpuUs": 3633.3333333333335,
+      "sourceCalls": 35840,
+      "outputDigest": "44b71f2293ef3182ca5720387bde4e2b5800383e965181ba9af507fc04e3015e"
+    },
+    {
+      "name": "immutable-publication-read",
+      "rounds": 30,
+      "p50Ms": 5.557000000000016,
+      "p95Ms": 7.524000000000001,
+      "cpuUs": 6766.666666666667,
+      "manifestGets": 35,
+      "manifestBytes": 145533
+    }
+  ]
+}
