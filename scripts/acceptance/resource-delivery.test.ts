@@ -260,7 +260,10 @@ test(
       { bindingId: 'main', layerId: layer.layerId, dimension: 'minecraft:overworld', enabled: true, order: 0 },
       map.revision,
     );
-    const first = await writer.resources.publication.publish(null);
+    writer.resources.publication.start(null);
+    await writer.resources.publication.drain();
+    assert.equal(writer.resources.publication.taskStatus()!.state, 'ready');
+    const first = (await writer.resources.store!.head())!;
     const before = {
       generated: writer.resources.repository!.metrics.generation,
       uploaded: writer.resources.target!.metrics.uploadedBytes,
@@ -271,7 +274,27 @@ test(
       { ...layer, revision: 2, features: [{ ...feature, position: [2, 0, 0] }] },
       layer.revision,
     );
-    const second = await writer.resources.publication.publish(first.publicationId);
+    const task = writer.resources.publication.start(
+      first.publicationId,
+      [
+        { kind: 'chunk', world: 'fixture', dimension: 'minecraft:overworld', cx: 0, cz: 0 },
+        { kind: 'atlas', textureSetId: 'default' },
+        { kind: 'top-map-tile', world: 'fixture', dimension: 'minecraft:overworld', rx: 0, rz: 0 },
+        {
+          kind: 'overlay-media',
+          mapId: map.mapId,
+          dimension: 'minecraft:overworld',
+          assetId: media.document.assetId,
+          versionId: media.version.versionId,
+        },
+      ],
+      'fixture',
+    );
+    assert.equal(task.result, undefined);
+    await writer.resources.publication.drain();
+    const ready = writer.resources.publication.taskStatus(task.id)!;
+    assert.equal(ready.state, 'ready', JSON.stringify(ready));
+    const second = (await writer.resources.store!.head())!;
     assert.notEqual(second.publicationId, first.publicationId);
     assert.equal(writer.resources.repository!.metrics.generation, before.generated);
     assert.equal(writer.resources.target!.metrics.uploadedBytes, before.uploaded);
@@ -311,6 +334,11 @@ test(
     await page.goto(`${origin}/test/resource-delivery-browser.html?api=${encodeURIComponent(await serverOrigin(api))}`);
     await page.waitForFunction(() => typeof (window as any).readPublication === 'function');
     publicRequests = 0;
+    const direct = await browser.newPage();
+    await direct.goto(
+      `${origin}/test/resource-delivery-browser.html?api=${encodeURIComponent(await serverOrigin(api))}`,
+    );
+    await direct.waitForFunction(() => typeof (window as any).readResource === 'function');
     const result = await page.evaluate(
       async (args) => (window as any).readPublication(...args),
       [map.mapId, media.document.assetId, media.version.versionId],
@@ -319,5 +347,16 @@ test(
     assert.deepEqual(result.formats, ['chunk-msgpack-v1', 'atlas-manifest-v1', 'png', 'topmap-msgpack-v6', 'png']);
     assert.equal(apiBodies, 0);
     assert.equal(publicRequests, 5);
+    publicRequests = 0;
+    const references = ready.result!.resources.flatMap((entry) =>
+      'resource' in entry ? [entry.resource] : 'manifest' in entry ? [entry.manifest, entry.image] : [],
+    );
+    assert.equal(references.length, 5);
+    for (const ref of references) {
+      const downloaded = await direct.evaluate(async (value) => (window as any).readResource(value), ref);
+      assert.equal(createHash('sha256').update(new Uint8Array(downloaded)).digest('hex'), ref.artifact.digest);
+    }
+    assert.equal(apiBodies, 0);
+    assert.equal(publicRequests, 5, 'online readiness links use the same anonymous browser downloader');
   },
 );

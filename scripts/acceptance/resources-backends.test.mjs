@@ -141,7 +141,7 @@ test(
         roles: ['serve', 'publish'],
         cache: { memoryBytes: 0, local: null, index: { driver: 'memory' } },
         delivery: {
-          mode: 'server',
+          mode: 'public',
           targetMount: { backend: 'remote', prefix: 'public' },
           publicBaseUrl: endpoint + '/violet-resources/public/',
         },
@@ -197,7 +197,35 @@ test(
         { bindingId: 'main', layerId: layer.layerId, dimension: 'minecraft:overworld', enabled: true, order: 0 },
         map.revision,
       );
-      head = await publisher.resources.publication.publish(null);
+      const task = publisher.resources.publication.start(null, [
+        { kind: 'chunk', world: 'world', dimension: 'minecraft:overworld', cx: 0, cz: 0 },
+        { kind: 'atlas', textureSetId: 'default' },
+        { kind: 'asset-bundle' },
+        { kind: 'game-data', name: 'biomes' },
+        {
+          kind: 'overlay-media',
+          mapId: map.mapId,
+          dimension: 'minecraft:overworld',
+          assetId: media.document.assetId,
+          versionId: media.version.versionId,
+        },
+      ]);
+      assert.equal(task.state, 'pending');
+      assert.equal(task.result, undefined);
+      await publisher.resources.publication.drain();
+      const ready = publisher.resources.publication.taskStatus(task.id);
+      assert.equal(ready.state, 'ready', JSON.stringify(ready));
+      head = await publisher.resources.store.head();
+      assert.equal(ready.result.head.publicationId, head.publicationId);
+      for (const selected of ready.result.resources)
+        for (const ref of 'resource' in selected ? [selected.resource] : [selected.manifest, selected.image]) {
+          const download = await fetch(ref.url, { headers: { origin: 'https://viewer.example' } });
+          assert.equal(download.status, 200);
+          assert.ok(['*', 'https://viewer.example'].includes(download.headers.get('access-control-allow-origin')));
+          const body = new Uint8Array(await download.arrayBuffer());
+          assert.equal(body.length, ref.artifact.bytes);
+          assert.equal(artifactRef(body, ref.artifact.mediaType, ref.artifact.format).digest, ref.artifact.digest);
+        }
       const puts = publisher.resources.target.metrics.put;
       await publisher.resources.publication.publish(head.publicationId);
       assert.equal(publisher.resources.target.metrics.put, puts);

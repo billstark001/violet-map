@@ -35,7 +35,11 @@ export function mountResources(app: Hono, config: ServerConfig, services: AppSer
         body.selectors.length > 128
       )
         throw new TypeError('resolve requires viewId and at most 128 selectors');
-      const resolved = await resources.resolve(body.viewId, body.selectors.map(parseResourceSelector));
+      const resolved = await resources.resolve(
+        body.viewId,
+        body.selectors.map(parseResourceSelector),
+        c.req.raw.signal,
+      );
       return c.json(resolved, 200, {
         'cache-control': 'no-store',
       });
@@ -101,6 +105,33 @@ export function mountResources(app: Hono, config: ServerConfig, services: AppSer
         );
       });
     if (config.resources.roles.includes('publish')) {
+      routes.post('/api/admin/resources/readiness', async (c) => {
+        const value = await readRequestJson(c, config.limits.chunkRequestBytes);
+        if (!value || typeof value !== 'object' || Array.isArray(value))
+          throw new TypeError('invalid readiness request');
+        const body = value as Record<string, unknown>;
+        if (
+          Object.keys(body).some((key) => !['expectedHead', 'world', 'selectors'].includes(key)) ||
+          !('expectedHead' in body) ||
+          (body.expectedHead !== null &&
+            (typeof body.expectedHead !== 'string' || !/^[a-f0-9]{64}$/.test(body.expectedHead))) ||
+          (body.world !== undefined && typeof body.world !== 'string') ||
+          (body.selectors !== undefined && (!Array.isArray(body.selectors) || body.selectors.length > 128))
+        )
+          throw new TypeError('readiness requires expectedHead and at most 128 selectors');
+        const task = resources.publication.start(
+          body.expectedHead as string | null,
+          (body.selectors as unknown[] | undefined)?.map(parseResourceSelector),
+          body.world as string | undefined,
+        );
+        return c.json(task, task.state === 'pending' ? 202 : 200, {
+          'cache-control': 'no-store',
+          location: `/api/admin/resources/readiness/${task.id}`,
+        });
+      });
+      routes.get('/api/admin/resources/readiness/:id', (c) =>
+        c.json(resources.publication.taskStatus(c.req.param('id')), 200, { 'cache-control': 'no-store' }),
+      );
       routes.post('/api/admin/resources/prepare', async (c) => c.json(await resources.publication.prepare()));
       routes.post('/api/admin/resources/verify', async (c) => c.json(await resources.publication.verify()));
       routes.post('/api/admin/resources/gc', async (c) => c.json(await resources.publication.gc()));

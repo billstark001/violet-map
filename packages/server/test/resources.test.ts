@@ -1,4 +1,5 @@
 import { decode } from '@msgpack/msgpack';
+import type { ArtifactRef } from '@violet-map/core/resources';
 import { sha256 } from '@violet-map/storage';
 import { LocalStorage } from '@violet-map/storage/local';
 import assert from 'node:assert/strict';
@@ -10,6 +11,8 @@ import { test } from 'node:test';
 import { createApp } from '../src/app.js';
 import { loadServerConfig } from '../src/configuration.js';
 import { createServices } from '../src/services.js';
+import { createAuthentication } from '../src/authentication.js';
+import { createAuthorization } from '../src/auth.js';
 
 const dim = 'minecraft:overworld';
 const nbt = new Uint8Array([
@@ -21,6 +24,140 @@ async function rootFixture(t: { after: (fn: () => Promise<unknown>) => void }) {
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return root;
 }
+
+test('an unfinished batch retains early member metadata while another owner renews its shared body pin', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 10000 });
+  const root = await rootFixture(t);
+  const config = loadServerConfig({
+    env: {
+      DEPLOYMENT_PROFILE: 'public',
+      DATA_DIR: root,
+      WORLDS_DIR: path.join(root, 'worlds'),
+      RESOURCES_CACHE_MEMORY_BYTES: '0',
+    },
+    cwd: root,
+  });
+  const services = await createServices(config);
+  t.after(() => services.close());
+  for (let cx = 0; cx < 2; cx++)
+    await services.mounts.worlds!.write(`world/chunks/${encodeURIComponent(dim)}/c.${cx}.0.nbt`, nbt);
+  const head = await services.resources.head('world');
+  const selectors = [0, 1, 2].map((cx) => ({ kind: 'chunk' as const, world: 'world', dimension: dim, cx, cz: 0 }));
+  const original = services.worldStore!.readChunks.bind(services.worldStore);
+  let unblock!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    unblock = resolve;
+  });
+  t.after(unblock);
+  let entered!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  t.mock.method(services.worldStore!, 'readChunks', async (...args: Parameters<typeof original>) => {
+    if (args[2][0].cx === 1) {
+      entered();
+      await blocked;
+    }
+    return original(...args);
+  });
+  const repo = services.resources.repository!;
+  const promise = repo.promise.bind(repo);
+  let issued!: (ref: ArtifactRef) => void;
+  const firstRef = new Promise<ArtifactRef>((resolve) => {
+    issued = resolve;
+  });
+  t.mock.method(repo, 'promise', (ref: ArtifactRef) => {
+    issued(ref);
+    return promise(ref);
+  });
+  const resolving = services.resources.resolve(head.viewId, selectors.slice(0, 2));
+  const [ref] = await Promise.all([firstRef, waiting]);
+  t.mock.timers.tick(config.resources.work.handoffMs - 1);
+  repo.renewPromise(ref);
+  t.mock.timers.tick(2);
+  // New membership sweeps expired metadata. The first member must remain owned
+  // by its batch even though its original per-member time has elapsed.
+  await services.resources.resolve(head.viewId, [selectors[2]]);
+  unblock();
+  const first = (await resolving).resources[0];
+  assert.ok('resource' in first);
+  const body = await services.resources.open(head.viewId, first.resource.kind, first.resource.artifact.digest);
+  (await body.read()).release();
+});
+
+test('resolve renews the completed batch window, rejects expired intermediate pins and cancels shared owners safely', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 10000 });
+  const root = await rootFixture(t);
+  const config = loadServerConfig({
+    env: {
+      DEPLOYMENT_PROFILE: 'public',
+      DATA_DIR: root,
+      WORLDS_DIR: path.join(root, 'worlds'),
+      RESOURCES_CACHE_MEMORY_BYTES: '0',
+    },
+    cwd: root,
+  });
+  const services = await createServices(config);
+  t.after(() => services.close());
+  for (let cx = 0; cx < 2; cx++)
+    await services.mounts.worlds!.write(`world/chunks/${encodeURIComponent(dim)}/c.${cx}.0.nbt`, nbt);
+  const head = await services.resources.head('world');
+  const selectors = [0, 1].map((cx) => ({ kind: 'chunk' as const, world: 'world', dimension: dim, cx, cz: 0 }));
+  const original = services.worldStore!.readChunks.bind(services.worldStore);
+  let finish!: () => void;
+  const read = t.mock.method(services.worldStore!, 'readChunks', async (...args: Parameters<typeof original>) => {
+    const rows = await original(...args);
+    if (args[2][0].cx === 1)
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    return rows;
+  });
+  const waitReady = async () => {
+    for (let i = 0; !finish || !services.resources.repository!.handoff.budget.bytes; i++) {
+      if (i > 200) throw new Error('fixture generation did not reach its barrier');
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  };
+  const first = services.resources.resolve(head.viewId, selectors);
+  await waitReady();
+  t.mock.timers.tick(5000);
+  finish();
+  const batch = await first;
+  assert.equal(batch.validUntil, Date.now() + config.resources.work.handoffMs);
+  for (const result of batch.resources)
+    if ('resource' in result) (await services.resources.repository!.acquire(result.resource.artifact)).release();
+  finish = undefined!;
+  const expired = services.resources.resolve(head.viewId, selectors);
+  await waitReady();
+  t.mock.timers.tick(config.resources.work.handoffMs + 1);
+  finish();
+  await assert.rejects(expired, { code: 'RESOURCE_VIEW_EXPIRED' });
+  assert.equal(services.resources.repository!.work.bytes, 0);
+  read.mock.restore();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  t.mock.method(services.worldStore!, 'readChunks', async (...args: Parameters<typeof original>) => {
+    await gate;
+    return original(...args);
+  });
+  const controller = new AbortController();
+  const canceled = services.resources.resolve(head.viewId, [selectors[0]], controller.signal);
+  const retained = services.resources.resolve(head.viewId, [selectors[0]]);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  controller.abort(new Error('client disconnected'));
+  await assert.rejects(canceled, /client disconnected/);
+  release();
+  const live = (await retained).resources[0];
+  assert.ok('resource' in live);
+  const object = await services.resources.open(head.viewId, live.resource.kind, live.resource.artifact.digest);
+  (await object.read()).release();
+  assert.equal(services.resources.repository!.work.bytes, 0);
+  assert.equal(services.resources.repository!.handoff.budget.bytes, 0);
+});
 
 test('bounded world observations avoid validated body reads and hash bytes when only weak metadata is available', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: 10000 });
@@ -273,6 +410,7 @@ test('publisher and source-free public reader share a durable closure with zero 
     },
     resources: {
       roles: ['serve', 'publish'],
+      work: { maxTasks: 1 },
       cache: { memoryBytes: 0 },
       delivery: { mode: 'public', targetMount: { backend: 'target', prefix: '' }, publicBaseUrl: base },
       publication: { storeMount: { backend: 'control', prefix: '' } },
@@ -285,7 +423,68 @@ test('publisher and source-free public reader share a durable closure with zero 
   await writer.mounts.worlds!.write(`world/chunks/${encodeURIComponent(dim)}/c.0.0.nbt`, nbt);
   await writer.mounts.worlds!.write('world/region/r.0.0.mca', new Uint8Array());
   await writer.mounts.worlds!.write('world/entities/r.0.0.mca', new Uint8Array());
-  const first = await writer.resources.publication.publish(null);
+  const selector = { kind: 'chunk' as const, world: 'world', dimension: dim, cx: 0, cz: 0 };
+  let unblock!: () => void;
+  const barrier = new Promise<void>((resolve) => {
+    unblock = resolve;
+  });
+  const ensure = writer.resources.target!.ensure.bind(writer.resources.target);
+  const delayed = t.mock.method(writer.resources.target!, 'ensure', async (...args: Parameters<typeof ensure>) => {
+    await barrier;
+    return ensure(...args);
+  });
+  const adminConfig = {
+    ...config,
+    features: { ...config.features, adminApi: true },
+    auth: { ...config.auth, mode: 'static' as const, staticToken: 'test' },
+  };
+  const adminApp = createApp(adminConfig, {
+    ...writer,
+    authorization: createAuthorization(createAuthentication(adminConfig.auth)),
+  });
+  assert.equal((await adminApp.request('/api/admin/resources/readiness', { method: 'POST' })).status, 401);
+  const requestSignal = new AbortController();
+  const acceptedResponse = await adminApp.request('/api/admin/resources/readiness', {
+    method: 'POST',
+    signal: requestSignal.signal,
+    headers: { authorization: 'Bearer test', 'content-type': 'application/json' },
+    body: JSON.stringify({ expectedHead: null, world: 'world', selectors: [selector] }),
+  });
+  assert.equal(acceptedResponse.status, 202, await acceptedResponse.clone().text());
+  const task = await acceptedResponse.json();
+  requestSignal.abort();
+  assert.equal(task.state, 'pending');
+  assert.equal(task.result, undefined);
+  assert.equal(writer.resources.publication.start(null, [selector], 'world').id, task.id);
+  assert.throws(() => writer.resources.publication.start(null, [], 'world'), { code: 'RESOURCE_BUSY' });
+  await assert.rejects(writer.resources.head(), { code: 'RESOURCE_NOT_PUBLISHED' });
+  const joinedPublish = writer.resources.publication.publish(null);
+  await assert.rejects(writer.resources.publication.publish('f'.repeat(64)), { code: 'RESOURCE_BUSY' });
+  unblock();
+  const joinedHead = await joinedPublish;
+  await writer.resources.publication.drain();
+  delayed.mock.restore();
+  const ready = writer.resources.publication.taskStatus(task.id)!;
+  const polled = await adminApp.request(acceptedResponse.headers.get('location')!, {
+    headers: { authorization: 'Bearer test' },
+  });
+  assert.equal(polled.status, 200);
+  assert.deepEqual(await polled.json(), ready);
+  assert.equal(ready.state, 'ready', JSON.stringify(ready));
+  assert.ok(ready.result);
+  const uploaded = ready.result.resources[0];
+  assert.ok('resource' in uploaded);
+  assert.equal(
+    sha256(new Uint8Array(await (await fetch(uploaded.resource.url)).arrayBuffer())),
+    uploaded.resource.artifact.digest,
+  );
+  const first = (await writer.resources.store!.head())!;
+  assert.deepEqual(joinedHead, first);
+  assert.equal(ready.result.head.viewId, first.publicationId);
+  writer.resources.publication.start(null);
+  await writer.resources.publication.drain();
+  assert.equal(writer.resources.publication.taskStatus()!.error?.code, 'PUBLICATION_CONFLICT');
+  assert.deepEqual(await writer.resources.store!.head(), first);
   const before = { ...writer.resources.store!.metrics };
   const uploads = { ...writer.resources.target!.metrics };
   const generated = writer.resources.repository!.metrics.generation;
@@ -339,4 +538,65 @@ test('publisher and source-free public reader share a durable closure with zero 
     404,
   );
   assert.equal((await app.request('/api/admin/resources/publications', { method: 'POST' })).status, 404);
+  assert.equal((await app.request('/api/admin/resources/readiness', { method: 'POST' })).status, 404);
+  const warmFile = path.join(root, 'warm.json');
+  await fs.writeFile(
+    warmFile,
+    JSON.stringify({
+      ...yaml,
+      resources: {
+        ...yaml.resources,
+        publication: {
+          ...yaml.resources.publication,
+          storeMount: { backend: 'control', prefix: 'warm' },
+          warmup: 'startup',
+        },
+      },
+    }),
+  );
+  const warmConfig = loadServerConfig({ env: {}, configFile: warmFile, cwd: root });
+  const warm = await createServices(warmConfig);
+  t.after(() => warm.close());
+  await warm.resources.publication.drain();
+  assert.equal(warm.resources.publication.taskStatus()!.state, 'ready');
+  assert.equal((await warm.resources.head()).mode, 'public');
+  await warm.resources.mutateSource(async () => {});
+  let releaseVerify!: () => void, verificationStarted!: () => void;
+  const verifyBarrier = new Promise<void>((resolve) => {
+    releaseVerify = resolve;
+  });
+  const verifying = new Promise<void>((resolve) => {
+    verificationStarted = resolve;
+  });
+  const verify = warm.resources.target!.verify.bind(warm.resources.target);
+  t.mock.method(warm.resources.target!, 'verify', async (...args: Parameters<typeof verify>) => {
+    const actual = verify(...args);
+    verificationStarted();
+    await Promise.all([actual, verifyBarrier]);
+  });
+  const closingTask = warm.resources.publication.start((await warm.resources.store!.head())!.publicationId);
+  await verifying;
+  let closed = false;
+  const closing = warm.close().then(() => {
+    closed = true;
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(closed, false, 'shutdown drains uninterruptible anonymous verification');
+  releaseVerify();
+  await closing;
+  assert.equal(warm.resources.publication.taskStatus(closingTask.id)!.state, 'failed');
+  assert.equal(warm.resources.repository!.handoff.budget.bytes, 0);
+  assert.equal(warm.resources.repository!.work.bytes, 0);
+  const restarted = await createServices(warmConfig);
+  t.after(() => restarted.close());
+  assert.equal(restarted.resources.publication.taskStatus(), null);
+  assert.equal((await restarted.resources.status()).requiresSourceSnapshot, true);
+  assert.equal(
+    restarted.resources.store!.metrics.controlPut,
+    0,
+    'startup never publishes an unfinished source synchronization',
+  );
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  t.mock.timers.tick(86400001);
+  assert.throws(() => warm.resources.publication.taskStatus(closingTask.id), { code: 'RESOURCE_NOT_PUBLISHED' });
 });

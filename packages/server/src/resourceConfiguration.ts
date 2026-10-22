@@ -49,7 +49,11 @@ export function resourceConfiguration(settings: ReturnType<typeof configurationS
   const work = obj(root.work, ['memoryBytes', 'handoffBytes', 'handoffMs', 'maxTasks', 'workspace'], 'work');
   const source = obj(root.source, ['consistency', 'revalidateMs', 'scope'], 'source');
   const delivery = obj(root.delivery, ['mode', 'targetMount', 'publicBaseUrl', 'httpPublisher'], 'delivery');
-  const publication = obj(root.publication, ['storeMount', 'debounceMs', 'maxDelayMs', 'retainedMs'], 'publication');
+  const publication = obj(
+    root.publication,
+    ['storeMount', 'debounceMs', 'maxDelayMs', 'retainedMs', 'warmup'],
+    'publication',
+  );
   const mount = (group: Record<string, unknown>, field: string, stem: string): StorageMount | null => {
     const raw = group[field];
     const m = raw === null || raw === undefined ? {} : obj(raw, ['backend', 'prefix'], field);
@@ -186,6 +190,9 @@ export function resourceConfiguration(settings: ReturnType<typeof configurationS
     },
     publication: {
       storeMount,
+      warmup: text(read(publication, 'warmup', 'RESOURCES_PUBLICATION_WARMUP', 'manual'), 'publication warmup') as
+        | 'manual'
+        | 'startup',
       debounceMs: integer(read(publication, 'debounceMs', 'RESOURCES_PUBLICATION_DEBOUNCE_MS', 100), 0, 'debounceMs'),
       maxDelayMs: integer(read(publication, 'maxDelayMs', 'RESOURCES_PUBLICATION_MAX_DELAY_MS', 1000), 1, 'maxDelayMs'),
       retainedMs: integer(
@@ -195,6 +202,13 @@ export function resourceConfiguration(settings: ReturnType<typeof configurationS
       ),
     },
   };
+  if (!['manual', 'startup'].includes(result.publication.warmup))
+    throw new Error('publication warmup must be manual or startup');
+  if (
+    result.publication.warmup === 'startup' &&
+    (result.delivery.mode !== 'public' || !result.roles.includes('publish') || result.source.consistency !== 'snapshot')
+  )
+    throw new Error('startup publication warmup requires public delivery, publish role and snapshot source');
   if (result.source.revalidateMs > 5000) throw new Error('bounded source revalidation cannot exceed 5000 ms');
   if (result.cache.sharedBytes > 0 && !result.cache.sharedMount)
     throw new Error('sharedBytes > 0 requires sharedMount');

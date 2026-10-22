@@ -15,6 +15,9 @@ test('configuration validates values, names, secrets, and authentication combina
   for (const value of ['', 'bad', '-1', '65536', '1.2']) assert.throws(() => load({ PORT: value }), /integer/);
   assert.throws(() => load({ REGION_CACHE_BYTES: '0' }), /not an online server cache setting/);
   assert.equal(load({}).resources.work.maxTasks, 16);
+  assert.equal(load({}).resources.publication.warmup, 'manual');
+  assert.throws(() => load({ RESOURCES_PUBLICATION_WARMUP: 'invalid' }), /warmup/);
+  assert.throws(() => load({ RESOURCES_PUBLICATION_WARMUP: 'startup' }), /requires public delivery/);
   assert.equal(load({ RESOURCES_WORK_MAX_TASKS: '2' }).resources.work.maxTasks, 2);
   assert.throws(() => load({ RESOURCES_WORK_MAX_TASKS: '0' }), /maxTasks/);
   assert.throws(() => load({ CHUNK_READ_QUEUE: '1' }), /RESOURCES_WORK_MAX_TASKS/);
