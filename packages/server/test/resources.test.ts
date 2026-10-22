@@ -233,7 +233,26 @@ test('publisher and source-free public reader share a durable closure with zero 
       res.end();
     }
   });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  let base: string;
+  for (let attempt = 0; ; attempt++) {
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    try {
+      await fetch(base, { method: 'HEAD' });
+      break;
+    } catch (error) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      // Some configured OS ephemeral ranges include Fetch-restricted ports.
+      // Reject that listener before constructing the public delivery fixture.
+      if (
+        attempt >= 7 ||
+        !(error instanceof TypeError) ||
+        !(error.cause instanceof Error) ||
+        error.cause.message !== 'bad port'
+      )
+        throw error;
+    }
+  }
   t.after(
     () =>
       new Promise<void>((resolve) => {
@@ -241,7 +260,6 @@ test('publisher and source-free public reader share a durable closure with zero 
         server.closeAllConnections();
       }),
   );
-  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   const configFile = path.join(root, 'writer.json');
   const yaml = {
     deployment: { profile: 'public' },
