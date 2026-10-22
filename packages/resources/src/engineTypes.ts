@@ -7,7 +7,7 @@ export interface ResourceEngineConfig {
     cache: { metadataBytes: number };
     work: { handoffMs: number; maxTasks: number };
     source: { scope: string; consistency: 'snapshot' | 'bounded'; revalidateMs: number };
-    publication: { debounceMs: number; maxDelayMs: number; retainedMs: number };
+    publication: { debounceMs: number; maxDelayMs: number; retainedMs: number; warmup?: 'manual' | 'startup' };
     delivery: { mode: 'server' | 'public'; publicBaseUrl: string | null };
   };
   sourceIdentity: string;

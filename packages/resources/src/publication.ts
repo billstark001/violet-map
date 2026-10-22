@@ -2,6 +2,7 @@ import { isWorldName, isDimensionId } from '@violet-map/core/domain';
 import { parseOverlaySnapshot } from '@violet-map/core/overlays';
 import { ByteBudget } from './budget.js';
 import { Singleflight } from './singleflight.js';
+import { LruCache } from '@violet-map/core/cache';
 import {
   canonicalJson,
   parseArtifactRef,
@@ -23,6 +24,14 @@ import {
 import { randomUUID } from 'node:crypto';
 
 const json = (value: unknown) => new TextEncoder().encode(canonicalJson(value));
+
+function freezeDocument<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) freezeDocument(child);
+    Object.freeze(value);
+  }
+  return value;
+}
 
 export function selectorKey(selector: import('@violet-map/core/resources').ResourceSelector): string {
   return canonicalJson(parseResourceSelector(selector));
@@ -168,6 +177,12 @@ export class PublicationStore {
   private readonly cas: ContentAddressedStorage;
   private readonly reads = new Singleflight(8);
   private readonly readBudget: ByteBudget;
+  private readonly documents: LruCache<string, { value: PublicationManifest | RegionResourcePage; weight: number }>;
+  private readonly entryIndexes = new WeakMap<object, Map<string, PublicationEntry>>();
+  private readonly regionIndexes = new WeakMap<
+    PublicationManifest,
+    Map<string, PublicationManifest['regions'][number]>
+  >();
   private owner?: { id: string; token: string; epoch: number };
   private acquiring?: Promise<void>;
   readonly metrics = { controlPut: 0, objectPut: 0, uploadedBytes: 0, cleanupFailed: 0 };
@@ -180,6 +195,11 @@ export class PublicationStore {
   ) {
     this.cas = new ContentAddressedStorage(reader, writer);
     this.readBudget = readWork;
+    this.documents = new LruCache({
+      maxEntries: 64,
+      maxWeight: Math.floor(maxDocumentBytes / 2),
+      weightOf: (entry) => entry.weight,
+    });
   }
   async head(): Promise<PublicationHead | null> {
     const raw = await this.reader.readDocument('heads/current.json', 4096);
@@ -204,10 +224,16 @@ export class PublicationStore {
     return { schemaVersion: 1, publicationId: manifest.digest, revision: h.revision as number, manifest };
   }
   async manifest(head: PublicationHead): Promise<PublicationManifest> {
-    return this.reads.run('manifest:' + head.publicationId, async () => {
+    if (head.publicationId !== head.manifest.digest) throw new TypeError('publication identity mismatch');
+    const key = canonicalJson(head.manifest);
+    const hit = this.documents.get(key);
+    if (hit) return hit.value as PublicationManifest;
+    return this.reads.run('manifest:' + key, async () => {
       const release = this.readBudget.reserve(head.manifest.bytes * 4);
       try {
-        return await this.readManifest(head);
+        const value = freezeDocument(await this.readManifest(head));
+        this.documents.set(key, { value, weight: head.manifest.bytes * 6 });
+        return value;
       } finally {
         release();
       }
@@ -222,14 +248,43 @@ export class PublicationStore {
     return parsePublicationManifest(JSON.parse(new TextDecoder().decode(bytes)));
   }
   async page(ref: ArtifactRef): Promise<RegionResourcePage> {
-    return this.reads.run('page:' + ref.digest, async () => {
+    const key = canonicalJson(parseArtifactRef(ref));
+    const hit = this.documents.get(key);
+    if (hit) return hit.value as RegionResourcePage;
+    return this.reads.run('page:' + key, async () => {
       const release = this.readBudget.reserve(ref.bytes * 4);
       try {
-        return await this.readPage(ref);
+        const value = freezeDocument(await this.readPage(ref));
+        this.documents.set(key, { value, weight: ref.bytes * 6 });
+        return value;
       } finally {
         release();
       }
     });
+  }
+  /** Index only immutable parsed documents. Their retained maps are included in
+   * the conservative document weight and disappear with their owning object. */
+  private entries(owner: object, entries: PublicationEntry[]) {
+    let index = this.entryIndexes.get(owner);
+    if (!index) {
+      index = new Map(entries.map((entry) => [selectorKey(entry.selector), entry]));
+      this.entryIndexes.set(owner, index);
+    }
+    return index;
+  }
+  async entry(manifest: PublicationManifest, selector: import('@violet-map/core/resources').ResourceSelector) {
+    if (selector.kind !== 'chunk') return this.entries(manifest, manifest.entries).get(selectorKey(selector));
+    let regions = this.regionIndexes.get(manifest);
+    if (!regions) {
+      regions = new Map(manifest.regions.map((r) => [canonicalJson([r.world, r.dimension, r.rx, r.rz]), r]));
+      this.regionIndexes.set(manifest, regions);
+    }
+    const region = regions.get(
+      canonicalJson([selector.world, selector.dimension, Math.floor(selector.cx / 32), Math.floor(selector.cz / 32)]),
+    );
+    if (!region) return undefined;
+    const page = await this.page(region.artifact);
+    return this.entries(page, page.chunks).get(selectorKey(selector));
   }
   private async readPage(ref: ArtifactRef): Promise<RegionResourcePage> {
     if (ref.format !== 'region-index-v1' || ref.bytes > this.maxDocumentBytes)
@@ -333,6 +388,7 @@ export class PublicationStore {
       throw new ResourceError('PUBLICATION_CONFLICT', 'expected publication head changed');
     await validate();
     await verifyClosure();
+    await validate();
     if (previous?.publicationId === ref.digest) return previous;
     await this.acquire();
     await this.assertWriter();
@@ -375,6 +431,9 @@ export class PublicationStore {
       'application/json',
     );
     this.metrics.controlPut++;
+    // Verification and retention writes can yield. Checks still apply until
+    // the conditional head write begins; an in-flight CAS decides visibility.
+    await validate();
     if (!(await this.writer.compareExchange('heads/current.json', current?.token ?? null, json(head))))
       throw new ResourceError('PUBLICATION_CONFLICT', 'publication head compare/exchange failed');
     this.metrics.controlPut++;
@@ -530,6 +589,7 @@ export class PublicationStore {
     await this.writer.delete(key);
   }
   async close() {
+    this.documents.clear();
     await this.reads.close();
     if (!this.owner || !this.writer) return;
     await this.assertWriter();

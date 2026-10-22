@@ -1,9 +1,8 @@
 import type { ResourceEngineConfig, ResourceEngineMounts, DynamicSources, ContentSource } from './engineTypes.js';
 import { resourceJsonBytes, projectionKey } from './engineSupport.js';
-import { ResourceGenerator } from './generator.js';
+import { ResourceGenerator, type GenerationInputs } from './generator.js';
 import { ResourceViewSessions, type View } from './viewSessions.js';
 import { ResourcePublisher } from './publisher.js';
-import { LruCache } from '@violet-map/core/cache';
 import { mapWithConcurrency } from '@violet-map/core/async';
 import { isWorldName } from '@violet-map/core/domain';
 import type {
@@ -41,6 +40,14 @@ import { BoundedSource } from './sourceSnapshot.js';
 
 const family = (s: ResourceSelector): ResourceKind => (s.kind === 'atlas' ? 'atlas-manifest' : s.kind);
 
+interface Member {
+  entry?: PublicationEntry;
+  validUntil: number;
+  users: number;
+  bodyKeys: string[];
+  release(): void;
+}
+
 export class ResourceEngine {
   private readonly generator: ResourceGenerator;
   private readonly sessions: ResourceViewSessions;
@@ -51,9 +58,9 @@ export class ResourceEngine {
   private readonly observationController = new AbortController();
   private closed = false;
   private readonly operations: Singleflight;
-  private readonly members = new Map<string, { entry?: PublicationEntry; validUntil: number; release(): void }>();
+  private readonly members = new Map<string, Member>();
+  private readonly bodies = new Map<string, Set<Member>>();
   private readonly memberMetadata: ByteBudget;
-  private readonly pages: LruCache<string, import('@violet-map/core/resources').RegionResourcePage>;
   private readonly sourceGate = new SnapshotGate();
   private root?: { generation: number; digest: string; entries: PublicationEntry[] };
   private readonly delivery: ResourceDelivery;
@@ -67,16 +74,12 @@ export class ResourceEngine {
     private readonly dynamic: DynamicSources | undefined,
     private readonly content: ContentSource | undefined,
   ) {
-    // Publication and render-root coordination can enclose one admitted generator.
-    // Reserve their two slots separately from the repository's actual task limit.
+    // Coordination can enclose admitted generation. Keep bounded coordination
+    // slots separate from the repository's actual task limit; publication owns
+    // its own one-task gate so queued publishers cannot starve render-root work.
     this.operations = new Singleflight(Math.min(Number.MAX_SAFE_INTEGER, config.resources.work.maxTasks + 2));
     const budget = config.resources.cache.metadataBytes;
     this.memberMetadata = new ByteBudget(Math.floor(budget / 4));
-    this.pages = new LruCache({
-      maxEntries: 16,
-      maxWeight: budget / 4,
-      weightOf: (p) => resourceJsonBytes(p).byteLength * 4,
-    });
     this.generator = new ResourceGenerator(
       repository,
       dynamic,
@@ -104,11 +107,15 @@ export class ResourceEngine {
       dynamic,
       content,
       sourceGate: this.sourceGate,
-      operations: this.operations,
       generator: this.generator,
       sessions: this.sessions,
       renderRoot: (token, previous) => this.renderRoot(token, previous),
       rootEntries: () => this.root?.entries ?? [],
+      publicResult: async (selectors, world) => {
+        const head = await this.head(world);
+        const batch = await this.resolve(head.viewId, selectors);
+        return { head, resources: batch.resources };
+      },
     });
     if (config.resources.source.consistency === 'bounded' && dynamic)
       this.bounded = new BoundedSource(
@@ -259,6 +266,7 @@ export class ResourceEngine {
     if (this.observationTimer) clearTimeout(this.observationTimer);
     this.observationTimer = undefined;
     await this.operations.close();
+    await this.publication.drain();
     await Promise.all(
       [this.bounded, ...[...this.worldObservations.values()].map((record) => record.source)].map((source) =>
         source?.drain(),
@@ -269,6 +277,7 @@ export class ResourceEngine {
     this.worldObservations.clear();
     for (const value of this.members.values()) value.release();
     this.members.clear();
+    this.bodies.clear();
     this.generator.close();
     this.sessions.close();
   }
@@ -305,14 +314,17 @@ export class ResourceEngine {
         { kind: 'texture', id: 'minecraft:colormap/foliage' },
       ];
       const entries: PublicationEntry[] = [];
+      const inputs: GenerationInputs = {};
       try {
         for (const selector of selectors) {
           const old = previous?.entries.find((e) => selectorKey(e.selector) === selectorKey(selector));
           if (old) await this.repo().rememberAction(old.actionKey, old.artifact);
-          const entry = await this.generator.generate(selector, generation, token);
+          const entry = await this.generator.generate(selector, generation, token, undefined, inputs);
           if (!entry && selector.kind === 'texture') continue;
           if (!entry) throw new ResourceError('RESOURCE_BACKEND_UNAVAILABLE', 'render root resource is missing');
           entries.push(entry);
+          if (selector.kind === 'asset-bundle') inputs.bundle = entry.artifact;
+          if (selector.kind === 'game-data' && selector.name === 'blocks') inputs.blocks = entry.artifact;
         }
         this.coordinator.assert(generation);
         const root = { generation, digest: sha256(canonicalJson(entries)), entries };
@@ -325,21 +337,7 @@ export class ResourceEngine {
     });
   }
   private async publishedEntry(view: View, selector: ResourceSelector): Promise<PublicationEntry | undefined> {
-    const manifest = view.publication!;
-    if (selector.kind !== 'chunk')
-      return manifest.entries.find((e) => selectorKey(e.selector) === selectorKey(selector));
-    const rx = Math.floor(selector.cx / 32),
-      rz = Math.floor(selector.cz / 32);
-    const region = manifest.regions.find(
-      (r) => r.world === selector.world && r.dimension === selector.dimension && r.rx === rx && r.rz === rz,
-    );
-    if (!region) return undefined;
-    let page = this.pages.get(region.artifact.digest);
-    if (!page) {
-      page = await this.store!.page(region.artifact);
-      this.pages.set(region.artifact.digest, page);
-    }
-    return page.chunks.find((e) => selectorKey(e.selector) === selectorKey(selector));
+    return this.store!.entry(view.publication!, selector);
   }
   private resolved(view: View, entry: PublicationEntry): ResolvedResource {
     if (entry.selector.kind === 'atlas')
@@ -370,63 +368,93 @@ export class ResourceEngine {
     const existing = this.members.get(key);
     if (existing) {
       existing.validUntil = Date.now() + this.config.resources.work.handoffMs;
+      existing.users++;
       return existing;
     }
     for (const [oldKey, record] of this.members)
-      if (record.validUntil <= Date.now()) {
+      if (!record.users && record.validUntil <= Date.now()) {
         record.release();
         this.members.delete(oldKey);
       }
     const release = this.memberMetadata.reserve(4096 + selectorKey(selector).length * 8);
-    const record: { entry?: PublicationEntry; validUntil: number; release(): void } = {
+    const record: Member = {
       validUntil: Date.now() + this.config.resources.work.handoffMs,
-      release,
+      users: 1,
+      bodyKeys: [],
+      release: () => {
+        for (const bodyKey of record.bodyKeys) {
+          const records = this.bodies.get(bodyKey);
+          records?.delete(record);
+          if (!records?.size) this.bodies.delete(bodyKey);
+        }
+        record.bodyKeys = [];
+        release();
+      },
     };
     this.members.set(key, record);
     return record;
   }
-  async resolve(viewId: string, selectors: ResourceSelector[]) {
+  private async serverEntry(
+    viewId: string,
+    selector: ResourceSelector,
+    generation: number,
+    signal: AbortSignal,
+    releases: (() => void)[],
+  ) {
+    const key = viewId + selectorKey(selector);
+    const slot = this.reserveMember(key, selector);
+    releases.push(() => {
+      if (--slot.users === 0 && !slot.entry) {
+        slot.release();
+        if (this.members.get(key) === slot) this.members.delete(key);
+      }
+    });
+    const known = slot.entry ?? this.root?.entries.find((e) => selectorKey(e.selector) === selectorKey(selector));
+    const entry =
+      known &&
+      selector.kind !== 'overlay-media' &&
+      this.repo().lease(known.artifact) &&
+      (!known.image || this.repo().lease(known.image))
+        ? known
+        : ((await this.generator.generate(selector, generation, undefined, signal)) ?? undefined);
+    if (entry && slot.entry !== entry) {
+      slot.entry = entry;
+      const refs = [[family(selector), entry.artifact], ...(entry.image ? [['atlas-image', entry.image]] : [])] as [
+        ResourceKind,
+        ArtifactRef,
+      ][];
+      for (const [kind, ref] of refs) {
+        const bodyKey = viewId + ':' + kind + ':' + ref.digest;
+        if (slot.bodyKeys.includes(bodyKey)) continue;
+        const records = this.bodies.get(bodyKey) ?? new Set<Member>();
+        records.add(slot);
+        this.bodies.set(bodyKey, records);
+        slot.bodyKeys.push(bodyKey);
+      }
+    }
+    return entry;
+  }
+  async resolve(viewId: string, selectors: ResourceSelector[], signal?: AbortSignal) {
+    const deadline = AbortSignal.timeout(25000);
+    const lifetime = signal ? AbortSignal.any([signal, deadline]) : deadline;
+    lifetime.throwIfAborted();
     if (selectors.length > 128) throw new RangeError('at most 128 resource selectors are allowed');
     selectors = selectors.map(parseResourceSelector);
     await this.observe(selectors.flatMap((selector) => ('world' in selector ? [selector.world] : [])));
     const view = await this.sessions.get(viewId);
+    lifetime.throwIfAborted();
 
     const issued: ArtifactRef[] = [];
+    const memberReleases: (() => void)[] = [];
     let validUntil = Date.now() + this.config.resources.work.handoffMs;
     try {
       const resources = await mapWithConcurrency(selectors, 2, async (selector): Promise<ResolvedResource> => {
+        lifetime.throwIfAborted();
         if (view.world && 'world' in selector && selector.world !== view.world)
           throw new TypeError('selector belongs to a different world than this resource view');
-        const key = viewId + selectorKey(selector);
         let entry: PublicationEntry | undefined;
         if (view.head.mode === 'public') entry = await this.publishedEntry(view, selector);
-        else {
-          const slot = this.reserveMember(key, selector);
-          const known = slot.entry ?? this.root?.entries.find((e) => selectorKey(e.selector) === selectorKey(selector));
-          if (
-            known &&
-            selector.kind !== 'overlay-media' &&
-            this.repo().lease(known.artifact) &&
-            (!known.image || this.repo().lease(known.image))
-          )
-            entry = known;
-          else {
-            try {
-              entry = (await this.generator.generate(selector, view.head.generation)) ?? undefined;
-            } catch (error) {
-              if (!slot.entry) {
-                slot.release();
-                this.members.delete(key);
-              }
-              throw error;
-            }
-          }
-          if (entry) slot.entry = entry;
-          else {
-            slot.release();
-            this.members.delete(key);
-          }
-        }
+        else entry = await this.serverEntry(viewId, selector, view.head.generation, lifetime, memberReleases);
         if (!entry) {
           if (selector.kind !== 'chunk' && selector.kind !== 'texture')
             throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'selected resource is unavailable');
@@ -447,20 +475,33 @@ export class ResourceEngine {
       // cache hit. Never issue a mixed-generation batch after a source write.
       if (view.head.mode === 'server' && view.head.generation !== this.coordinator.generation)
         throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'resource source changed while resolving the batch', true);
+      lifetime.throwIfAborted();
+      // The delivery window begins when the entire batch is ready. A pin that
+      // expired during preparation is an explicit retry, never a successful
+      // response containing dead references.
+      validUntil = Date.now() + this.config.resources.work.handoffMs;
+      for (const ref of issued) validUntil = Math.min(validUntil, this.repo().renewPromise(ref));
+      for (const selector of selectors) {
+        const member = this.members.get(viewId + selectorKey(selector));
+        if (member) member.validUntil = validUntil;
+      }
       return { viewId, validUntil, resources };
     } catch (error) {
       for (const ref of issued) this.repo().cancelPromise(ref);
+      if (deadline.aborted && !signal?.aborted)
+        throw new ResourceError('RESOURCE_BUSY', 'resource resolution deadline exceeded', true);
       throw error;
+    } finally {
+      for (const release of memberReleases) release();
     }
   }
   async open(viewId: string, kind: ResourceKind, digest: string) {
     if (this.config.resources.delivery.mode !== 'server')
       throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'application body delivery is disabled');
     const view = await this.sessions.get(viewId, true);
-    for (const [key, record] of this.members) {
+    for (const record of this.bodies.get(viewId + ':' + kind + ':' + digest) ?? []) {
       const entry = record.entry;
       if (!entry) continue;
-      if (!key.startsWith(viewId)) continue;
       const artifact = kind === 'atlas-image' ? entry.image : entry.artifact;
       if (!artifact || artifact.digest !== digest || (kind !== 'atlas-image' && family(entry.selector) !== kind))
         continue;
@@ -527,13 +568,24 @@ export class ResourceEngine {
         : await this.content?.snapshot(mapId, dimension);
     if (!snapshot) throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'overlay snapshot is not available');
     const media = [];
-    for (const version of snapshot.media) {
-      const batch = await this.resolve(viewId, [
-        { kind: 'overlay-media', mapId, dimension, assetId: version.assetId, versionId: version.versionId },
-      ]);
-      const item = batch.resources[0];
-      if (!('resource' in item)) throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'overlay media is not published');
-      media.push({ version, resource: item.resource });
+    for (let offset = 0; offset < snapshot.media.length; offset += 128) {
+      const versions = snapshot.media.slice(offset, offset + 128);
+      const batch = await this.resolve(
+        viewId,
+        versions.map((version) => ({
+          kind: 'overlay-media',
+          mapId,
+          dimension,
+          assetId: version.assetId,
+          versionId: version.versionId,
+        })),
+      );
+      for (let i = 0; i < versions.length; i++) {
+        const version = versions[i];
+        const item = batch.resources[i];
+        if (!('resource' in item)) throw new ResourceError('RESOURCE_NOT_PUBLISHED', 'overlay media is not published');
+        media.push({ version, resource: item.resource });
+      }
     }
     return { ...snapshot, schemaVersion: 2, media };
   }
@@ -660,6 +712,7 @@ export class ResourceEngine {
   async status() {
     return {
       ...this.publication.state,
+      task: this.publication.taskStatus(),
       storage: this.mounts.metrics?.() ?? [],
       mode: this.config.resources.delivery.mode,
       roles: this.config.resources.roles,

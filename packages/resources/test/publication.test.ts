@@ -72,8 +72,92 @@ test('publication commits a complete closure, rejects stale parents and performs
     /missing closure/,
   );
   assert.deepEqual(await store.head(), first);
-  assert.equal(validations, 2);
+  assert.equal(validations, 4);
   await store.close();
+});
+
+test('cancellation during verification or retention cannot commit a new head or report a successful no-op', async (t) => {
+  for (const point of ['verification', 'retention', 'no-op'] as const)
+    await t.test(point, async (sub) => {
+      const storage = await fixture(sub);
+      const store = new PublicationStore(storage, storage);
+      const input = manifest();
+      const previous =
+        point === 'no-op'
+          ? await store.commit(
+              input,
+              null,
+              async () => {},
+              async () => {},
+            )
+          : null;
+      const controller = new AbortController();
+      const replace = storage.replace.bind(storage);
+      sub.mock.method(storage, 'replace', async (...args: Parameters<typeof replace>) => {
+        await replace(...args);
+        if (point === 'retention' && args[0].startsWith('retained/')) controller.abort(new Error('canceled'));
+      });
+      let verified = 0;
+      await assert.rejects(
+        store.commit(
+          input,
+          previous?.publicationId ?? null,
+          async () => controller.signal.throwIfAborted(),
+          async () => {
+            if (++verified === (point === 'no-op' ? 1 : 2) && point !== 'retention')
+              controller.abort(new Error('canceled'));
+          },
+        ),
+        /canceled/,
+      );
+      assert.deepEqual(await store.head(), previous);
+      await store.close();
+    });
+});
+
+test('immutable publication reads and selector indexes share a bounded document cache', async (t) => {
+  const storage = await fixture(t);
+  const writer = new PublicationStore(storage, storage);
+  const input = manifest();
+  input.entries.push({
+    selector: { kind: 'texture', id: 'minecraft:test' },
+    actionKey: 'b'.repeat(64),
+    artifact: artifactRef(new Uint8Array([1]), 'image/png', 'png-v1'),
+  });
+  const head = await writer.commit(
+    input,
+    null,
+    async () => {},
+    async () => {},
+  );
+  const reader = new PublicationStore(storage);
+  t.after(() => reader.close());
+  const read = storage.readRange.bind(storage);
+  let reads = 0;
+  storage.readRange = async (...args) => {
+    reads++;
+    return read(...args);
+  };
+  const first = await reader.manifest(head);
+  const count = reads;
+  assert.equal(await reader.manifest(head), first);
+  assert.equal(reads, count);
+  assert.equal(
+    (await reader.entry(first, { kind: 'texture', id: 'minecraft:test' }))?.artifact.digest,
+    input.entries[0].artifact.digest,
+  );
+  assert.throws(() => {
+    first.entries.length = 0;
+  }, TypeError);
+  assert.throws(() => {
+    first.entries[0].artifact.digest = 'c'.repeat(64);
+  }, TypeError);
+  // The document fits the read limit but its retained/indexed representation
+  // does not fit this cache, so each sequential read remains authoritative IO.
+  const small = new PublicationStore(storage, undefined, head.manifest.bytes);
+  assert.notEqual(await small.manifest(head), await small.manifest(head));
+  await small.close();
+  await writer.close();
 });
 
 test('a crash before head visibility leaves a recoverable prepared closure; another writer cannot enter', async (t) => {
