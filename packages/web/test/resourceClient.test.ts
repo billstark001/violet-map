@@ -119,3 +119,47 @@ test('malformed HTTP error documents cannot inject arbitrary resource codes or r
     });
   }
 });
+
+test('metadata waiters own cancellation independently and the last owner ends the shared transport', async (t) => {
+  let finish!: (response: Response) => void;
+  let transport!: AbortSignal;
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', (_input, init) => {
+    calls++;
+    transport = init!.signal as AbortSignal;
+    return new Promise<Response>((resolve) => {
+      finish = resolve;
+    });
+  });
+  const client = new ResourceClient();
+  const controller = new AbortController();
+  const first = client.head('shared', false, controller.signal);
+  const second = client.head('shared');
+  controller.abort();
+  await assert.rejects(first, { name: 'AbortError' });
+  assert.equal(transport.aborted, false, 'another owner still needs this metadata');
+  finish(Response.json(head(1, 'shared')));
+  assert.equal((await second).generation, 1);
+  assert.equal(calls, 1);
+  assert.equal(transport.aborted, true, 'the completed request has no remaining owners');
+});
+
+test('late canceled metadata cannot update the head cache or remove its replacement', async (t) => {
+  const completions: ((response: Response) => void)[] = [];
+  t.mock.method(globalThis, 'fetch', () => new Promise<Response>((resolve) => completions.push(resolve)));
+  const client = new ResourceClient();
+  const controller = new AbortController();
+  const old = client.head('world', false, controller.signal);
+  const job = [...Reflect.get(client, 'pending')][0];
+  controller.abort();
+  await assert.rejects(old, { name: 'AbortError' });
+  const replacement = client.head('world');
+  assert.equal(completions.length, 2);
+  completions[0](Response.json(head(1, 'old')));
+  await assert.rejects(job.promise, { name: 'AbortError' });
+  assert.equal(client.current('world'), undefined);
+  completions[1](Response.json(head(2, 'new')));
+  assert.equal((await replacement).generation, 2);
+  assert.equal((await client.head('world')).generation, 2);
+  assert.equal(completions.length, 2);
+});

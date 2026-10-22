@@ -794,8 +794,7 @@ export class ViewerController {
   private chunks: ChunkRuntime | null = null;
   private latestStats: ChunkSchedulerStats = { ...EMPTY_CHUNK_SCHEDULER_STATS };
   private capabilities: WorldCapabilities | null = null;
-  private capabilityGeneration = 0;
-  private capabilityRequest: AbortController | null = null;
+  private worldRequest: AbortController | null = null;
   private disposed = false;
   private resourceRequest = new AbortController();
   private resourceGeneration = 0;
@@ -821,7 +820,7 @@ export class ViewerController {
         void this.engine?.overlays.refresh();
       }
     });
-    this.loadCapabilities(props.world);
+    this.loadWorldMetadata(props.world);
     this.registerDiagnostics(props.onDiagnosticSnapshotProvider);
     void this.initialize();
   }
@@ -831,13 +830,28 @@ export class ViewerController {
     const controller = this.resourceRequest;
     try {
       THREE.ColorManagement.enabled = false;
-      const [resources, worldHead] = await Promise.all([
-        loadViewerResources(controller.signal),
-        this.props.world ? resourceClient.head(this.props.world, false, controller.signal) : Promise.resolve(),
-      ]);
-      if (worldHead && worldHead.renderRoot !== resourceClient.current()?.renderRoot)
-        throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'world and render resources belong to different roots', true);
-      if (worldHead) resourceClient.assertCurrent(worldHead, this.props.world);
+      const resources = await loadViewerResources(controller.signal);
+      for (;;) {
+        const world = this.props.world;
+        if (!world) break;
+        const lifetime = this.worldRequest;
+        if (!lifetime) throw new Error('selected world has no metadata lifetime');
+        try {
+          const head = await resourceClient.head(world, false, AbortSignal.any([controller.signal, lifetime.signal]));
+          if (world !== this.props.world) continue;
+          if (head.renderRoot !== resourceClient.current()?.renderRoot)
+            throw new ResourceError(
+              'RESOURCE_VIEW_EXPIRED',
+              'world and render resources belong to different roots',
+              true,
+            );
+          resourceClient.assertCurrent(head, world);
+          break;
+        } catch (error) {
+          if (!controller.signal.aborted && world !== this.props.world) continue;
+          throw error;
+        }
+      }
       if (this.disposed || generation !== this.resourceGeneration) return;
       const props = this.props;
       const engine = createEngine(
@@ -885,17 +899,16 @@ export class ViewerController {
     }
   }
 
-  private loadCapabilities(world: string): void {
-    this.capabilityRequest?.abort();
-    this.capabilityRequest = null;
-    const generation = ++this.capabilityGeneration;
+  private loadWorldMetadata(world: string): void {
+    this.worldRequest?.abort();
+    this.worldRequest = null;
     this.capabilities = null;
     if (!world) return;
     const controller = new AbortController();
-    this.capabilityRequest = controller;
+    this.worldRequest = controller;
     void fetchWorldCapabilities(world, controller.signal)
       .then((value) => {
-        if (!this.disposed && generation === this.capabilityGeneration) this.capabilities = value;
+        if (!this.disposed && this.worldRequest === controller) this.capabilities = value;
       })
       .catch(() => {});
   }
@@ -919,7 +932,7 @@ export class ViewerController {
     if (this.disposed) return;
     const previous = this.props;
     this.props = props;
-    if (previous.world !== props.world) this.loadCapabilities(props.world);
+    if (previous.world !== props.world) this.loadWorldMetadata(props.world);
     if (previous.onDiagnosticSnapshotProvider !== props.onDiagnosticSnapshotProvider) {
       previous.onDiagnosticSnapshotProvider?.(null);
       this.registerDiagnostics(props.onDiagnosticSnapshotProvider);
@@ -931,20 +944,24 @@ export class ViewerController {
     const engine = this.engine;
     if (!engine) return;
     const props = this.props;
-    if (props.world && !resourceClient.current(props.world)) {
-      void resourceClient.head(props.world).then(
-        () => {
-          if (!this.disposed && this.props.world === props.world) this.syncEngine(null);
-        },
-        (error) => this.onError(String(error)),
-      );
-      return;
-    }
     const contextChanged = !previous || previous.world !== props.world || previous.dimension !== props.dimension;
     if (contextChanged) {
       this.chunks?.dispose();
       this.chunks = null;
       this.latestStats = { ...EMPTY_CHUNK_SCHEDULER_STATS };
+    }
+    if (props.world && !resourceClient.current(props.world)) {
+      void resourceClient.head(props.world, false, this.worldRequest?.signal).then(
+        () => {
+          if (!this.disposed && this.props.world === props.world) this.syncEngine(null);
+        },
+        (error) => {
+          if (!this.disposed && this.props.world === props.world) this.onError(String(error));
+        },
+      );
+      return;
+    }
+    if (contextChanged) {
       if (props.world) {
         const chunks = createChunkRuntime(engine, props);
         chunks.onStats = (stats) => {
@@ -989,9 +1006,8 @@ export class ViewerController {
     this.unsubscribe();
     this.resourceGeneration++;
     this.resourceRequest.abort();
-    this.capabilityGeneration++;
-    this.capabilityRequest?.abort();
-    this.capabilityRequest = null;
+    this.worldRequest?.abort();
+    this.worldRequest = null;
     this.props.onDiagnosticSnapshotProvider?.(null);
     if (this.onResize) window.removeEventListener('resize', this.onResize);
     this.frameState?.timer.dispose();

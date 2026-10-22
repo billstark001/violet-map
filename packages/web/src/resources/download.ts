@@ -2,13 +2,11 @@ import { LruCache } from '@violet-map/core/cache';
 import { readLimitedBody } from '@violet-map/core/http';
 import { parseResourceRef, ResourceError, type ResourceRef } from '@violet-map/core/resources';
 import { resolveApiResourceUrl } from '../runtime';
+import { joinRequest, type SharedRequest } from './sharedRequest';
 
-interface DownloadJob {
+interface DownloadJob extends SharedRequest<Uint8Array<ArrayBuffer>> {
   readonly key: string;
   readonly bytes: number;
-  readonly promise: Promise<Uint8Array<ArrayBuffer>>;
-  readonly controller: AbortController;
-  users: number;
 }
 
 /** Shared anonymous, integrity-checked transport. Every failure stays on the selected URL. */
@@ -95,24 +93,7 @@ export class ResourceDownloader {
       pending = job;
       this.pending.add(job);
     }
-    if (pending.users >= 256) throw new ResourceError('RESOURCE_BUSY', 'too many resource download waiters', true);
-    const shared = pending;
-    shared.users++;
-    let cancel: (() => void) | undefined;
-    const aborted = signal
-      ? new Promise<never>((_resolve, reject) => {
-          cancel = () => reject(signal.reason);
-          signal.addEventListener('abort', cancel, { once: true });
-          if (signal.aborted) cancel();
-        })
-      : null;
-    try {
-      return await (aborted ? Promise.race([shared.promise, aborted]) : shared.promise);
-    } finally {
-      if (cancel) signal?.removeEventListener('abort', cancel);
-      shared.users--;
-      if (shared.users === 0 && this.pending.has(shared)) shared.controller.abort();
-    }
+    return joinRequest(pending, signal);
   }
   clear() {
     this.cache.clear();

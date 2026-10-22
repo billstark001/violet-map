@@ -4,6 +4,7 @@ import { setImmediate } from 'node:timers/promises';
 import { buildAtlas } from '../src/atlas.js';
 import { loadBrowserImage } from '../src/browserImage.js';
 import { ViewerController, type ViewerOptions } from '../src/render/viewerEngine.js';
+import { resourceClient } from '../src/resources/client.js';
 
 function imageFixture(t: { after(callback: () => void): void }) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'Image');
@@ -86,4 +87,40 @@ test('disposing a viewer during bootstrap aborts metadata and colormap IO withou
   assert.ok(images.every((image) => !image.src && !image.onload && !image.onerror));
   assert.equal(ready, 0);
   assert.equal(errors, 0);
+});
+
+test('switching worlds releases old terrain before waiting for metadata and ignores obsolete errors', async (t) => {
+  let drops = 0;
+  let fail!: (error: Error) => void;
+  const errors: string[] = [];
+  t.mock.method(resourceClient, 'current', () => undefined);
+  t.mock.method(
+    resourceClient,
+    'head',
+    () =>
+      new Promise((_resolve, reject) => {
+        fail = reject;
+      }),
+  );
+  const controller = Object.assign(Object.create(ViewerController.prototype), {
+    engine: {},
+    props: { world: 'new', dimension: 'minecraft:overworld' },
+    disposed: false,
+    worldRequest: new AbortController(),
+    chunks: {
+      dispose() {
+        drops++;
+      },
+    },
+    latestStats: { trackedChunks: 100 },
+    onError: (error: string) => errors.push(error),
+  });
+  controller.syncEngine({ world: 'old', dimension: 'minecraft:overworld' });
+  assert.equal(drops, 1);
+  assert.equal(controller.chunks, null);
+  assert.equal(controller.latestStats.trackedChunks, 0);
+  controller.props = { world: 'newer', dimension: 'minecraft:overworld' };
+  fail(new Error('obsolete world metadata error'));
+  await setImmediate();
+  assert.deepEqual(errors, []);
 });

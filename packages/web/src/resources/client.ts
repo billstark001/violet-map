@@ -11,11 +11,17 @@ import {
   type ResourceViewHead,
 } from '@violet-map/core/resources';
 import { apiFetch, apiUrl } from '../runtime';
+import { joinRequest, type SharedRequest } from './sharedRequest';
 
 interface Current {
   head: ResourceViewHead;
   etag?: string;
   receivedAt: number;
+}
+
+interface HeadRequest extends SharedRequest<ResourceViewHead> {
+  readonly world: string;
+  readonly epoch: number;
 }
 
 function sameGeneration(a: ResourceViewHead, b: ResourceViewHead) {
@@ -36,11 +42,11 @@ export class ResourceClient {
       this.context = next;
       this.epoch++;
       this.heads.clear();
-      this.pending.clear();
+      for (const job of this.pending) job.controller.abort();
     }
   }
   private readonly heads = new Map<string, Current>();
-  private readonly pending = new Map<string, Promise<ResourceViewHead>>();
+  private readonly pending = new Set<HeadRequest>();
   private readonly subscribers = new Set<(previous: ResourceViewHead, current: ResourceViewHead) => void>();
   private timer?: ReturnType<typeof setTimeout>;
   private refreshTask?: Promise<void>;
@@ -160,32 +166,38 @@ export class ResourceClient {
     const epoch = this.epoch;
     const known = this.heads.get(world);
     if (known && Date.now() - known.receivedAt < 86400000) return known.head;
-    const inflight = this.pending.get(world);
-    if (inflight) return inflight;
+    for (const job of this.pending)
+      if (job.world === world && job.epoch === epoch && !job.controller.signal.aborted) return joinRequest(job, signal);
     if (this.heads.size + this.pending.size >= 16 && !known)
       throw new ResourceError('RESOURCE_BUSY', 'too many active world resource views', true);
-    const promise = (async () => {
-      const current = await this.readHead(world, known, signal);
-      this.ensureContext();
-      if (epoch !== this.epoch)
-        throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'resource delivery context changed', true);
-      for (const [otherWorld, other] of this.heads)
-        if (otherWorld !== world && !sameGeneration(current.head, other.head))
-          throw new ResourceError(
-            'RESOURCE_VIEW_EXPIRED',
-            'new world and existing resources belong to different generations; refresh the complete view',
-            true,
-          );
-      this.heads.set(world, current);
-      this.notify(known, current);
-      return current.head;
-    })();
-    this.pending.set(world, promise);
-    try {
-      return await promise;
-    } finally {
-      if (this.pending.get(world) === promise) this.pending.delete(world);
-    }
+    const controller = new AbortController();
+    const job: HeadRequest = {
+      world,
+      epoch,
+      controller,
+      users: 0,
+      promise: (async () => {
+        const current = await this.readHead(world, known, controller.signal);
+        controller.signal.throwIfAborted();
+        this.ensureContext();
+        if (epoch !== this.epoch)
+          throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'resource delivery context changed', true);
+        for (const [otherWorld, other] of this.heads)
+          if (otherWorld !== world && !sameGeneration(current.head, other.head))
+            throw new ResourceError(
+              'RESOURCE_VIEW_EXPIRED',
+              'new world and existing resources belong to different generations; refresh the complete view',
+              true,
+            );
+        this.heads.set(world, current);
+        this.notify(known, current);
+        return current.head;
+      })().finally(() => {
+        this.pending.delete(job);
+      }),
+    };
+    this.pending.add(job);
+    return joinRequest(job, signal);
   }
   assertCurrent(head: ResourceViewHead, world = '') {
     if (this.current(world)?.viewId !== head.viewId)

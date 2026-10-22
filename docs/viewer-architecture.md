@@ -22,6 +22,8 @@ Resource kinds and error codes each have one shared runtime/type definition in c
 
 Shared downloads are owned by individual job records. Only a live, non-aborted job may accept another owner. A retiring canceled transfer continues to consume its byte/request budget until it settles, and cleanup removes that exact job. Active bytes are derived from those records; an old completion cannot remove a replacement or release its budget.
 
+Resource-head requests and body downloads share the same per-caller cancellation mechanism. Canceling one waiter does not cancel another owner's transport; the last owner synchronously ends transport. World metadata has one selection lifetime, independent of global render-root preparation. Bootstrap follows the latest selected world, and switching context releases old terrain before awaiting new metadata. Obsolete world errors cannot affect the replacement context.
+
 ## Ownership
 
 | Owner | Responsibilities |
