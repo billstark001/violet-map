@@ -6,7 +6,6 @@ import type {
   ChunkCandidate,
   ChunkPriority,
   ChunkSchedulerEntry,
-  ChunkSchedulerOptions,
   SchedulerTickInput,
   SchedulerTickResult,
   SchedulerWorkInput,
@@ -19,6 +18,7 @@ import type {
   ChunkSchedulerDiagnosticSnapshot,
   SchedulerAction,
   SchedulerQueueStats,
+  SchedulerCellDiagnostic,
 } from './contracts';
 import {
   MAX_HASH_BATCHES,
@@ -50,22 +50,26 @@ interface Workload {
 
 /** Owns demand and every priority decision, including the final Worker dispatch. */
 export class ChunkScheduler {
-  readonly view = new ChunkViewPlanner();
+  private readonly viewPlanner = new ChunkViewPlanner();
   private readonly demands = new Map<string, ChunkDemand>();
   private readonly hashQueue = new Set<string>();
   private readonly fetchQueue = new Set<string>();
 
-  constructor(private opts: ChunkSchedulerOptions = {}) {}
+  private lodDisabled = false;
 
   demandFor(key: string): Readonly<ChunkDemand> | undefined {
     return this.demands.get(key);
+  }
+
+  cellDiagnostic(cx: number, cz: number): SchedulerCellDiagnostic | null {
+    return this.viewPlanner.diagnosticCell(cx, cz);
   }
 
   queueStats(entries: ReadonlyMap<string, ChunkSchedulerEntry>, now: number): SchedulerQueueStats {
     return {
       hashQueued: this.hashQueue.size,
       fetchQueued: this.fetchQueue.size,
-      meshQueued: this.meshTasks(entries, now).length,
+      meshQueued: this.meshTaskCount(entries, now),
       trackedPriorities: this.demands.size,
     };
   }
@@ -73,13 +77,13 @@ export class ChunkScheduler {
   diagnosticSnapshot(now: number, entries: ReadonlyMap<string, ChunkSchedulerEntry>): ChunkSchedulerDiagnosticSnapshot {
     return {
       capturedAt: now,
-      center: { ...this.view.center },
-      activeRadiusChunks: this.view.config.activeRadiusChunks,
-      maxCandidates: this.view.config.maxCandidates,
-      trackedChunkLimit: this.view.config.maxTrackedChunks,
-      lodDisabled: this.opts.disableLod === true,
-      fullDetailRadiusChunks: this.view.config.fullDetailRadiusChunks,
-      nearPresenceRadiusChunks: this.view.config.nearPresenceRadiusChunks,
+      center: { ...this.viewPlanner.center },
+      activeRadiusChunks: this.viewPlanner.config.activeRadiusChunks,
+      maxCandidates: this.viewPlanner.config.maxCandidates,
+      trackedChunkLimit: this.viewPlanner.config.maxTrackedChunks,
+      lodDisabled: this.lodDisabled,
+      fullDetailRadiusChunks: this.viewPlanner.config.fullDetailRadiusChunks,
+      nearPresenceRadiusChunks: this.viewPlanner.config.nearPresenceRadiusChunks,
       queues: {
         hash: this.orderedKeys(this.hashQueue),
         fetch: this.orderedKeys(this.fetchQueue),
@@ -93,15 +97,16 @@ export class ChunkScheduler {
     this.demands.clear();
     this.hashQueue.clear();
     this.fetchQueue.clear();
-    this.view.clear();
+    this.viewPlanner.clear();
   }
 
   tick(input: SchedulerTickInput): SchedulerTickResult {
-    this.opts = {
+    const options = {
       ...input.options,
       disableLod: input.options.disableLod === true || !surfaceRepresentationAllowed(input.view.mode, input.view.clip),
     };
-    const frame = this.view.plan({ ...input, options: this.opts, demands: this.demands });
+    this.lodDisabled = options.disableLod;
+    const frame = this.viewPlanner.plan({ ...input, options, demands: this.demands });
     const actions: SchedulerAction[] = [];
     let newCandidates = 0;
     for (const candidate of frame.demands) this.rememberDemand(candidate, input.entries.get(candidate.key));
@@ -122,8 +127,8 @@ export class ChunkScheduler {
       entries: input.entries.values(),
       now: input.now,
       reservedSlots: newCandidates,
-      config: this.view.config,
-      center: this.view.center,
+      config: this.viewPlanner.config,
+      center: this.viewPlanner.center,
       demandFor: (entry) => this.demands.get(entry.key),
     });
     for (const key of evicted) actions.push({ type: 'dropChunk', key });
@@ -145,11 +150,12 @@ export class ChunkScheduler {
     const takeFetch =
       input.includeFetch !== false && input.activeFetchBatches < MAX_FETCH_BATCHES && this.fetchQueue.size > 0;
     const meshSlots = input.includeMesh !== false ? Math.max(0, input.maxMeshTasks - input.activeMeshTasks) : 0;
-    const candidates = takeHash || takeFetch || meshSlots > 0 ? this.meshTasks(input.entries, input.now) : [];
+    const candidates = meshSlots > 0 ? this.meshTasks(input.entries, input.now) : [];
     let hash: string[] = [],
       fetch: string[] = [];
     if (takeHash || takeFetch) {
-      const workload = this.workload(input.entries, candidates.length);
+      const backlog = meshSlots > 0 ? candidates.length : this.meshTaskCount(input.entries, input.now);
+      const workload = this.workload(input.entries, backlog);
       const loadMore =
         !(workload.backlog > RENDER_BACKLOG_IO_PAUSE && input.activeMeshTasks < input.maxMeshTasks) &&
         (workload.resident < MIN_EXISTING_CHUNKS_BEFORE_BALANCE ||
@@ -260,20 +266,20 @@ export class ChunkScheduler {
             updatedAt: event.now,
           },
         });
-        this.view.syncEntry(event.entry, trackerTimeSeconds(event.now));
+        this.viewPlanner.syncEntry(event.entry, trackerTimeSeconds(event.now));
         return;
       }
       case 'chunkStored': {
         const demand = this.demands.get(event.entry.key);
         if (demand?.boost?.reason === 'dependency')
           this.demands.set(event.entry.key, { ...demand, boost: null, meshRetryAt: 0 });
-        this.view.syncEntry(event.entry, trackerTimeSeconds(event.now));
+        this.viewPlanner.syncEntry(event.entry, trackerTimeSeconds(event.now));
         return;
       }
       case 'meshDisplayed': {
         const demand = this.demands.get(event.entry.key);
         if (demand) this.demands.set(event.entry.key, { ...demand, boost: null, meshRetryAt: 0 });
-        this.view.syncEntry(event.entry, trackerTimeSeconds(event.now));
+        this.viewPlanner.syncEntry(event.entry, trackerTimeSeconds(event.now));
         return;
       }
       case 'chunkDropped':
@@ -290,13 +296,13 @@ export class ChunkScheduler {
       !!demand &&
       isDemandFresh(demand, result.now) &&
       result.version >= result.entry.displayedVersion &&
-      meshMatchesTarget(result.kind, result.step, demand.targetStep, this.opts.disableLod === true)
+      meshMatchesTarget(result.kind, result.step, demand.targetStep, this.lodDisabled)
     );
   }
 
   entrySatisfied(entry: ChunkSchedulerEntry): boolean {
     const demand = this.demands.get(entry.key);
-    return !!demand && meshSatisfiesTarget(entry, demand.targetStep, this.opts.disableLod === true);
+    return !!demand && meshSatisfiesTarget(entry, demand.targetStep, this.lodDisabled);
   }
 
   private rememberDemand(candidate: ChunkCandidate, entry: ChunkSchedulerEntry | undefined) {
@@ -374,21 +380,33 @@ export class ChunkScheduler {
     return Number.isFinite(next) ? next : null;
   }
 
+  private runnableMeshDemand(entry: ChunkSchedulerEntry, now: number): Readonly<ChunkDemand> | undefined {
+    const demand = this.demands.get(entry.key);
+    if (
+      !demand ||
+      !isDemandFresh(demand, now) ||
+      demand.meshRetryAt > now ||
+      entry.pendingFull ||
+      entry.pendingLod ||
+      (entry.retryAt ?? 0) > now ||
+      (entry.state !== 'stored' && entry.state !== 'hashed') ||
+      meshSatisfiesTarget(entry, demand.targetStep, this.lodDisabled)
+    )
+      return undefined;
+    return demand;
+  }
+
+  private meshTaskCount(entries: ReadonlyMap<string, ChunkSchedulerEntry>, now: number): number {
+    let count = 0;
+    for (const entry of entries.values()) if (this.runnableMeshDemand(entry, now)) count++;
+    return count;
+  }
+
   private meshTasks(entries: ReadonlyMap<string, ChunkSchedulerEntry>, now: number): MeshTask[] {
     const out: MeshTask[] = [];
     for (const entry of entries.values()) {
-      const demand = this.demands.get(entry.key);
-      if (
-        !demand ||
-        !isDemandFresh(demand, now) ||
-        demand.meshRetryAt > now ||
-        entry.pendingFull ||
-        entry.pendingLod ||
-        (entry.retryAt ?? 0) > now ||
-        (entry.state !== 'stored' && entry.state !== 'hashed') ||
-        this.entrySatisfied(entry)
-      )
-        continue;
+      const demand = this.runnableMeshDemand(entry, now);
+      if (!demand) continue;
       out.push({
         key: entry.key,
         kind: demand.targetStep === 1 ? 'full' : 'lod',

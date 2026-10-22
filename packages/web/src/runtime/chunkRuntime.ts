@@ -240,7 +240,7 @@ export class ChunkRuntime {
     private opts: ChunkRuntimeOptions,
     private readonly budget: ViewerResourceBudget,
   ) {
-    this.scheduler = new ChunkScheduler(this.schedulerOptions());
+    this.scheduler = new ChunkScheduler();
     void this.loadChunkSourceCoverage();
     const workerCount = this.budget.meshWorkers;
     for (let i = 0; i < workerCount; i++) {
@@ -427,7 +427,7 @@ export class ChunkRuntime {
     const chunks = [...this.chunks.values()]
       .sort((a, b) => a.cz - b.cz || a.cx - b.cx)
       .map((entry): ChunkEntryDiagnosticSnapshot => {
-        const tracker = this.scheduler.view.diagnosticCell(entry.cx, entry.cz);
+        const tracker = this.scheduler.cellDiagnostic(entry.cx, entry.cz);
         return {
           key: entry.key,
           cx: entry.cx,

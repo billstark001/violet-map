@@ -1,4 +1,5 @@
 import type { ChunkScheduler } from '../../src/scheduling/chunkScheduler.js';
+import type { ChunkViewPlanner } from '../../src/scheduling/chunkView.js';
 import type { ChunkCandidate, ChunkSchedulerEntry, SchedulerViewInput } from '../../src/scheduling/contracts.js';
 import type { LodStep } from '../../src/view/terrain.js';
 import { UNCLIPPED_VIEW } from '../../src/view/worldGeometry.js';
@@ -20,8 +21,10 @@ export function planFixtureDemands(
   target: (entry: ChunkSchedulerEntry) => LodStep = () => 1,
   priority: (entry: ChunkSchedulerEntry) => { tier: number; score: number } = () => ({ tier: 0, score: 0 }),
 ) {
-  const plan = scheduler.view.plan;
-  scheduler.view.plan = (input: SchedulerViewInput) => {
+  // White-box fixture: replace the private planner for one synchronous tick.
+  const planner = Reflect.get(scheduler, 'viewPlanner') as ChunkViewPlanner;
+  const plan = planner.plan;
+  planner.plan = (input: SchedulerViewInput) => {
     const demands: ChunkCandidate[] = [...entries.values()].map((entry) => ({
       key: entry.key,
       cx: entry.cx,
@@ -47,6 +50,6 @@ export function planFixtureDemands(
   try {
     scheduler.tick({ view: testView, now, options: {}, keyFor: (x, z) => x + ',' + z, entries });
   } finally {
-    scheduler.view.plan = plan;
+    planner.plan = plan;
   }
 }
