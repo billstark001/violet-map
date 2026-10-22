@@ -19,6 +19,7 @@ const { values } = parseArgs({
     pitch: { type: 'string', default: '-9.8' },
     cache: { type: 'string', default: 'on' },
     faults: { type: 'boolean', default: false },
+    views: { type: 'boolean', default: false },
     profile: { type: 'boolean', default: false },
     compare: { type: 'string' },
     gpu: { type: 'string', default: process.platform === 'win32' ? 'd3d11' : 'default' },
@@ -73,6 +74,8 @@ await context.addInitScript(() => {
     replies: 0,
     dropped: 0,
     dropNextMesh: false,
+    sendErrors: 0,
+    failNextMeshSend: false,
     active: new Map(),
   });
   const NativeWorker = window.Worker;
@@ -88,6 +91,11 @@ await context.addInitScript(() => {
         if (message.type === 'mesh' || message.type === 'lod') {
           probe.meshSends++;
           probe.active.set(message.version, performance.now());
+          if (probe.failNextMeshSend) {
+            probe.failNextMeshSend = false;
+            probe.sendErrors++;
+            throw new Error('injected Worker mesh send failure');
+          }
           if (probe.dropNextMesh) {
             probe.dropNextMesh = false;
             probe.dropped++;
@@ -277,8 +285,8 @@ const snapshot = async (label) => {
   return value;
 };
 
-const assertSettled = (value) => {
-  assert.equal(value.camera.viewMode, 'perspective');
+const assertSettled = (value, viewMode = 'perspective') => {
+  assert.equal(value.camera.viewMode, viewMode);
   const chunks = value.chunkRuntime;
   assert.ok(
     chunks.chunks.some((c) => c.displayed !== 'none'),
@@ -305,7 +313,7 @@ const assertSettled = (value) => {
   assert.ok(chunks.chunks.length <= chunks.scheduling.trackedChunkLimit, 'tracked chunk limit exceeded after settling');
 };
 
-const waitSettled = async (label) => {
+const waitSettled = async (label, viewMode = 'perspective') => {
   let previous,
     stableSince = Date.now();
   const started = Date.now();
@@ -321,7 +329,7 @@ const waitSettled = async (label) => {
     if (Date.now() - stableSince >= 15000 && row.active === 0 && /Queue H0 F0 M0/.test(row.text)) {
       const value = await snapshot(label);
       try {
-        assertSettled(value);
+        assertSettled(value, viewMode);
         return value;
       } catch (error) {
         if (!(error instanceof assert.AssertionError)) throw error;
@@ -395,6 +403,7 @@ try {
   assertSettled(stationary);
   if (values.compare) {
     const reference = JSON.parse(await fs.readFile(values.compare, 'utf8'));
+    assert.equal(reference.schema, 2, 'geometry comparison requires the current diagnostic schema');
     assert.equal(reference.chunkRuntime.renderKey, stationary.chunkRuntime.renderKey);
     assert.deepEqual(reference.camera.pos, stationary.camera.pos);
     const fullGeometry = (value) =>
@@ -434,6 +443,14 @@ try {
     const recovered = await waitSettled('worker-watchdog');
     assert.ok(recovered.chunkRuntime.workers.restarts >= 2, 'worker errors and stalled jobs did not both recover');
     assert.equal(recovered.chunkRuntime.workers.count, stationary.chunkRuntime.workers.count);
+    await page.evaluate(() => {
+      window.__loadingProbe.failNextMeshSend = true;
+    });
+    await move({ ...position, x: position.x + 192, y: position.y + 16 });
+    await page.waitForFunction(() => window.__loadingProbe.sendErrors === 1, null, { timeout: 30000 });
+    report.faults.push({ kind: 'worker-send-error', at: Date.now() });
+    const sendRecovered = await waitSettled('worker-send-recovered');
+    assert.ok(sendRecovered.chunkRuntime.workers.restarts >= 3, 'a synchronous Worker send failure did not recover');
     await move(position);
     await waitSettled('return-to-origin');
     const supported = await page.evaluate(() => {
@@ -453,6 +470,37 @@ try {
     assert.equal(restored.transparency.contextLost, false);
     await page.screenshot({ path: path.join(out, 'context-restored.png') });
     report.faults.push({ kind: 'webgl-context-restored', at: Date.now() });
+  }
+  if (values.views) {
+    const selectView = async (viewMode) => {
+      await page.getByRole('tab', { name: 'View', exact: true }).click();
+      await page.locator('#view-mode').selectOption(viewMode);
+    };
+    await selectView('topOrthographic');
+    await waitSettled('top-orthographic', 'topOrthographic');
+    await page.getByRole('tab', { name: 'View', exact: true }).click();
+    await page.locator('#top-clip-max').evaluate((input) => {
+      input.value = '48';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const sliced = await waitSettled('height-slice', 'topOrthographic');
+    assert.equal(sliced.chunkRuntime.topClipRange.maxY, 48);
+    assert.equal(sliced.chunkRuntime.scheduling.lodDisabled, true);
+    assert.equal(sliced.chunkRuntime.stats.lodRendered, 0, 'a surface-only mesh survived the height slice');
+    assert.deepEqual(sliced.topMap.wantedTiles, [], 'height slice still demanded unusable Top Map surfaces');
+    await page.screenshot({ path: path.join(out, 'height-slice.png') });
+    await page.getByRole('tab', { name: 'View', exact: true }).click();
+    await page.getByRole('button', { name: 'Reset top clip', exact: true }).click();
+    await selectView('topPerspective');
+    const unsliced = await waitSettled('top-perspective', 'topPerspective');
+    assert.equal(
+      unsliced.chunkRuntime.scheduling.lodDisabled,
+      false,
+      'resetting the slice did not restore LOD eligibility',
+    );
+    await selectView('perspective');
+    await waitSettled('perspective-restored');
+    report.viewsPassed = true;
   }
   assert.deepEqual(report.failures, []);
   assert.ok(

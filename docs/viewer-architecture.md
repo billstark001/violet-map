@@ -51,6 +51,10 @@ Surface-only representations cannot display a height slice below their generated
 
 Source absence, transient errors, pending work and completed empty geometry are distinct states. Context changes revoke request generations. Old responses cannot update a replacement entry, and old cleanup cannot release a newer request.
 
+A Worker send failure revokes the rest of the dispatch plan for that pool. Cleanup releases execution slots and dependency pins before a replacement pool can consume a newly ranked plan. Static Top Map materials use a static shader and own no placeholder animation textures.
+
+Eviction plans include pending work and dependency pins. Tracked-entry eviction and decoded-input release share the same active-work predicate. The executor validates that precondition when applying an eviction; a violated precondition is an explicit error.
+
 ## Validation
 
 Run `pnpm typecheck`, `pnpm boundary:check`, `pnpm lint`, `pnpm format:check`, `pnpm test` and `pnpm build`. Browser checks are `pnpm test:frontend`, `pnpm test:overlays` and `pnpm test:transparency`.
