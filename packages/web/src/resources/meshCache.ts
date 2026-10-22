@@ -1,4 +1,4 @@
-import type { TerrainMesh } from '../view/terrain';
+import { LOD_STEPS, type LodStep, type TerrainMesh } from '../view/terrain';
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import { LruCache } from '@violet-map/core/cache';
 import { meshByteLength } from '@violet-map/render';
@@ -22,8 +22,7 @@ export interface MeshCacheKeyParts {
   cx: number;
   cz: number;
   contentKey: string;
-  mode: TerrainMesh['mode'];
-  step?: number;
+  step: LodStep;
 }
 
 interface Usage {
@@ -128,6 +127,7 @@ function transaction<T>(
 }
 
 function cacheKey(parts: MeshCacheKeyParts) {
+  if (!LOD_STEPS.includes(parts.step)) throw new RangeError('invalid mesh cache LOD step');
   return [
     parts.world,
     parts.dimension,
@@ -135,8 +135,8 @@ function cacheKey(parts: MeshCacheKeyParts) {
     parts.cx,
     parts.cz,
     parts.contentKey,
-    parts.mode,
-    parts.step ?? 0,
+    parts.step === 1 ? 'full' : 'lod',
+    parts.step === 1 ? 0 : parts.step,
   ]
     .map(encodeURIComponent)
     .join('|');
@@ -238,8 +238,8 @@ export function isMeshCacheEnabled(): boolean {
 
 /** Optional storage has a bounded latency and never owns a worker execution slot. */
 export async function getCachedMesh(parts: MeshCacheKeyParts): Promise<TerrainMesh | undefined> {
-  if (!cacheEnabled) return undefined;
   const key = cacheKey(parts);
+  if (!cacheEnabled) return undefined;
   const generation = cacheGeneration;
   let record = memory.get(key);
   if (!record) {
@@ -271,9 +271,10 @@ export async function getCachedMesh(parts: MeshCacheKeyParts): Promise<TerrainMe
 }
 
 export async function putCachedMesh(parts: MeshCacheKeyParts, data: TerrainMesh): Promise<void> {
-  if (parts.mode !== data.mode) throw new Error('mesh cache mode mismatch');
+  const key = cacheKey(parts);
+  if ((parts.step === 1 ? 'full' : 'lod') !== data.mode) throw new Error('mesh cache representation mismatch');
   if (!cacheEnabled) return;
-  const record = { key: cacheKey(parts), accessedAt: Date.now(), bytes: byteLength(data), data };
+  const record = { key, accessedAt: Date.now(), bytes: byteLength(data), data };
   memory.set(record.key, record);
   const generation = cacheGeneration;
   if (await write(record, generation)) await pruneCache();

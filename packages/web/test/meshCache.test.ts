@@ -18,13 +18,14 @@ const parts = {
   cx: 0,
   cz: 0,
   contentKey: 'c',
-  mode: 'full' as const,
+  step: 1 as const,
 };
 const data: TerrainMesh = {
   mode: 'full',
   sections: [
     {
       sy: 0,
+      visibility: 0,
       layers: {
         opaque: {
           positions: new Uint16Array(12),
@@ -86,7 +87,7 @@ test('one mesh cache API preserves empty LOD, shares warm buffers and accounts m
   setMeshCacheEnabled(true);
   await putCachedMesh(parts, data);
   assert.equal(await getCachedMesh(parts), data);
-  const lod = { ...parts, mode: 'lod' as const, step: 8 };
+  const lod = { ...parts, step: 8 as const };
   assert.equal(await getCachedMesh(lod), undefined);
   await putCachedMesh(lod, { mode: 'lod', mesh: null });
   assert.deepEqual(await getCachedMesh(lod), { mode: 'lod', mesh: null });
@@ -114,7 +115,7 @@ test('retained backing bytes bound the memory cache and pending writes', async (
       indices: new Uint16Array(backing, 32, 3),
     },
   };
-  const lod = { ...parts, mode: 'lod' as const, step: 2 };
+  const lod = { ...parts, step: 2 as const };
   await putCachedMesh(lod, large);
   assert.equal(
     await getCachedMesh(lod),
@@ -173,4 +174,17 @@ test('refreshing access writes only usage metadata and extends cold-read TTL', a
   now += 120000;
   assert.deepEqual(await getCachedMesh(parts), data, 'fresh usage survives an expired geometry creation time');
   await clearMeshCache();
+});
+
+test('cache quality is mandatory and cannot contradict the stored representation, even when caching is disabled', async () => {
+  try {
+    setMeshCacheEnabled(false);
+    for (const step of [undefined, 0, 3, 16]) {
+      await assert.rejects(getCachedMesh({ ...parts, step } as never), RangeError);
+      await assert.rejects(putCachedMesh({ ...parts, step } as never, data), RangeError);
+    }
+    await assert.rejects(putCachedMesh(parts, { mode: 'lod', mesh: null }), /representation mismatch/);
+  } finally {
+    setMeshCacheEnabled(true);
+  }
 });

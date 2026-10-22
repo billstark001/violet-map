@@ -504,7 +504,7 @@ test('a known neighborhood hits cached geometry before restoring any worker colu
   });
   const cache = manager.neighborhoodCacheParts(center);
   assert.equal(cache.stable, true, 'digests stay known when columns are evicted');
-  await putCachedMesh({ ...cache.parts, mode: 'full', step: 0 }, { mode: 'full', sections: [] });
+  await putCachedMesh({ ...cache.parts, step: 1 }, { mode: 'full', sections: [] });
   assert.equal(manager.requestMesh(center, 'full', 1), true);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(displays, 1);

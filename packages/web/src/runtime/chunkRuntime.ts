@@ -38,7 +38,7 @@ import {
 const UPDATE_INTERVAL_MS = 80;
 const STATS_REPORT_INTERVAL_MS = 100;
 
-type MeshCacheBaseParts = Omit<MeshCacheKeyParts, 'mode' | 'step'>;
+type MeshCacheBaseParts = Omit<MeshCacheKeyParts, 'step'>;
 
 interface CachePartsResult {
   parts: MeshCacheBaseParts;
@@ -880,9 +880,7 @@ export class ChunkRuntime {
       return false;
     }
     const version = this.beginPendingMesh(e, kind, step, cache);
-    const lookup = cache.stable
-      ? getCachedMesh({ ...cache.parts, mode: kind, step: kind === 'full' ? 0 : step })
-      : Promise.resolve(undefined);
+    const lookup = cache.stable ? getCachedMesh({ ...cache.parts, step }) : Promise.resolve(undefined);
     void lookup
       .then((hit) => {
         const job = this.meshJobs.get(version);
@@ -1382,9 +1380,7 @@ export class ChunkRuntime {
           now: performance.now(),
         });
         if (cacheParts)
-          void putCachedMesh({ ...cacheParts, mode: 'full', step: 0 }, { mode: 'full', sections: msg.sections }).catch(
-            () => {},
-          );
+          void putCachedMesh({ ...cacheParts, step: 1 }, { mode: 'full', sections: msg.sections }).catch(() => {});
         if (!shouldDisplay) {
           this.rescheduleStoredIfFresh(e);
           this.reportStats();
@@ -1421,8 +1417,7 @@ export class ChunkRuntime {
           version: msg.version,
           now: performance.now(),
         });
-        if (cacheParts)
-          void putCachedMesh({ ...cacheParts, mode: 'lod', step }, { mode: 'lod', mesh: msg.mesh }).catch(() => {});
+        if (cacheParts) void putCachedMesh({ ...cacheParts, step }, { mode: 'lod', mesh: msg.mesh }).catch(() => {});
         if (!shouldDisplay) {
           this.rescheduleStoredIfFresh(e);
           this.reportStats();

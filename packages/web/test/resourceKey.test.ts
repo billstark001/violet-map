@@ -28,7 +28,7 @@ test('biome and dimension edits miss stale persistent meshes while reordered JSO
     cx: 0,
     cz: 0,
     contentKey: 'same-nbt',
-    mode: 'full' as const,
+    step: 1 as const,
   };
   await putCachedMesh(parts, { mode: 'full', sections: [] });
   assert.deepEqual(await getCachedMesh(parts), { mode: 'full', sections: [] });
