@@ -80,9 +80,8 @@ export function topMapViewMetrics(view: ViewState): { width: number; height: num
   const projection = view.projection;
   if (projection.kind === 'orthographic') {
     const height = (projection.top - projection.bottom) / projection.zoom;
-    const aspect = (projection.right - projection.left) / Math.max(1e-3, projection.top - projection.bottom);
-    return { width: height * aspect, height, zoom: projection.zoom };
+    return { width: (projection.right - projection.left) / projection.zoom, height, zoom: projection.zoom };
   }
-  const height = 2 * Math.max(1, view.position.y) * Math.tan(projection.fovYRadians * 0.5);
+  const height = (2 * Math.max(1, view.position.y) * Math.tan(projection.fovYRadians * 0.5)) / projection.zoom;
   return { width: height * projection.aspect, height, zoom: TOP_MAP_TILE_BLOCKS / Math.max(1, height) };
 }

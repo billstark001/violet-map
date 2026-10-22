@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { planTopMapTiles, type RegionCoordinate } from '../src/scheduling/topMapPlanner.js';
+import { planTopMapTiles, topMapViewMetrics, type RegionCoordinate } from '../src/scheduling/topMapPlanner.js';
+import { testView } from './helpers/scheduling.js';
 
 test('wide views visit existing tiles without scanning empty grid coordinates', () => {
   const regions = new Map<string, RegionCoordinate>([
@@ -54,4 +55,20 @@ test('equal-distance tiles have stable admission and never leak beyond the radia
   );
   assert.deepEqual(planTopMapTiles(regions, { ...input, maxDistanceBlocks: 100 }), []);
   assert.equal(planTopMapTiles(regions, { ...input, mode: 'top', zoom: 2.5 })[0].step, 2);
+});
+
+test('top-view extents and demanded detail use the effective projection zoom', () => {
+  const view = { ...testView, mode: 'top' as const };
+  const normal = topMapViewMetrics(view);
+  const zoomed = topMapViewMetrics({ ...view, projection: { ...view.projection, zoom: 3 } });
+  assert.equal(zoomed.height, normal.height / 3);
+  assert.equal(zoomed.width, normal.width / 3);
+  assert.equal(zoomed.zoom, normal.zoom * 3);
+  assert.deepEqual(
+    topMapViewMetrics({
+      ...view,
+      projection: { kind: 'orthographic', left: -200, right: 600, top: 300, bottom: -100, near: 0.1, zoom: 2 },
+    }),
+    { width: 400, height: 200, zoom: 2 },
+  );
 });
