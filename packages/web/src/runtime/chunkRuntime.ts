@@ -1,4 +1,4 @@
-import { chunkRetryDelayMs } from '../scheduling/chunkPolicy';
+import { chunkRetryDelayMs, chunkWorkIdle, MESH_PREPARATIONS_PER_WORKER } from '../scheduling/chunkPolicy';
 import type { ViewerResourceBudget } from '../scheduling/resourceBudget';
 import { selectResidencyReleases, workerDataReleasable, WORKER_NEIGHBOR_HOLD_MS } from '../scheduling/chunkResidency';
 import { EMPTY_CHUNK_DISPLAY, type ChunkDisplayState } from '../view/terrain';
@@ -161,7 +161,6 @@ interface ChunkEntry extends ChunkSchedulerEntry, ChunkDisplayState {
   retryAttempts: number;
   lastError?: string;
   readyContentDigest?: string;
-  workerPins: number;
   decodingStartedAt?: number;
   estimatedColumnBytes: number;
   workerReadyMask: number;
@@ -662,13 +661,13 @@ export class ChunkRuntime {
       }
       for (const { task, workerIndex } of dispatch.start)
         if (!this.dispatchWorkerMesh(task.entry as ChunkEntry, task.kind, task.step, task.version, workerIndex)) return;
-      while (this.meshJobs.size < this.maxActiveMeshTasks() * 2) {
+      while (this.meshJobs.size < this.maxActiveMeshTasks() * MESH_PREPARATIONS_PER_WORKER) {
         const work = this.scheduler.nextWork({
           now: performance.now(),
           activeHashBatches: this.checking,
           activeFetchBatches: this.fetching,
           activeMeshTasks: this.meshJobs.size,
-          maxMeshTasks: this.maxActiveMeshTasks() * 2,
+          maxMeshTasks: this.maxActiveMeshTasks() * MESH_PREPARATIONS_PER_WORKER,
           entries: this.chunks,
           includeHash: false,
           includeFetch: false,
@@ -839,7 +838,7 @@ export class ChunkRuntime {
   }
 
   private dropEntry(key: string, e: ChunkEntry) {
-    if (e.workerPins > 0 || e.pendingFull || e.pendingLod) return;
+    if (!chunkWorkIdle(e)) throw new Error('cannot apply eviction to a chunk with active work: ' + key);
     this.removeDisplayedMesh(e);
     if (e.state === 'stored' || e.state === 'decoding') this.broadcast({ type: 'drop', key });
     this.chunks.delete(key);
@@ -962,7 +961,8 @@ export class ChunkRuntime {
   // #region Mesh requests
 
   private requestMesh(e: ChunkEntry, kind: MeshTaskKind, step: LodStep): boolean {
-    if (e.pendingFull || e.pendingLod || this.meshJobs.size >= this.maxActiveMeshTasks() * 2) return false;
+    if (e.pendingFull || e.pendingLod || this.meshJobs.size >= this.maxActiveMeshTasks() * MESH_PREPARATIONS_PER_WORKER)
+      return false;
     const cache = this.neighborhoodCacheParts(e);
     if (!cache) {
       this.queueIo('hash', e.key);

@@ -19,6 +19,7 @@ function entry(key: string, state: ChunkState = 'stored'): ChunkSchedulerEntry {
     cx: 0,
     cz: 0,
     state,
+    workerPins: 0,
     pendingFull: false,
     pendingLod: false,
     pendingLodStep: 0,

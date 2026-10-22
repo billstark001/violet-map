@@ -1,6 +1,7 @@
 import type { ChunkSchedulerEntry, ChunkDemand, ResolvedChunkScheduling } from './contracts';
 import {
   activeCellCapacity,
+  chunkWorkIdle,
   validGeometryPrecision,
   isDemandFresh,
   OUTSIDE_ACTIVE_DROP_MS,
@@ -71,7 +72,6 @@ export function selectChunkEvictions(input: ChunkRetentionInput): string[] {
   }
 
   function isLowValueActiveEntry(entry: ChunkSchedulerEntry, now: number): boolean {
-    if (entry.pendingFull || entry.pendingLod) return false;
     if (now - (demandFor(entry)?.wantedAt ?? 0) < LOW_VALUE_ACTIVE_DROP_MS) return false;
     if (isDemandFresh(demandFor(entry), now)) return false;
     if (Math.hypot(entry.cx - center.cx, entry.cz - center.cz) < config.fullDetailRadiusChunks + 1) {
@@ -118,9 +118,10 @@ export function selectChunkEvictions(input: ChunkRetentionInput): string[] {
 
   const out: string[] = [];
   const all = [...entries];
+  const releasable = all.filter(chunkWorkIdle);
   const already = new Set<string>();
 
-  for (const entry of all) {
+  for (const entry of releasable) {
     if (keepKeys.has(entry.key)) continue;
     const age = now - (demandFor(entry)?.wantedAt ?? 0);
     if (age > OUTSIDE_ACTIVE_DROP_MS) {
@@ -135,7 +136,7 @@ export function selectChunkEvictions(input: ChunkRetentionInput): string[] {
   // touch current candidates or the critical neighborhood: those are allowed
   // to survive even when their transient tracker score is low.
   const lowValueVictims = evictionVictims(
-    all.filter(
+    releasable.filter(
       (entry) =>
         keepKeys.has(entry.key) &&
         !protectedKeys.has(entry.key) &&
@@ -152,7 +153,10 @@ export function selectChunkEvictions(input: ChunkRetentionInput): string[] {
 
   const activeCapacity = activeCellCapacity(config.activeRadiusChunks);
   const residentLimit = Math.min(activeCapacity, config.maxTrackedChunks);
-  const existingProtectedCount = all.reduce((count, entry) => count + (protectedKeys.has(entry.key) ? 1 : 0), 0);
+  const existingProtectedCount = all.reduce(
+    (count, entry) => count + (protectedKeys.has(entry.key) || !chunkWorkIdle(entry) ? 1 : 0),
+    0,
+  );
   const softLimit = Math.max(existingProtectedCount, residentLimit - Math.max(0, reservedSlots));
   const hardLimit = softLimit;
   if (all.length - out.length <= softLimit) return out;
@@ -166,7 +170,7 @@ export function selectChunkEvictions(input: ChunkRetentionInput): string[] {
   };
 
   const victims = evictionVictims(
-    all.filter((entry) => !keepKeys.has(entry.key) && !already.has(entry.key)),
+    releasable.filter((entry) => !keepKeys.has(entry.key) && !already.has(entry.key)),
     now,
     tracked - softLimit,
   );
@@ -177,7 +181,7 @@ export function selectChunkEvictions(input: ChunkRetentionInput): string[] {
 
   if (tracked > softLimit) {
     const staleActiveVictims = evictionVictims(
-      all.filter(
+      releasable.filter(
         (entry) =>
           keepKeys.has(entry.key) &&
           !protectedKeys.has(entry.key) &&
@@ -195,7 +199,7 @@ export function selectChunkEvictions(input: ChunkRetentionInput): string[] {
 
   if (tracked > hardLimit) {
     const activeVictims = evictionVictims(
-      all.filter((entry) => keepKeys.has(entry.key) && !protectedKeys.has(entry.key) && !already.has(entry.key)),
+      releasable.filter((entry) => keepKeys.has(entry.key) && !protectedKeys.has(entry.key) && !already.has(entry.key)),
       now,
       tracked - hardLimit,
     );

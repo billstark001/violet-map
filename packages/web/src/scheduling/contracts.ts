@@ -94,6 +94,7 @@ export interface ChunkSchedulerEntry {
   retryAt?: number;
   surfaceY?: number;
   state: ChunkState;
+  workerPins: number;
   pendingFull: boolean;
   pendingLod: boolean;
   pendingLodStep: number;

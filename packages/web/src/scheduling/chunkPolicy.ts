@@ -12,6 +12,10 @@ import { CHUNK_SIZE_BLOCKS, WORLD_MIN_Y, WORLD_MAX_Y } from '../view/worldGeomet
 
 export const DEFAULT_ACTIVE_RADIUS_CHUNKS = 32;
 
+export function chunkWorkIdle(entry: Pick<ChunkSchedulerEntry, 'workerPins' | 'pendingFull' | 'pendingLod'>): boolean {
+  return entry.workerPins === 0 && !entry.pendingFull && !entry.pendingLod;
+}
+
 export const MIN_ACTIVE_RADIUS_CHUNKS = 8;
 
 export const MAX_ACTIVE_RADIUS_CHUNKS = 96;
@@ -51,6 +55,8 @@ export const LOW_VALUE_ACTIVE_MAX_IMPORTANCE = 0.008;
 export const LOW_VALUE_ACTIVE_MAX_GAP = 0.002;
 
 export const MESH_RETRY_COOLDOWN_MS = 180;
+
+export const MESH_PREPARATIONS_PER_WORKER = 2;
 
 export const IO_RENDER_SHARE_TARGET = 0.92;
 

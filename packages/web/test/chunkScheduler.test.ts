@@ -53,6 +53,7 @@ test('a capacity-limited stationary view admits a stable set instead of evicting
           cx: action.cx,
           cz: action.cz,
           state: 'stored',
+          workerPins: 0,
           displayed: 'none',
           displayedLodStep: 0,
           displayedVersion: -1,

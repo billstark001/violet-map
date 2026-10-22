@@ -1,14 +1,13 @@
 import type { ChunkDemand, ChunkSchedulerEntry } from './contracts';
 import type { ViewerResourceBudget } from './resourceBudget';
 import { workerResidentColumnLimit } from './resourceBudget';
-import { comparePriority } from './chunkPolicy';
+import { chunkWorkIdle, comparePriority } from './chunkPolicy';
 
 export const WORKER_NEIGHBOR_HOLD_MS = 3500;
 const STALE_WORKER_RELEASE_MS = 4000;
 const STALE_MESH_RELEASE_MS = 8000;
 
 export interface WorkerResidencyEntry extends ChunkSchedulerEntry {
-  workerPins: number;
   workerKeepUntil: number;
   contentDigest: string | null;
   estimatedColumnBytes: number;
@@ -22,14 +21,7 @@ export function workerDataReleasable(
   >,
   now: number,
 ): boolean {
-  return (
-    entry.state === 'stored' &&
-    now >= entry.workerKeepUntil &&
-    entry.workerPins === 0 &&
-    !entry.pendingFull &&
-    !entry.pendingLod &&
-    !!entry.contentDigest
-  );
+  return entry.state === 'stored' && now >= entry.workerKeepUntil && chunkWorkIdle(entry) && !!entry.contentDigest;
 }
 
 export function selectResidencyReleases(input: {

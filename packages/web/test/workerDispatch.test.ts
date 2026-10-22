@@ -10,6 +10,7 @@ function entry(key: string, cx: number): ChunkSchedulerEntry {
     cx,
     cz: 0,
     state: 'stored',
+    workerPins: 0,
     displayed: 'none',
     displayedLodStep: 0,
     displayedVersion: -1,
