@@ -31,9 +31,11 @@ Optional cache misses, transient transport retries, source lease renewal, absent
 | `runtime/chunkRuntime.ts`, `chunkIo.ts` | IO/cache/Worker execution, request leases, dependency pins, health/restart, actual operation state |
 | `runtime/topMapRuntime.ts` | Manifest/tile identity, requests, cancellation and applying tile plans through a display port |
 | `runtime/overlayRuntime.ts`, `overlayMediaLoader.ts` | Overlay source/ETag/refresh lifetime and pinned media byte loading |
+| `runtime/viewerResources.ts`, `skyTextures.ts`, `resources/load.ts` | Complete render-root preparation, supported sky texture layouts, bounded admission retries and cancellation |
 | `resources/` | Shared verified downloads, resource-view identity/renewal, mesh cache and reference-counted media resource pool |
 | `render/chunkScene.ts`, `topMapScene.ts`, `overlayScene.ts` | GPU ownership, geometry replacement, clip/connectivity/frustum visibility and display feedback |
 | `render/viewSnapshot.ts` | Three.js camera to immutable view-state conversion |
+| `render/skyScene.ts` | Sky GPU ownership and per-frame presentation of verified images; no transport or substitute images |
 | `render/overlayMedia.ts` | Decode supplied bytes into display resources; never select or download another URL |
 | `render/viewerEngine.ts` | Composition root, camera/control/environment setup and frame wiring; no terrain work queue |
 | `worker/meshWorker.ts` | Execute full/LOD computation with the CPU-only render algorithms |
@@ -52,6 +54,8 @@ Terrain and Top Map use `render/staticMesh.ts` to declare that their geometry an
 Surface-only representations cannot display a height slice below their generated/baked surface. The view contract exposes that capability: chunk scheduling requests full models for such views, and tile scheduling does not load an unusable Top Map representation. Section clipping and actual GPU visibility remain display operations.
 
 Source absence, transient errors, pending work and completed empty geometry are distinct states. Context changes revoke request generations. Old responses cannot update a replacement entry, and old cleanup cannot release a newer request.
+
+Render-root preparation finishes verified sky images before terrain admission begins. Explicit retryable resource failures use bounded backoff and a 30-second deadline per selected load; cancellation ends both IO and retry waits. Malformed or unverified data fails explicitly. Supported Minecraft image layouts are selected only by explicit source absence. Missing sky images allocate no celestial geometry or textures; transport errors never fabricate a substitute sun or moon. Diagnostics record the actual selected texture IDs. Render cache identity lives in `resources/renderKey.ts` and continues to include every input that affects mesh bytes.
 
 A Worker send failure revokes the rest of the dispatch plan for that pool. Cleanup releases execution slots and dependency pins before a replacement pool can consume a newly ranked plan. Static Top Map materials use a static shader and own no placeholder animation textures.
 

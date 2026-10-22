@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import 'fake-indexeddb/auto';
-import { buildRenderKey } from '../src/render/resourceKey.js';
+import { buildRenderKey } from '../src/resources/renderKey.js';
 import { clearMeshCache, getCachedMesh, putCachedMesh, setMeshCacheEnabled } from '../src/resources/meshCache.js';
 
 const resources: Parameters<typeof buildRenderKey>[0] = {

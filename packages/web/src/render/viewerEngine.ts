@@ -5,14 +5,15 @@ import type { TopClipRange } from '../view/worldGeometry';
 import { captureView } from './viewSnapshot';
 import { TOP_MAP_MAX_RADIUS_BLOCKS } from '../scheduling/topMapPolicy';
 import { schedulerTuningForPreset, type SchedulerPreset } from '../scheduling/profiles';
-import { collectTextureIds } from '@violet-map/core/assets';
 import { type WorldCapabilities } from '@violet-map/core/contracts';
 import type { BiomeMap, DimensionMap } from '@violet-map/core/domain';
 import { ResourceError } from '@violet-map/core/resources';
 import { hexToRgb } from '@violet-map/render';
 import * as THREE from 'three';
-import { fetchBiomes, fetchBlockInfo, fetchBundle, fetchDimensions, fetchWorldCapabilities } from '../api';
-import { buildAtlas, loadColormap, loadTextureImage } from '../atlas';
+import { fetchWorldCapabilities } from '../api';
+import type { BuiltAtlas } from '../atlas';
+import { loadViewerResources, type ViewerResources } from '../runtime/viewerResources';
+import { SkyScene, type SkyDiagnosticSnapshot } from './skyScene';
 import { browserStorage, readStored } from '../browserStorage';
 import { resourceClient } from '../resources/client';
 import { serviceCapabilities } from '../runtime';
@@ -40,15 +41,10 @@ import { OverlayRuntime, overlayTransport } from '../runtime/overlayRuntime';
 import { createOverlayMediaLoader } from '../runtime/overlayMediaLoader';
 import { decodeOverlayMedia } from './overlayMedia';
 import type { OverlayDiagnosticSnapshot } from '../diagnostics/overlay';
-import { buildRenderKey } from './resourceKey';
 import { TopMapScene } from './topMapScene';
 import { TopMapRuntime, type TopMapDiagnosticSnapshot } from '../runtime/topMapRuntime';
 import { TransparencyRenderer, type TransparencyDiagnosticSnapshot } from './transparency';
 
-// Fluid UVs, exterior AO for partial models, and special-model transforms all
-// changed mesh bytes. Keep stale IndexedDB entries from reviving the old
-// water/stair artifacts after an upgrade.
-const SKY_PLANE_FORWARD = new THREE.Vector3(0, 0, 1);
 const TOP_CAMERA_HEIGHT = 1024;
 const TOP_ORTHO_HEIGHT = 512;
 const TOP_PERSPECTIVE_FOV = 50;
@@ -59,10 +55,7 @@ const DEFAULT_DIMENSION_DEF = {
   sky: 'normal' as const,
   defaultBiome: 'minecraft:plains',
 };
-const celestialFacing = new THREE.Vector3();
 const cameraDirection = new THREE.Vector3();
-const sunDirection = new THREE.Vector3();
-const moonDirection = new THREE.Vector3();
 
 export type ViewMode = 'perspective' | 'topPerspective' | 'topOrthographic';
 
@@ -115,28 +108,12 @@ export interface ViewerDiagnosticSnapshot {
   topMap: TopMapDiagnosticSnapshot;
   overlays: OverlayDiagnosticSnapshot;
   transparency: TransparencyDiagnosticSnapshot;
+  sky: SkyDiagnosticSnapshot;
 }
 
 type ActiveCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 
-type ViewerBundle = Awaited<ReturnType<typeof fetchBundle>>;
-
-type ViewerBlockInfo = Awaited<ReturnType<typeof fetchBlockInfo>>;
-
-type ViewerAtlas = Awaited<ReturnType<typeof buildAtlas>>;
-
 type ViewerDimensionDef = DimensionMap[string] | typeof DEFAULT_DIMENSION_DEF;
-
-interface ViewerResources {
-  bundle: ViewerBundle;
-  blockInfo: ViewerBlockInfo;
-  biomes: BiomeMap;
-  dimensions: DimensionMap;
-  grassMap: Uint8Array | null;
-  foliageMap: Uint8Array | null;
-  atlas: ViewerAtlas;
-  renderKey: string;
-}
 
 interface Engine {
   budget: ViewerResourceBudget;
@@ -157,21 +134,11 @@ interface Engine {
   terrainTexture: THREE.Texture;
   textureAnimations: TextureAnimationUniforms;
   shared: SharedUniforms;
-  sky: SkyObjects;
+  sky: SkyScene;
   renderKey: string;
   initPayload: Omit<WorkerInit, 'type'>;
   biomes: BiomeMap;
   dimensions: DimensionMap;
-}
-
-interface SkyObjects {
-  group: THREE.Group;
-  dome: THREE.Mesh;
-  domeMaterial: THREE.ShaderMaterial;
-  sun: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-  moon: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-  stars: THREE.Points;
-  dispose(): void;
 }
 
 interface ViewerCameras {
@@ -304,6 +271,7 @@ function diagnosticSnapshotForViewer(
     topMap: engine.topMap.diagnosticSnapshot(),
     overlays: engine.overlays.diagnosticSnapshot(),
     transparency: engine.transparency.diagnosticSnapshot(),
+    sky: engine.sky.diagnosticSnapshot(),
   };
 }
 
@@ -315,49 +283,7 @@ function dimensionDefinition(dimensions: DimensionMap, dimension: string): Viewe
   return dimensions[dimension] ?? DEFAULT_DIMENSION_DEF;
 }
 
-async function loadViewerResources(signal: AbortSignal): Promise<ViewerResources> {
-  const selectedHead = await resourceClient.head('', false, signal);
-  const [bundle, blockInfo, biomes, dimensions, grassMap, foliageMap] = await Promise.all([
-    fetchBundle(signal),
-    fetchBlockInfo(signal),
-    fetchBiomes(signal),
-    fetchDimensions(signal),
-    loadColormap('minecraft:colormap/grass', signal),
-    loadColormap('minecraft:colormap/foliage', signal),
-  ]);
-  const atlas = await buildAtlas(collectTextureIds(bundle, blockInfo), signal);
-  if (resourceClient.current()?.viewId !== selectedHead.viewId)
-    throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'render resources changed while preparing the root', true);
-  return {
-    bundle,
-    blockInfo,
-    biomes,
-    dimensions,
-    grassMap,
-    foliageMap,
-    atlas,
-    renderKey: buildRenderKey({
-      atlasKey: atlas.cacheKey,
-      bundle,
-      blockInfo,
-      biomes,
-      dimensions,
-      grassMap,
-      foliageMap,
-    }),
-  };
-}
-
-function configurePixelTexture(texture: THREE.Texture): THREE.Texture {
-  texture.magFilter = THREE.NearestFilter;
-  texture.minFilter = THREE.NearestFilter;
-  texture.wrapS = THREE.ClampToEdgeWrapping;
-  texture.wrapT = THREE.ClampToEdgeWrapping;
-  texture.colorSpace = THREE.NoColorSpace;
-  return texture;
-}
-
-function createTerrainTexture(atlas: ViewerAtlas, renderer: THREE.WebGLRenderer): THREE.Texture {
+function createTerrainTexture(atlas: BuiltAtlas, renderer: THREE.WebGLRenderer): THREE.Texture {
   const texture = new THREE.CanvasTexture(atlas.canvas);
   texture.flipY = false;
   texture.magFilter = THREE.NearestFilter;
@@ -368,245 +294,6 @@ function createTerrainTexture(atlas: ViewerAtlas, renderer: THREE.WebGLRenderer)
   texture.wrapT = THREE.ClampToEdgeWrapping;
   texture.needsUpdate = true;
   return texture;
-}
-
-function makeCelestialFallback(kind: 'sun' | 'moon'): HTMLCanvasElement {
-  const canvas = document.createElement('canvas');
-  canvas.width = 32;
-  canvas.height = 32;
-  const ctx = canvas.getContext('2d')!;
-  ctx.clearRect(0, 0, 32, 32);
-  ctx.imageSmoothingEnabled = false;
-  if (kind === 'sun') {
-    ctx.fillStyle = '#fff7b2';
-    ctx.fillRect(4, 4, 24, 24);
-    ctx.fillStyle = '#ffd96a';
-    ctx.fillRect(7, 7, 18, 18);
-  } else {
-    ctx.fillStyle = '#d8dce8';
-    ctx.fillRect(6, 6, 20, 20);
-    ctx.fillStyle = '#aeb5c5';
-    ctx.fillRect(9, 9, 4, 4);
-    ctx.fillRect(18, 14, 4, 4);
-    ctx.fillRect(13, 21, 3, 3);
-  }
-  return canvas;
-}
-
-function loadCanvasBackedTexture(
-  fallback: HTMLCanvasElement,
-  candidates: { id: string; cropMoonSheet?: boolean }[],
-  signal: AbortSignal,
-): THREE.Texture {
-  const texture = configurePixelTexture(new THREE.CanvasTexture(fallback));
-  const tryLoad = (index: number) => {
-    const candidate = candidates[index];
-    if (!candidate || signal.aborted) return;
-    void loadTextureImage(candidate.id, signal)
-      .then((img) => {
-        if (!img) {
-          tryLoad(index + 1);
-          return;
-        }
-        if (signal.aborted) return;
-        if (candidate.cropMoonSheet && img.width > img.height) {
-          const frameW = Math.floor(img.width / 4);
-          const frameH = Math.floor(img.height / 2);
-          const canvas = document.createElement('canvas');
-          canvas.width = frameW;
-          canvas.height = frameH;
-          const ctx = canvas.getContext('2d')!;
-          ctx.imageSmoothingEnabled = false;
-          ctx.drawImage(img, 0, 0, frameW, frameH, 0, 0, frameW, frameH);
-          texture.image = canvas;
-        } else {
-          texture.image = img;
-        }
-        texture.needsUpdate = true;
-      })
-      .catch((error) => {
-        if (!signal.aborted) console.error('[violet-map] sky resource failed', error);
-      });
-  };
-  tryLoad(0);
-  return texture;
-}
-
-function createCelestialMaterial(texture: THREE.Texture): THREE.MeshBasicMaterial {
-  return new THREE.MeshBasicMaterial({
-    map: texture,
-    color: 0xffffff,
-    transparent: true,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    depthTest: true,
-    side: THREE.DoubleSide,
-    fog: false,
-    toneMapped: false,
-  });
-}
-
-function createSkyDomeMaterial(): THREE.ShaderMaterial {
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      topColor: { value: new THREE.Color(0x78a7ff) },
-      horizonColor: { value: new THREE.Color(0xb9d4ff) },
-      sunDir: { value: new THREE.Vector3(0, 1, 0) },
-      sunsetAmount: { value: 0 },
-      nightAmount: { value: 0 },
-    },
-    vertexShader: `
-      varying vec3 vDir;
-      void main() {
-        vDir = position;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: `
-      uniform vec3 topColor;
-      uniform vec3 horizonColor;
-      uniform vec3 sunDir;
-      uniform float sunsetAmount;
-      uniform float nightAmount;
-      varying vec3 vDir;
-      void main() {
-        vec3 dir = normalize(vDir);
-        float vertical = smoothstep(-0.08, 0.58, dir.y);
-        vec3 color = mix(horizonColor, topColor, vertical);
-        float sunDot = max(dot(normalize(sunDir), dir), 0.0);
-        float diskGlow = pow(sunDot, 18.0) * sunsetAmount;
-        float horizonGlow = (1.0 - vertical) * smoothstep(-0.12, 0.24, dir.y) * sunsetAmount;
-        vec3 warm = vec3(1.0, 0.48, 0.16);
-        color = mix(color, warm, clamp(diskGlow * 0.75 + horizonGlow * 0.38, 0.0, 0.78));
-        color = mix(color, vec3(0.012, 0.016, 0.035), nightAmount * 0.86);
-        gl_FragColor = vec4(color, 1.0);
-      }
-    `,
-    side: THREE.BackSide,
-    depthWrite: false,
-    depthTest: false,
-    fog: false,
-  });
-}
-
-function createSkyObjects(scene: THREE.Scene): SkyObjects {
-  const textures = new AbortController();
-  const group = new THREE.Group();
-  const domeMaterial = createSkyDomeMaterial();
-  const domeGeometry = new THREE.SphereGeometry(1200, 32, 16);
-  const dome = new THREE.Mesh(domeGeometry, domeMaterial);
-  dome.frustumCulled = false;
-  dome.renderOrder = -1000;
-  group.add(dome);
-
-  const sunTexture = loadCanvasBackedTexture(
-    makeCelestialFallback('sun'),
-    [{ id: 'minecraft:environment/celestial/sun' }, { id: 'minecraft:environment/sun' }],
-    textures.signal,
-  );
-  const moonTexture = loadCanvasBackedTexture(
-    makeCelestialFallback('moon'),
-    [
-      { id: 'minecraft:environment/celestial/moon/full_moon' },
-      { id: 'minecraft:environment/moon_phases', cropMoonSheet: true },
-    ],
-    textures.signal,
-  );
-  const celestialGeometry = new THREE.PlaneGeometry(1, 1);
-  const sun = new THREE.Mesh(celestialGeometry, createCelestialMaterial(sunTexture));
-  const moon = new THREE.Mesh(celestialGeometry, createCelestialMaterial(moonTexture));
-  sun.frustumCulled = false;
-  moon.frustumCulled = false;
-  sun.renderOrder = -900;
-  moon.renderOrder = -900;
-  sun.scale.set(180, 180, 1);
-  moon.scale.set(120, 120, 1);
-  group.add(sun, moon);
-
-  const starsCount = 900;
-  const positions = new Float32Array(starsCount * 3);
-  let seed = 1337;
-  const rand = () => {
-    seed = Math.imul(seed ^ (seed >>> 15), 2246822507);
-    seed = Math.imul(seed ^ (seed >>> 13), 3266489909);
-    return ((seed ^= seed >>> 16) >>> 0) / 0xffffffff;
-  };
-  for (let i = 0; i < starsCount; i++) {
-    const y = 0.16 + rand() * 0.84;
-    const a = rand() * Math.PI * 2;
-    const r = Math.sqrt(Math.max(0, 1 - y * y));
-    positions[i * 3] = Math.cos(a) * r * 900;
-    positions[i * 3 + 1] = y * 900;
-    positions[i * 3 + 2] = Math.sin(a) * r * 900;
-  }
-  const starGeometry = new THREE.BufferGeometry();
-  starGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  const starMaterial = new THREE.PointsMaterial({
-    color: 0xdde6ff,
-    size: 2,
-    transparent: true,
-    opacity: 0,
-    depthWrite: false,
-  });
-  const stars = new THREE.Points(starGeometry, starMaterial);
-  group.add(stars);
-  group.traverse((object) => {
-    object.userData.oitBackground = true;
-  });
-  scene.add(group);
-
-  return {
-    group,
-    dome,
-    domeMaterial,
-    sun,
-    moon,
-    stars,
-    dispose() {
-      textures.abort();
-      scene.remove(group);
-      domeGeometry.dispose();
-      domeMaterial.dispose();
-      celestialGeometry.dispose();
-      sunTexture.dispose();
-      moonTexture.dispose();
-      sun.material.dispose();
-      moon.material.dispose();
-      starGeometry.dispose();
-      starMaterial.dispose();
-    },
-  };
-}
-
-function updateSkyObjects(
-  sky: SkyObjects,
-  camera: THREE.Camera,
-  timeOfDay: number,
-  dayFactor: number,
-  visible: boolean,
-  topColor: THREE.Color,
-  horizonColor: THREE.Color,
-) {
-  sky.group.position.copy(camera.position);
-  sky.group.visible = visible;
-  if (!visible) return;
-  const angle = timeOfDay * Math.PI * 2;
-  const sunDir = sunDirection.set(Math.sin(angle), Math.cos(angle), -0.25).normalize();
-  const moonDir = moonDirection.copy(sunDir).multiplyScalar(-1);
-  sky.sun.position.copy(sunDir).multiplyScalar(850);
-  sky.moon.position.copy(moonDir).multiplyScalar(850);
-  sky.sun.quaternion.setFromUnitVectors(SKY_PLANE_FORWARD, celestialFacing.copy(sunDir).negate());
-  sky.moon.quaternion.setFromUnitVectors(SKY_PLANE_FORWARD, celestialFacing.copy(moonDir).negate());
-  const night = clamp01((0.55 - dayFactor) / 0.55);
-  const sunset = Math.max(0, 1 - Math.abs(sunDir.y) / 0.34) * Math.min(1, dayFactor * 1.6);
-  sky.domeMaterial.uniforms.topColor.value.copy(topColor);
-  sky.domeMaterial.uniforms.horizonColor.value.copy(horizonColor);
-  sky.domeMaterial.uniforms.sunDir.value.copy(sunDir);
-  sky.domeMaterial.uniforms.sunsetAmount.value = sunset;
-  sky.domeMaterial.uniforms.nightAmount.value = night;
-  sky.sun.material.opacity = clamp01(dayFactor * 1.2);
-  sky.moon.material.opacity = night * 0.8;
-  (sky.stars.material as THREE.PointsMaterial).opacity = night * 0.85;
 }
 
 function createRenderer(container: HTMLElement): THREE.WebGLRenderer {
@@ -745,7 +432,7 @@ function createEngine(
     throw error;
   }
   const scene = createScene();
-  const skyObjects = createSkyObjects(scene);
+  const skyObjects = new SkyScene(scene, resources.sky);
   const cameras = createCameras(container, initialView);
   const terrainTexture = createTerrainTexture(resources.atlas, renderer);
   const shared = createSharedUniforms();
@@ -966,8 +653,7 @@ function applyLightingAndFog(
     );
   if (!topView) engine.shared.envFogDensity.value = fogDensity(dimensionSky);
 
-  updateSkyObjects(
-    engine.sky,
+  engine.sky.update(
     camera,
     props.timeOfDay,
     dayFactor,
