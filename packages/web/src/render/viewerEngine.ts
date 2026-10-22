@@ -32,6 +32,7 @@ import {
 } from './materials';
 import { OverlayManager, type OverlayDiagnosticSnapshot } from './overlayManager';
 import { buildRenderKey } from './resourceKey';
+import { TopMapScene } from './topMapScene';
 import { TopMapManager, type TopMapDiagnosticSnapshot } from '../scheduling/topMapManager';
 import { TransparencyRenderer, type TransparencyDiagnosticSnapshot } from './transparency';
 
@@ -738,7 +739,7 @@ function createEngine(
   const textureAnimations = createTextureAnimationUniforms(resources.atlas.animations);
   const materials = createMaterials(terrainTexture, shared, textureAnimations);
   const controls = createControls(renderer.domElement, cameras, initialView, fastMoveMultiplier, inertiaEnabled);
-  const topMap = new TopMapManager(scene, shared);
+  const topMap = new TopMapManager(new TopMapScene(scene, shared));
 
   const engine: Engine = {
     renderer,

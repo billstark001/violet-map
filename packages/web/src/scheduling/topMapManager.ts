@@ -3,15 +3,13 @@ import {
   TOP_MAP_MISSING_HEIGHT,
   TOP_MAP_TILE_BLOCKS,
   type PreparedTopMapTile,
-  type TopMapTilePayload,
 } from '@violet-map/core/formats/top-map';
-import { meshByteLength, type MeshBuffers } from '@violet-map/render';
-import { buildTopMapMesh, topMapCoverageChunkCount, topMapCoverageKeyFromMask } from '@violet-map/render/top-map/mesh';
+import { topMapCoverageKeyFromMask } from '@violet-map/render/top-map/mesh';
 import * as THREE from 'three';
 import { fetchTopMapManifest, fetchTopMapTile } from '../api';
 import { debugLog } from '../logger';
 import { resourceClient } from '../resources/client';
-import { createTopMapMaterial, type SharedUniforms } from '../render/materials';
+import type { TopMapDisplay } from '../runtime/topMapDisplay';
 import { planTopMapTiles, topMapLodStep, type RegionCoordinate } from './topMapPlanner';
 
 const MAX_RESIDENT_TILES = 96;
@@ -62,81 +60,10 @@ export interface TopMapDiagnosticSnapshot {
   }[];
 }
 
-interface TopMapData {
-  payload: TopMapTilePayload;
-  prepared: PreparedTopMapTile;
-  texture: THREE.DataTexture;
-}
-
 interface TopMapTile {
   key: string;
-  data: TopMapData;
-  mesh: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial> | null;
-  material: THREE.ShaderMaterial;
-  step: number;
-  coverageKey: string;
+  data: PreparedTopMapTile;
   lastUsed: number;
-}
-
-function createColorTexture(data: PreparedTopMapTile): THREE.DataTexture {
-  const texture = new THREE.DataTexture(
-    data.colors,
-    data.payload.size.colorSamples,
-    data.payload.size.colorSamples,
-    THREE.RGBAFormat,
-    THREE.UnsignedByteType,
-  );
-  texture.colorSpace = THREE.NoColorSpace;
-  texture.flipY = false;
-  texture.magFilter = THREE.NearestFilter;
-  texture.minFilter = THREE.NearestFilter;
-  texture.wrapS = THREE.ClampToEdgeWrapping;
-  texture.wrapT = THREE.ClampToEdgeWrapping;
-  texture.generateMipmaps = false;
-  texture.needsUpdate = true;
-  return texture;
-}
-
-function prepareTopMap(payload: TopMapTilePayload): TopMapData {
-  const prepared = prepareTopMapTile(payload);
-  return {
-    payload,
-    prepared,
-    texture: createColorTexture(prepared),
-  };
-}
-
-function buildGeometry(b: MeshBuffers): { geometry: THREE.BufferGeometry; bytes: number } {
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(b.positions, 3, true));
-  if (b.uvs) geometry.setAttribute('uv', new THREE.BufferAttribute(b.uvs, 2, true));
-  geometry.setAttribute('tintColor', new THREE.BufferAttribute(b.colors, 3, true));
-  geometry.setAttribute('lightData', new THREE.BufferAttribute(b.lights, 2, true));
-  geometry.setIndex(new THREE.BufferAttribute(b.indices, 1));
-  if (b.bounds) {
-    geometry.boundingBox = new THREE.Box3(
-      new THREE.Vector3(b.bounds.min[0], b.bounds.min[1], b.bounds.min[2]),
-      new THREE.Vector3(b.bounds.max[0], b.bounds.max[1], b.bounds.max[2]),
-    );
-    const center = new THREE.Vector3();
-    geometry.boundingBox.getCenter(center);
-    const radius = center.distanceTo(new THREE.Vector3(b.bounds.max[0], b.bounds.max[1], b.bounds.max[2]));
-    geometry.boundingSphere = new THREE.Sphere(center, radius);
-  } else {
-    geometry.computeBoundingBox();
-    geometry.computeBoundingSphere();
-  }
-  return { geometry, bytes: meshByteLength(b) };
-}
-
-function buildTileGeometry(
-  data: TopMapData,
-  step: number,
-  onlineChunkMask: Uint8Array | undefined,
-): { geometry: THREE.BufferGeometry; bytes: number } | null {
-  const buffers = buildTopMapMesh(data.prepared, { step, onlineChunkMask });
-  if (!buffers || buffers.positions.length === 0 || buffers.indices.length === 0) return null;
-  return buildGeometry(buffers);
 }
 
 interface TileCoverage {
@@ -172,7 +99,6 @@ function buildTileCoverage(onlineChunks: ReadonlySet<string> | undefined): Map<s
 }
 
 export class TopMapManager {
-  private readonly group = new THREE.Group();
   private readonly tiles = new Map<string, TopMapTile>();
   private readonly pendingTiles = new Set<string>();
   private readonly tileAborts = new Map<string, AbortController>();
@@ -199,11 +125,8 @@ export class TopMapManager {
   private manifestAbort: AbortController | null = null;
   private sourceScope = '';
 
-  constructor(
-    private readonly scene: THREE.Scene,
-    private readonly shared: SharedUniforms,
-  ) {
-    this.group.visible = false;
+  constructor(private readonly display: TopMapDisplay) {
+    this.display.setEnabled(false);
     this.unsubscribe = resourceClient.subscribe(() => {
       const scope = resourceClient.current(this.world)?.sourceScope ?? '';
       if (scope !== this.sourceScope) {
@@ -217,7 +140,6 @@ export class TopMapManager {
       }
       if (this.topMapEnabled && !this.disposed) void this.loadManifest(this.world, this.dimension, ++this.manifestSeq);
     });
-    scene.add(this.group);
   }
 
   configure(world: string, dimension: string, topMapEnabled: boolean) {
@@ -232,7 +154,7 @@ export class TopMapManager {
     this.manifestSeq++;
     this.abortPendingLoads();
     this.regions.clear();
-    this.group.visible = topMapEnabled;
+    this.display.setEnabled(topMapEnabled);
     this.pendingTiles.clear();
     this.failedTiles.clear();
     this.wantedTiles.clear();
@@ -248,11 +170,11 @@ export class TopMapManager {
     if (this.disposed) return;
     const topMapAllowed = this.topMapEnabled && (!this.manifestLoaded || this.regions.size > 0);
     if (!topMapAllowed || !this.world) {
-      this.group.visible = false;
+      this.display.setEnabled(false);
       return;
     }
     if (!this.manifestLoaded) {
-      this.group.visible = false;
+      this.display.setEnabled(false);
       if (!this.manifestAbort && now >= this.manifestRetryAt)
         void this.loadManifest(this.world, this.dimension, this.manifestSeq);
       return;
@@ -269,7 +191,7 @@ export class TopMapManager {
       this.coverageSource = options.onlineChunks;
       this.latestCoverage = buildTileCoverage(options.onlineChunks);
     }
-    this.group.visible = true;
+    this.display.setEnabled(true);
     const radiusX = view.width / 2 + TOP_MAP_TILE_BLOCKS;
     const radiusZ = view.height / 2 + TOP_MAP_TILE_BLOCKS;
     const minRx = Math.floor((camera.position.x - radiusX) / TOP_MAP_TILE_BLOCKS);
@@ -296,8 +218,7 @@ export class TopMapManager {
       wanted.add(candidate.key);
       if (tile) {
         tile.lastUsed = now;
-        this.ensureTileMesh(tile, step, coverageKey, coverage?.mask);
-        this.updateTileVisibility(tile);
+        this.display.update(tile.key, step, coverageKey, coverage?.mask);
       } else if (
         !this.pendingTiles.has(candidate.key) &&
         !this.tileFailedRecently(candidate.key, now) &&
@@ -313,9 +234,7 @@ export class TopMapManager {
       this.tileAborts.delete(key);
       this.pendingTiles.delete(key);
     }
-    for (const tile of this.tiles.values()) {
-      if (!wanted.has(tile.key) && tile.mesh) tile.mesh.visible = false;
-    }
+    this.display.setWanted(wanted);
     this.wantedTiles = wanted;
     this.evictTiles(wanted);
     debugLog('top-map', 'update', {
@@ -332,7 +251,7 @@ export class TopMapManager {
     this.unsubscribe();
     this.manifestSeq++;
     this.abortPendingLoads();
-    this.scene.remove(this.group);
+    this.display.dispose();
     this.pendingTiles.clear();
     this.latestCoverage.clear();
     this.coverageSource = undefined;
@@ -354,7 +273,7 @@ export class TopMapManager {
     const samples = tile.data.payload.size.samples;
     const sx = Math.max(0, Math.min(samples - 1, Math.floor(localX / stride)));
     const sz = Math.max(0, Math.min(samples - 1, Math.floor(localZ / stride)));
-    const height = tile.data.prepared.heights[sz * samples + sx];
+    const height = tile.data.heights[sz * samples + sx];
     return height === TOP_MAP_MISSING_HEIGHT ? null : height;
   }
 
@@ -370,10 +289,7 @@ export class TopMapManager {
       residentTiles: [...this.tiles.values()]
         .map((tile) => ({
           key: tile.key,
-          step: tile.step,
-          coverageKey: tile.coverageKey,
-          visible: tile.mesh?.visible ?? false,
-          meshBytes: tile.mesh?.userData.meshBytes ?? 0,
+          ...this.display.snapshot(tile.key),
           lastUsed: tile.lastUsed,
         }))
         .sort((a, b) => a.key.localeCompare(b.key)),
@@ -460,23 +376,19 @@ export class TopMapManager {
         this.tileDigests.get(key) !== digest
       )
         return;
-      const data = prepareTopMap(payload);
+      const data = prepareTopMapTile(payload);
       const tile: TopMapTile = {
         key,
         data,
-        mesh: null,
-        material: createTopMapMaterial(data.texture, this.shared),
-        step: 0,
-        coverageKey: '',
         lastUsed: now,
       };
       this.failedTiles.delete(key);
       this.tiles.set(key, tile);
+      this.display.add(key, data);
       if (this.wantedTiles.has(key)) {
         const latestCoverage = this.latestCoverage.get(key);
         const latestCoverageKey = latestCoverage?.key ?? '';
-        this.ensureTileMesh(tile, this.latestStepForTile(rx, rz), latestCoverageKey, latestCoverage?.mask);
-        this.updateTileVisibility(tile);
+        this.display.update(key, this.latestStepForTile(rx, rz), latestCoverageKey, latestCoverage?.mask);
       }
       debugLog('top-map', 'tile-loaded', { key, rx, rz, chunks: payload.chunks, step, approach: payload.approach });
     } catch (error) {
@@ -490,39 +402,6 @@ export class TopMapManager {
         this.pendingTiles.delete(key);
       }
     }
-  }
-
-  private ensureTileMesh(tile: TopMapTile, step: number, coverageKey: string, onlineChunkMask: Uint8Array | undefined) {
-    if (tile.step === step && tile.coverageKey === coverageKey) return;
-    const built = buildTileGeometry(tile.data, step, onlineChunkMask);
-    tile.step = step;
-    tile.coverageKey = coverageKey;
-    if (!built) {
-      this.disposeTileMesh(tile);
-    } else if (tile.mesh) {
-      tile.mesh.geometry.dispose();
-      tile.mesh.geometry = built.geometry;
-      tile.mesh.userData.meshBytes = built.bytes;
-    } else {
-      tile.mesh = new THREE.Mesh(built.geometry, tile.material);
-      tile.mesh.position.set(tile.data.payload.origin.x, 0, tile.data.payload.origin.z);
-      tile.mesh.matrixAutoUpdate = false;
-      tile.mesh.updateMatrix();
-      tile.mesh.userData.meshBytes = built.bytes;
-      this.group.add(tile.mesh);
-    }
-    debugLog('top-map', 'tile-mesh', {
-      key: tile.key,
-      step,
-      coveredChunks: topMapCoverageChunkCount(coverageKey),
-      vertices: tile.mesh ? tile.mesh.geometry.getAttribute('position').count : 0,
-      bytes: tile.mesh?.userData.meshBytes ?? 0,
-    });
-  }
-
-  private updateTileVisibility(tile: TopMapTile) {
-    if (!tile.mesh) return;
-    tile.mesh.visible = true;
   }
 
   private latestStepForTile(rx: number, rz: number): number {
@@ -567,20 +446,9 @@ export class TopMapManager {
     this.tileAborts.clear();
   }
 
-  private disposeTileMesh(tile: TopMapTile) {
-    if (!tile.mesh) return;
-    this.group.remove(tile.mesh);
-    tile.mesh.geometry.dispose();
-    tile.mesh = null;
-  }
-
   private removeTile(key: string) {
-    const tile = this.tiles.get(key);
-    if (!tile) return;
-    this.disposeTileMesh(tile);
-    tile.material.dispose();
-    tile.data.texture.dispose();
-    this.tiles.delete(key);
+    if (!this.tiles.delete(key)) return;
+    this.display.remove(key);
   }
 
   private viewMetrics(

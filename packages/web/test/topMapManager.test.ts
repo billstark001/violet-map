@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { setImmediate } from 'node:timers/promises';
 import { test } from 'node:test';
 import * as THREE from 'three';
+import { TopMapScene } from '../src/render/topMapScene.js';
 import { TopMapManager } from '../src/scheduling/topMapManager.js';
 
 test('a transient manifest failure is retried on a later update', async () => {
@@ -21,7 +22,7 @@ test('a transient manifest failure is retried on a later update', async () => {
     if (calls === 1) throw new Error('temporary outage');
     return Response.json({ hasTopMap: false, world: 'world', dimension: 'minecraft:overworld' });
   };
-  const manager = new TopMapManager(new THREE.Scene(), {} as never);
+  const manager = new TopMapManager(new TopMapScene(new THREE.Scene(), {} as never));
   try {
     manager.configure('world', 'minecraft:overworld', true);
     await setImmediate();
@@ -74,7 +75,7 @@ test('digest and archive scope switches abort pending tiles and dispose prior GP
       },
     });
   };
-  const manager = new TopMapManager(new THREE.Scene(), {} as never);
+  const manager = new TopMapManager(new TopMapScene(new THREE.Scene(), {} as never));
   t.after(() => manager.dispose());
   manager.configure('archive', 'minecraft:overworld', true);
   await setImmediate();
@@ -87,7 +88,8 @@ test('digest and archive scope switches abort pending tiles and dispose prior GP
     const texture = new THREE.Texture();
     for (const resource of [geometry, material, texture]) resource.addEventListener('dispose', () => disposed++);
     const mesh = new THREE.Mesh(geometry, material);
-    state.group.add(mesh);
+    state.display.group.add(mesh);
+    state.display.tiles.set('0,0', { mesh, material, texture, step: 1, coverageKey: '*', meshBytes: 0 });
     state.tiles.set('0,0', { key: '0,0', mesh, material, data: { texture }, step: 1, coverageKey: '*', lastUsed: 0 });
     const abort = new AbortController();
     state.tileAborts.set('0,0', abort);
@@ -153,7 +155,7 @@ test('an obsolete tile failure cannot poison the replacement request or release 
       },
     });
   };
-  const manager = new TopMapManager(new THREE.Scene(), {} as never);
+  const manager = new TopMapManager(new TopMapScene(new THREE.Scene(), {} as never));
   t.after(() => {
     manager.dispose();
     globalThis.fetch = originalFetch;

@@ -23,6 +23,7 @@ import { log } from '../logger';
 import { resourceClient } from '../resources/client';
 import { apiFetch } from '../runtime';
 import type { SharedUniforms } from './materials';
+import { planOverlayAdmission, curveSamplingBudget, type OverlayCandidate } from '../scheduling/overlayPlanner';
 import { OVERLAY_LIMITS } from './overlayLimits';
 import { OverlayMask, createMaskMaterial } from './overlayMask';
 import { loadOverlayMedia, type OverlayMediaResource } from './overlayMedia';
@@ -272,16 +273,15 @@ export class OverlayManager {
     }
     this.suppressed = 0;
     this.samplingLimited = 0;
-    let active = 0,
-      hasMedia = false,
+    let hasMedia = false,
       maskBounds: { min: [number, number]; max: [number, number] } | null = null;
     const viewBounds = this.topBounds(frame);
+    const candidates: OverlayCandidate[] = [];
     for (const record of this.records.values()) {
       const f = record.feature;
       let visible: boolean;
       if (f.kind === 'area' && frame.topView)
         visible =
-          f.fill.opacity > 0 &&
           record.bounds.max[0] >= viewBounds.min[0] &&
           record.bounds.min[0] <= viewBounds.max[0] &&
           record.bounds.max[2] >= viewBounds.min[1] &&
@@ -300,21 +300,31 @@ export class OverlayManager {
           this.box.expandByScalar(unit * f.style.width);
         }
         visible = this.frustum.intersectsBox(this.box);
-        if (f.kind === 'media') visible = visible && f.views.includes(frame.topView ? 'top' : 'player');
-        if (f.kind === 'curve') visible = visible && f.style.opacity > 0;
-        if (f.kind === 'area') visible = visible && f.wall.opacity > 0;
       }
-      if (visible && active >= OVERLAY_LIMITS.activeFeatures) {
-        visible = false;
-        this.suppressed++;
-      }
-      if (!visible) {
-        this.release(record);
-        continue;
-      }
-      active++;
-      if (record.retryAt && frame.now < record.retryAt) continue;
-      if (!record.object && !record.fill && !record.lease) {
+      candidates.push({
+        key: record.key,
+        feature: f,
+        spatiallyVisible: visible,
+        retryAt: record.retryAt,
+        active: !!(record.object || record.fill || record.lease),
+        curvePoints: record.curve ? record.curve.positions.length / 3 : 0,
+      });
+    }
+    const plan = planOverlayAdmission(
+      candidates,
+      {
+        now: frame.now,
+        topView: frame.topView,
+        projectionChanged: resample,
+      },
+      OVERLAY_LIMITS,
+    );
+    this.suppressed = plan.suppressed;
+    for (const key of plan.release) this.release(this.records.get(key)!);
+    for (const admission of plan.admitted) {
+      const record = this.records.get(admission.key)!;
+      const f = record.feature;
+      if (admission.activate) {
         try {
           this.activate(record, renderer);
         } catch (error) {
@@ -322,8 +332,7 @@ export class OverlayManager {
           this.issue(record.key, error);
         }
       }
-      if (f.kind === 'curve' && record.object && (resample || !record.curve!.positions.length))
-        this.sample(record, frame);
+      if (admission.sample && record.object) this.sample(record, frame);
       if (record.curve?.capped) this.samplingLimited++;
       if (f.kind === 'media') {
         hasMedia = true;
@@ -482,12 +491,7 @@ export class OverlayManager {
     try {
       const sampled = sampleCurve(feature, {
         projection: { matrix: this.matrix.elements, width: frame.width, height: frame.height },
-        tolerance: OVERLAY_LIMITS.curveToleranceCssPixels,
-        maxDepth: OVERLAY_LIMITS.curveDepth,
-        maxPoints: Math.min(
-          OVERLAY_LIMITS.curvePointsPerFeature,
-          OVERLAY_LIMITS.curvePointsTotal - this.curvePoints + record.curve!.positions.length / 3,
-        ),
+        ...curveSamplingBudget(this.curvePoints, record.curve!.positions.length / 3, OVERLAY_LIMITS),
       });
       record.curve!.capped = sampled.capped;
       const origin = feature.nodes[0].anchor,
