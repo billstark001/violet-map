@@ -2,6 +2,7 @@ import type { PreparedTopMapTile } from '@violet-map/core/formats/top-map';
 import { meshByteLength, type MeshBuffers } from '@violet-map/render';
 import { buildTopMapMesh } from '@violet-map/render/top-map/mesh';
 import * as THREE from 'three';
+import { StaticMesh } from './staticMesh';
 import type { TopMapDisplay, TopMapTileDisplay } from '../runtime/topMapDisplay';
 import { createTopMapMaterial, type SharedUniforms } from './materials';
 
@@ -77,6 +78,8 @@ export class TopMapScene implements TopMapDisplay {
     private readonly shared: SharedUniforms,
   ) {
     this.group.visible = false;
+    this.group.matrixAutoUpdate = false;
+    this.group.updateMatrix();
     scene.add(this.group);
   }
 
@@ -111,7 +114,7 @@ export class TopMapScene implements TopMapDisplay {
         tile.mesh.geometry = built.geometry;
         tile.meshBytes = built.bytes;
       } else {
-        tile.mesh = new THREE.Mesh(built.geometry, tile.material);
+        tile.mesh = new StaticMesh(built.geometry, tile.material);
         tile.mesh.position.set(tile.data.payload.origin.x, 0, tile.data.payload.origin.z);
         tile.mesh.matrixAutoUpdate = false;
         tile.mesh.updateMatrix();

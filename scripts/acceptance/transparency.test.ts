@@ -149,6 +149,17 @@ test(
     near(nested.center, [128, 0, 128, 255]);
     assert.match(nested.failure, /nested render failure/);
     assert.equal(nested.restored, true);
+    const staticCulling = await page.evaluate(() => window.transparencyHarness.staticCulling());
+    for (const frame of [staticCulling.original, staticCulling.moved, staticCulling.recovered]) {
+      assert.equal(frame.difference, 0, 'frame culling changed the rendered pixels');
+      assert.equal(frame.stableIntersections, 2000, 'static bounds must be tested once per frame');
+      assert.equal(frame.generalIntersections, 6000, 'general meshes retain per-pass culling');
+    }
+    assert.match(staticCulling.failure, /static render failure/);
+    assert.equal(staticCulling.restored, true);
+    near(staticCulling.nested, [32, 128, 64, 255]);
+    near(staticCulling.layered, staticCulling.nested, 0);
+    assert.equal(staticCulling.hierarchyRestored, true);
     const recovery = await page.evaluate(() => window.transparencyHarness.contextRecovery());
     assert.equal(recovery.lostStatus, true);
     assert.equal(recovery.restoredStatus, false);
@@ -204,6 +215,7 @@ test(
           lifetimes,
           pointSize,
           nested,
+          staticCulling,
           recovery,
           topMap,
           disposed,

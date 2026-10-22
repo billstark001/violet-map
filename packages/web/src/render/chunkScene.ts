@@ -4,6 +4,7 @@ import type { TopClipRange } from '../view/worldGeometry';
 import type { RenderLayer } from '@violet-map/core/assets';
 import { meshByteLength, SECTION_VISIBILITY_ALL, type MeshBuffers } from '@violet-map/render';
 import * as THREE from 'three';
+import { StaticMesh } from './staticMesh';
 import type { LodStep } from '../view/terrain';
 import { WORLD_MIN_Y, WORLD_MAX_Y } from '../view/worldGeometry';
 import type { TerrainMesh, SectionMesh } from '../view/terrain';
@@ -305,6 +306,8 @@ export class ChunkScene implements ChunkDisplay {
 
   private displayFull(e: ChunkSceneEntry, sections: SectionMesh[], version: number) {
     const group = new THREE.Group();
+    group.matrixAutoUpdate = false;
+    group.updateMatrix();
     let meshBytes = 0;
     for (const s of sections) {
       const sectionMeshes: THREE.Mesh[] = [];
@@ -314,7 +317,7 @@ export class ChunkScene implements ChunkDisplay {
         if (!this.hasRenderableGeometry(buffers)) continue;
         const built = this.buildGeometry(buffers, true);
         meshBytes += built.bytes;
-        const mesh = new THREE.Mesh(built.geometry, this.materials[layer]);
+        const mesh = new StaticMesh(built.geometry, this.materials[layer]);
         mesh.position.set(e.cx * 16, s.sy * 16, e.cz * 16);
         mesh.frustumCulled = true;
         mesh.visible = sectionVisible;
@@ -362,7 +365,7 @@ export class ChunkScene implements ChunkDisplay {
       const built = this.buildGeometry(meshBuffers, false);
       e.meshBytes = built.bytes;
       this.displayedMeshBytes += e.meshBytes;
-      const mesh = new THREE.Mesh(built.geometry, this.materials.lod);
+      const mesh = new StaticMesh(built.geometry, this.materials.lod);
       mesh.position.set(e.cx * 16, 0, e.cz * 16);
       mesh.frustumCulled = true;
       mesh.matrixAutoUpdate = false;

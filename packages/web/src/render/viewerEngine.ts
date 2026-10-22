@@ -628,6 +628,10 @@ function createRenderer(container: HTMLElement): THREE.WebGLRenderer {
 
 function createScene(): THREE.Scene {
   const scene = new THREE.Scene();
+  // The scene root is fixed. Dynamic descendants still update normally; static
+  // chunk subtrees no longer inherit a forced world-matrix rewrite each frame.
+  scene.matrixAutoUpdate = false;
+  scene.updateMatrix();
   scene.background = new THREE.Color(0x78a7ff);
   return scene;
 }

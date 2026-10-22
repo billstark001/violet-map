@@ -47,6 +47,8 @@ Every performance profile reserves enough tracked capacity for the entire config
 
 Transparency retains sixteen depth bins and the 3,145,728-pixel target cap (192 MiB before driver overhead). A scheduling or resource-budget change must preserve that rendering precision.
 
+Terrain and Top Map use `render/staticMesh.ts` to declare that their geometry and world bounds stay fixed during a frame's render passes. The transparency renderer tests these meshes once against the frame's frustum before preparing materials and pass lists. Changes between frames still update normally; callbacks on these meshes may update uniforms but must preserve world bounds. General meshes retain Three.js culling on each pass. Temporary culling/material state and the original hierarchy are restored even if rendering throws. Frustum visibility remains entirely a display concern.
+
 Surface-only representations cannot display a height slice below their generated/baked surface. The view contract exposes that capability: chunk scheduling requests full models for such views, and tile scheduling does not load an unusable Top Map representation. Section clipping and actual GPU visibility remain display operations.
 
 Source absence, transient errors, pending work and completed empty geometry are distinct states. Context changes revoke request generations. Old responses cannot update a replacement entry, and old cleanup cannot release a newer request.

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { StaticMesh } from './staticMesh';
 import {
   OIT_ATTACHMENT_COUNT,
   OIT_BIN_COUNT,
@@ -83,6 +84,8 @@ export class TransparencyRenderer {
   };
   private readonly inverseProjection = { value: new THREE.Matrix4() };
   private readonly size = new THREE.Vector2();
+  private readonly projectionView = new THREE.Matrix4();
+  private readonly frustum = new THREE.Frustum();
   private transparentDraws = 0;
   private disposed = false;
   private readonly clearZero = new Float32Array(4);
@@ -275,6 +278,7 @@ export class TransparencyRenderer {
     const [width, height] = oitBufferSize(this.size.x, this.size.y);
     this.inverseProjection.value.copy(camera.projectionMatrixInverse);
     const entries: DrawEntry[] = [];
+    const frameCulled: StaticMesh[] = [];
     const lights: THREE.Object3D[] = [];
     this.transparentDraws = 0;
     // Update the owning scene once. Passes below are non-owning, filtered views
@@ -282,14 +286,20 @@ export class TransparencyRenderer {
     // on their original objects, including nested GLB/line/point renderers.
     scene.updateMatrixWorld();
     camera.updateMatrixWorld();
+    this.projectionView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this.frustum.setFromProjectionMatrix(this.projectionView, THREE.WebGLCoordinateSystem, camera.reversedDepth);
     const visit = (object: THREE.Object3D, groupOrder: number) => {
       if (!object.visible) return;
       const order = object instanceof THREE.Group ? object.renderOrder : groupOrder;
       if (isDrawable(object)) {
-        const entry = this.drawEntry(object, order);
-        entries.push(entry);
-        for (const material of entry.materials)
-          if (material.visible && category(object, material) === 'world') this.transparentDraws++;
+        const stableBounds = object instanceof StaticMesh && object.frustumCulled;
+        if (!stableBounds || (object.layers.test(camera.layers) && this.frustum.intersectsObject(object))) {
+          if (stableBounds) frameCulled.push(object);
+          const entry = this.drawEntry(object, order);
+          entries.push(entry);
+          for (const material of entry.materials)
+            if (material.visible && category(object, material) === 'world') this.transparentDraws++;
+        }
       } else if (object instanceof THREE.Light) lights.push(object);
       for (const child of object.children) visit(child, order);
     };
@@ -345,6 +355,9 @@ export class TransparencyRenderer {
     if (autoReset) renderer.info.reset();
     renderer.info.autoReset = false;
     try {
+      // Static terrain/tiles share one frustum result across all passes. General
+      // meshes retain Three's per-pass culling, including callback-driven bounds.
+      for (const object of frameCulled) object.frustumCulled = false;
       if (this.needsValidation || this.base.width !== width || this.base.height !== height) {
         for (const buffer of [this.base, this.bounds, this.bins, this.color]) {
           buffer.setSize(width, height);
@@ -380,6 +393,7 @@ export class TransparencyRenderer {
       renderer.render(this.screen, this.screenCamera);
       if (this.views[2].entries.length) renderPass(2, 'foreground');
     } finally {
+      for (const object of frameCulled) object.frustumCulled = true;
       for (const entry of entries) entry.object.material = entry.source;
       for (const [object, original] of children) object.children = original;
       camera.matrixWorldAutoUpdate = cameraAutoUpdate;

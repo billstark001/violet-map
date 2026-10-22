@@ -3,6 +3,7 @@ import { TransparencyRenderer } from '../src/render/transparency';
 import { createTransparencyWorld } from './transparency-world';
 import { transparencyGlb } from './transparency-glb';
 import { TopMapScene } from '../src/render/topMapScene';
+import { StaticMesh } from '../src/render/staticMesh';
 import { createSharedUniforms } from '../src/render/materials';
 import type { PreparedTopMapTile, TopMapTilePayload } from '@violet-map/core/formats/top-map';
 
@@ -175,6 +176,127 @@ const harness = {
       gpu: debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
       status: transparency.diagnosticSnapshot(),
     };
+  },
+  staticCulling() {
+    clear();
+    renderer.setSize(640, 480);
+    camera = orthographic;
+    camera.position.set(0, 0, 10);
+    camera.lookAt(0, 0, 0);
+    orthographic.left = -4;
+    orthographic.right = 4;
+    orthographic.top = 3;
+    orthographic.bottom = -3;
+    camera.updateProjectionMatrix();
+    const geometry = new THREE.PlaneGeometry(0.6, 0.6);
+    const material = new THREE.MeshBasicMaterial({ color: 0x40ff80, opacity: 0.5, transparent: true });
+    owned.push(geometry, material);
+    const make = (stable: boolean) => {
+      const group = new THREE.Group();
+      group.position.x = 0.2;
+      group.rotation.z = 0.05;
+      const objects = Array.from({ length: 2000 }, (_, i) => {
+        const mesh = stable ? new StaticMesh(geometry, material) : new THREE.Mesh(geometry, material);
+        mesh.position.set(i < 8 ? (i % 4) - 1.5 : 100 + i, i < 8 ? Math.floor(i / 4) - 0.5 : 0, 0);
+        mesh.matrixAutoUpdate = false;
+        mesh.updateMatrix();
+        group.add(mesh);
+        return mesh;
+      });
+      return { group, objects };
+    };
+    const general = make(false),
+      stable = make(true);
+    let intersections = 0;
+    const intersect = THREE.Frustum.prototype.intersectsObject;
+    THREE.Frustum.prototype.intersectsObject = function (object) {
+      if (object instanceof THREE.Mesh && object.geometry === geometry) intersections++;
+      return intersect.call(this, object);
+    };
+    const compare = () => {
+      scene.clear();
+      scene.add(general.group);
+      intersections = 0;
+      const reference = image();
+      const generalIntersections = intersections;
+      scene.clear();
+      scene.add(stable.group);
+      intersections = 0;
+      const actual = image();
+      const stableIntersections = intersections;
+      let difference = 0;
+      for (let i = 0; i < reference.length; i++) difference = Math.max(difference, Math.abs(reference[i] - actual[i]));
+      return { difference, generalIntersections, stableIntersections };
+    };
+    try {
+      const original = compare();
+      const rounds = [];
+      for (let round = 0; round < 3; round++) {
+        const measures: Record<string, number> = {};
+        for (const [name, fixture] of round % 2
+          ? ([
+              ['stable', stable],
+              ['general', general],
+            ] as const)
+          : ([
+              ['general', general],
+              ['stable', stable],
+            ] as const)) {
+          scene.clear();
+          scene.add(fixture.group);
+          for (let i = 0; i < 5; i++) draw();
+          measures[name] = harness.benchmark(40).cpuMedianMs;
+        }
+        rounds.push(measures);
+      }
+      for (const fixture of [general, stable]) {
+        fixture.objects[8].position.set(0, 0, 0);
+        fixture.objects[8].updateMatrix();
+        fixture.group.position.x = -0.4;
+      }
+      const moved = compare();
+      const object = stable.objects[8];
+      const source = object.material;
+      object.onBeforeRender = () => {
+        throw new Error('static render failure');
+      };
+      let failure = '';
+      try {
+        draw();
+      } catch (error) {
+        failure = String(error);
+      }
+      object.onBeforeRender = () => {};
+      const restored =
+        stable.objects.every((mesh) => mesh.frustumCulled && mesh.parent === stable.group) &&
+        object.material === source;
+      const recovered = compare();
+      scene.clear();
+      const parent = new StaticMesh(geometry, material);
+      const child = new StaticMesh(geometry, material);
+      parent.position.x = 100;
+      child.position.x = -100;
+      parent.add(child);
+      scene.add(parent);
+      draw();
+      const nested = pixel();
+      parent.layers.set(1);
+      draw();
+      const layered = pixel();
+      return {
+        original,
+        moved,
+        recovered,
+        failure,
+        restored,
+        rounds,
+        nested,
+        layered,
+        hierarchyRestored: parent.parent === scene && child.parent === parent && parent.children[0] === child,
+      };
+    } finally {
+      THREE.Frustum.prototype.intersectsObject = intersect;
+    }
   },
   memory() {
     return {

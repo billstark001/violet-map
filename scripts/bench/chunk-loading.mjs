@@ -386,6 +386,16 @@ try {
     await profiler.send('Profiler.enable');
     await profiler.send('Profiler.start');
     report.metricsBefore = (await profiler.send('Performance.getMetrics')).metrics;
+    await page.evaluate(() => {
+      const probe = (window.__frameTimingProbe = { id: 0, first: null, last: null, intervals: [] });
+      const sample = (time) => {
+        if (probe.first === null) probe.first = time;
+        if (probe.last !== null) probe.intervals.push(time - probe.last);
+        probe.last = time;
+        probe.id = requestAnimationFrame(sample);
+      };
+      probe.id = requestAnimationFrame(sample);
+    });
   }
   const started = Date.now();
   while (Date.now() - started < seconds * 1000) {
@@ -393,13 +403,28 @@ try {
     const row = await sample('stationary');
     assert.ok(row.oldestTaskMs < 35000, 'unexpected stalled worker');
   }
-  const stationary = await snapshot('stationary-final');
   if (profiler) {
+    report.frameTiming = await page.evaluate(() => {
+      const probe = window.__frameTimingProbe;
+      cancelAnimationFrame(probe.id);
+      const intervals = probe.intervals.sort((a, b) => a - b);
+      const elapsedMs = probe.last - probe.first;
+      const percentile = (share) => intervals[Math.min(intervals.length - 1, Math.floor(intervals.length * share))];
+      return {
+        frames: intervals.length,
+        elapsedMs,
+        fps: (intervals.length * 1000) / elapsedMs,
+        medianMs: percentile(0.5),
+        p95Ms: percentile(0.95),
+        p99Ms: percentile(0.99),
+      };
+    });
     report.metricsAfter = (await profiler.send('Performance.getMetrics')).metrics;
     const { profile } = await profiler.send('Profiler.stop');
     await fs.writeFile(path.join(out, 'cpu-profile.json'), JSON.stringify(profile));
     await profiler.detach();
   }
+  const stationary = await snapshot('stationary-final');
   assertSettled(stationary);
   if (values.compare) {
     const reference = JSON.parse(await fs.readFile(values.compare, 'utf8'));
