@@ -157,7 +157,7 @@ test(
     }
     assert.match(staticCulling.failure, /static render failure/);
     assert.equal(staticCulling.restored, true);
-    near(staticCulling.nested, [32, 128, 64, 255]);
+    near(staticCulling.nested, [0, 128, 0, 255]);
     near(staticCulling.layered, staticCulling.nested, 0);
     assert.equal(staticCulling.hierarchyRestored, true);
     const recovery = await page.evaluate(() => window.transparencyHarness.contextRecovery());

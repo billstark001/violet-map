@@ -189,7 +189,7 @@ const harness = {
     orthographic.bottom = -3;
     camera.updateProjectionMatrix();
     const geometry = new THREE.PlaneGeometry(0.6, 0.6);
-    const material = new THREE.MeshBasicMaterial({ color: 0x40ff80, opacity: 0.5, transparent: true });
+    const material = new THREE.MeshBasicMaterial({ color: 0x00ff00, opacity: 0.5, transparent: true });
     owned.push(geometry, material);
     const make = (stable: boolean) => {
       const group = new THREE.Group();
