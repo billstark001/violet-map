@@ -795,6 +795,7 @@ export class ViewerController {
   private latestStats: ChunkSchedulerStats = { ...EMPTY_CHUNK_SCHEDULER_STATS };
   private capabilities: WorldCapabilities | null = null;
   private worldRequest: AbortController | null = null;
+  private releaseWorld?: () => void;
   private disposed = false;
   private resourceRequest = new AbortController();
   private resourceGeneration = 0;
@@ -901,9 +902,12 @@ export class ViewerController {
 
   private loadWorldMetadata(world: string): void {
     this.worldRequest?.abort();
+    this.releaseWorld?.();
+    this.releaseWorld = undefined;
     this.worldRequest = null;
     this.capabilities = null;
     if (!world) return;
+    this.releaseWorld = resourceClient.retainWorld(world);
     const controller = new AbortController();
     this.worldRequest = controller;
     void fetchWorldCapabilities(world, controller.signal)
@@ -1006,6 +1010,7 @@ export class ViewerController {
     this.unsubscribe();
     this.resourceGeneration++;
     this.resourceRequest.abort();
+    this.releaseWorld?.();
     this.worldRequest?.abort();
     this.worldRequest = null;
     this.props.onDiagnosticSnapshotProvider?.(null);

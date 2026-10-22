@@ -46,11 +46,28 @@ export class ResourceClient {
     }
   }
   private readonly heads = new Map<string, Current>();
+  private readonly owners = new Map<string, number>();
   private readonly pending = new Set<HeadRequest>();
   private readonly subscribers = new Set<(previous: ResourceViewHead, current: ResourceViewHead) => void>();
   private timer?: ReturnType<typeof setTimeout>;
   private refreshTask?: Promise<void>;
   lastError: unknown;
+  retainWorld(world: string) {
+    if (!this.owners.has(world) && this.owners.size >= 16)
+      throw new ResourceError('RESOURCE_BUSY', 'too many active world resource views', true);
+    this.owners.set(world, (this.owners.get(world) ?? 0) + 1);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      const count = this.owners.get(world)! - 1;
+      if (count) this.owners.set(world, count);
+      else {
+        this.owners.delete(world);
+        if (world) this.heads.delete(world);
+      }
+    };
+  }
   current(world = '') {
     this.ensureContext();
     return this.heads.get(world)?.head;
@@ -134,8 +151,9 @@ export class ResourceClient {
       this.ensureContext();
       if (epoch !== this.epoch)
         throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'resource delivery context changed', true);
-      const first = updates[0]?.[1].head;
-      for (const [, { head }] of updates)
+      const retained = updates.filter(([world]) => this.heads.get(world) === previous.get(world));
+      const first = retained[0]?.[1].head;
+      for (const [, { head }] of retained)
         if (!sameGeneration(head, first!))
           throw new ResourceError(
             'RESOURCE_VIEW_EXPIRED',
@@ -144,8 +162,8 @@ export class ResourceClient {
           );
       // Commit every world and the render root before notifying any consumer.
       // A failed request leaves the previous complete set visible.
-      for (const [world, current] of updates) this.heads.set(world, current);
-      for (const [world, current] of updates) this.notify(previous.get(world), current);
+      for (const [world, current] of retained) this.heads.set(world, current);
+      for (const [world, current] of retained) this.notify(previous.get(world), current);
     })();
     this.refreshTask = task;
     try {
@@ -160,7 +178,9 @@ export class ResourceClient {
     if (refresh && this.heads.has(world)) {
       await this.refresh();
       signal?.throwIfAborted();
-      return this.heads.get(world)!.head;
+      const retained = this.heads.get(world);
+      if (!retained) throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'world resource view was released', true);
+      return retained.head;
     }
     if (this.refreshTask) await this.refreshTask;
     const epoch = this.epoch;
@@ -168,9 +188,15 @@ export class ResourceClient {
     if (known && Date.now() - known.receivedAt < 86400000) return known.head;
     for (const job of this.pending)
       if (job.world === world && job.epoch === epoch && !job.controller.signal.aborted) return joinRequest(job, signal);
-    if (this.heads.size + this.pending.size >= 16 && !known)
-      throw new ResourceError('RESOURCE_BUSY', 'too many active world resource views', true);
+    while (this.heads.size + this.pending.size >= 16 && !known) {
+      const idle = [...this.heads.keys()].find(
+        (key) => key !== '' && !this.owners.has(key) && ![...this.pending].some((job) => job.world === key),
+      );
+      if (idle === undefined) throw new ResourceError('RESOURCE_BUSY', 'too many active world resource views', true);
+      this.heads.delete(idle);
+    }
     const controller = new AbortController();
+    const owned = this.owners.has(world);
     const job: HeadRequest = {
       world,
       epoch,
@@ -182,6 +208,8 @@ export class ResourceClient {
         this.ensureContext();
         if (epoch !== this.epoch)
           throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'resource delivery context changed', true);
+        if (owned && !this.owners.has(world))
+          throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'world resource view was released', true);
         for (const [otherWorld, other] of this.heads)
           if (otherWorld !== world && !sameGeneration(current.head, other.head))
             throw new ResourceError(

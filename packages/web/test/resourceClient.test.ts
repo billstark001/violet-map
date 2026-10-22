@@ -15,6 +15,64 @@ function head(version: number, world = '') {
   };
 }
 
+test('world navigation releases old heads and in-flight refresh cannot resurrect a released world', async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  let complete!: () => void;
+  let blocked = false;
+  let requests = 0;
+  globalThis.fetch = async (input) => {
+    requests++;
+    const world = new URL(String(input), 'http://fixture').searchParams.get('world') ?? '';
+    if (blocked && world)
+      await new Promise<void>((resolve) => {
+        complete = resolve;
+      });
+    return Response.json(head(1, world));
+  };
+  const client = new ResourceClient();
+  await client.head();
+  for (let i = 0; i < 32; i++) {
+    const world = `world${i}`,
+      release = client.retainWorld(world);
+    await client.head(world);
+    release();
+    assert.equal(client.current(world), undefined);
+  }
+  const release = client.retainWorld('active');
+  await client.head('active');
+  blocked = true;
+  const refreshing = client.refresh();
+  release();
+  complete();
+  await refreshing;
+  assert.equal(client.current('active'), undefined);
+  blocked = false;
+  const before = requests;
+  await client.refresh();
+  assert.equal(requests - before, 1);
+});
+
+test('unowned world heads are evicted while owned worlds respect the active head limit', async (t) => {
+  const original = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  globalThis.fetch = async (input) =>
+    Response.json(head(1, new URL(String(input), 'http://fixture').searchParams.get('world') ?? ''));
+  const client = new ResourceClient();
+  for (let i = 0; i < 32; i++) await client.head('idle' + i);
+  assert.equal(client.current('idle0'), undefined);
+  const owned = new ResourceClient();
+  for (let i = 0; i < 16; i++) {
+    owned.retainWorld('active' + i);
+    await owned.head('active' + i);
+  }
+  await assert.rejects(owned.head('overflow'), { code: 'RESOURCE_BUSY' });
+});
+
 test('publication refresh commits all world heads before notification and retains the complete old set on failure', async (t) => {
   const original = globalThis.fetch;
   t.after(() => {
