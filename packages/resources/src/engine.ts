@@ -440,8 +440,22 @@ export class ResourceEngine {
     lifetime.throwIfAborted();
     if (selectors.length > 128) throw new RangeError('at most 128 resource selectors are allowed');
     selectors = selectors.map(parseResourceSelector);
-    await this.observe(selectors.flatMap((selector) => ('world' in selector ? [selector.world] : [])));
-    const view = await this.sessions.get(viewId);
+    const worlds = [...new Set(selectors.flatMap((selector) => ('world' in selector ? [selector.world] : [])))].sort();
+    let view: View;
+    try {
+      view = await this.operations.run(
+        'resolve-view:' + canonicalJson([viewId, worlds]),
+        async () => {
+          await this.observe(worlds);
+          return this.sessions.get(viewId);
+        },
+        lifetime,
+      );
+    } catch (error) {
+      if (deadline.aborted && !signal?.aborted)
+        throw new ResourceError('RESOURCE_BUSY', 'resource resolution deadline exceeded', true);
+      throw error;
+    }
     lifetime.throwIfAborted();
 
     const issued: ArtifactRef[] = [];

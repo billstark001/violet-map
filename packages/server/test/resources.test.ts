@@ -481,6 +481,42 @@ test('publisher and source-free public reader share a durable closure with zero 
   const first = (await writer.resources.store!.head())!;
   assert.deepEqual(joinedHead, first);
   assert.equal(ready.result.head.viewId, first.publicationId);
+  await t.test('view lookup cancels one owner promptly while preserving a shared reader', async () => {
+    const controller = new AbortController();
+    let entered!: () => void, unblock!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      unblock = resolve;
+    });
+    const readHead = writer.resources.store!.head.bind(writer.resources.store);
+    const slow = t.mock.method(writer.resources.store!, 'head', async () => {
+      entered();
+      await blocked;
+      return readHead();
+    });
+    const canceled = writer.resources.resolve(first.publicationId, [selector], controller.signal);
+    const surviving = writer.resources.resolve(first.publicationId, [selector]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await waiting;
+      controller.abort(new Error('caller left during view lookup'));
+      await Promise.race([
+        assert.rejects(canceled, /caller left during view lookup/),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('view cancellation waited for backend IO')), 1000);
+        }),
+      ]);
+      unblock();
+      assert.ok('resource' in (await surviving).resources[0]);
+    } finally {
+      clearTimeout(timer);
+      unblock();
+      slow.mock.restore();
+      await Promise.allSettled([canceled, surviving]);
+    }
+  });
   writer.resources.publication.start(null);
   await writer.resources.publication.drain();
   assert.equal(writer.resources.publication.taskStatus()!.error?.code, 'PUBLICATION_CONFLICT');
