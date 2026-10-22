@@ -24,7 +24,7 @@ test('a transient manifest failure is retried on a later update', async () => {
     if (calls === 1) throw new Error('temporary outage');
     return Response.json({ hasTopMap: false, world: 'world', dimension: 'minecraft:overworld' });
   };
-  const manager = new TopMapRuntime(new TopMapScene(new THREE.Scene(), {} as never));
+  const manager = new TopMapRuntime(new TopMapScene(new THREE.Scene(), {} as never), 96);
   try {
     manager.configure('world', 'minecraft:overworld', true);
     await setImmediate();
@@ -77,7 +77,7 @@ test('digest and archive scope switches abort pending tiles and dispose prior GP
       },
     });
   };
-  const manager = new TopMapRuntime(new TopMapScene(new THREE.Scene(), {} as never));
+  const manager = new TopMapRuntime(new TopMapScene(new THREE.Scene(), {} as never), 96);
   t.after(() => manager.dispose());
   manager.configure('archive', 'minecraft:overworld', true);
   await setImmediate();
@@ -92,6 +92,7 @@ test('digest and archive scope switches abort pending tiles and dispose prior GP
     const mesh = new THREE.Mesh(geometry, material);
     state.display.group.add(mesh);
     state.display.tiles.set('0,0', { mesh, material, texture, step: 1, coverageKey: '*', meshBytes: 0 });
+    state.scheduler.loaded('0,0', 0);
     state.tiles.set('0,0', { key: '0,0', mesh, material, data: { texture }, step: 1, coverageKey: '*', lastUsed: 0 });
     const abort = new AbortController();
     state.tileAborts.set('0,0', abort);
@@ -157,7 +158,7 @@ test('an obsolete tile failure cannot poison the replacement request or release 
       },
     });
   };
-  const manager = new TopMapRuntime(new TopMapScene(new THREE.Scene(), {} as never));
+  const manager = new TopMapRuntime(new TopMapScene(new THREE.Scene(), {} as never), 96);
   t.after(() => {
     manager.dispose();
     globalThis.fetch = originalFetch;

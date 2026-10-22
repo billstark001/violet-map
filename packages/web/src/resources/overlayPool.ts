@@ -1,4 +1,4 @@
-import { OVERLAY_LIMITS } from '../render/overlayLimits';
+import { OVERLAY_RESOURCE_LIMITS } from './overlayLimits';
 
 export interface DisposableOverlayResource {
   readonly bytes: number;
@@ -30,9 +30,9 @@ export class OverlayResourcePool<T extends DisposableOverlayResource> {
   private residentBytes = 0;
   private disposed = false;
   constructor(
-    private readonly maxBytes: number = OVERLAY_LIMITS.mediaBytes,
-    private readonly maxEntries: number = OVERLAY_LIMITS.mediaVersions,
-    private readonly concurrency: number = OVERLAY_LIMITS.parallelMediaLoads,
+    private readonly maxBytes: number = OVERLAY_RESOURCE_LIMITS.mediaBytes,
+    private readonly maxEntries: number = OVERLAY_RESOURCE_LIMITS.mediaVersions,
+    private readonly concurrency: number = OVERLAY_RESOURCE_LIMITS.parallelMediaLoads,
   ) {
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new RangeError('invalid overlay byte budget');
     if (!Number.isSafeInteger(maxEntries) || maxEntries < 0) throw new RangeError('invalid overlay version budget');

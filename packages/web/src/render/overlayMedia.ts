@@ -1,7 +1,6 @@
-import type { MediaFeature, MediaVersion, OverlayMediaReference } from '@violet-map/core/overlays';
+import type { MediaFeature, MediaVersion } from '@violet-map/core/overlays';
 import { parseStaticGlb } from '@violet-map/core/overlays';
 import * as THREE from 'three';
-import { resourceDownloader } from '../resources/download';
 import { loadBrowserImage } from '../browserImage';
 import type { DisposableOverlayResource } from '../resources/overlayPool';
 
@@ -9,7 +8,7 @@ export interface OverlayMediaResource extends DisposableOverlayResource {
   instantiate(feature: MediaFeature): THREE.Object3D;
 }
 
-import { OVERLAY_LIMITS } from './overlayLimits';
+import { OVERLAY_RENDER_LIMITS } from './overlayLimits';
 
 function abort(signal: AbortSignal) {
   if (signal.aborted) throw new DOMException('overlay media aborted', 'AbortError');
@@ -110,7 +109,7 @@ async function imageResource(
     const source = await loadBrowserImage(objectUrl, signal);
     abort(signal);
     const largest = Math.max(version.width!, version.height!),
-      limit = Math.min(OVERLAY_LIMITS.mediaTexturePixels, maxTextureSize);
+      limit = Math.min(OVERLAY_RENDER_LIMITS.mediaTexturePixels, maxTextureSize);
     const scale =
       version.mediaType === 'image/svg+xml'
         ? Math.min(limit / largest, Math.max(1, 1024 / largest))
@@ -184,13 +183,12 @@ async function imageResource(
   }
 }
 
-export async function loadOverlayMedia(
-  reference: OverlayMediaReference,
+export async function decodeOverlayMedia(
+  buffer: ArrayBuffer,
+  version: MediaVersion,
   signal: AbortSignal,
   maxTextureSize: number,
 ): Promise<OverlayMediaResource> {
-  const { version } = reference;
-  const buffer = (await resourceDownloader.download(reference.resource, signal)).buffer;
   abort(signal);
   if (version.mediaType !== 'model/gltf-binary') return imageResource(buffer, version, signal, maxTextureSize);
   parseStaticGlb(new Uint8Array(buffer));

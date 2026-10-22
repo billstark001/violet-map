@@ -58,20 +58,23 @@ test('chunk selectors preserve dimensions with path separators and one exact ver
   assert.equal(hashes[0].dimension, 'mod:sky/islands');
   assert.equal('contentDigest' in hashes[0] && hashes[0].contentDigest, 'c'.repeat(64));
   assert.equal(bodies, 0);
-  const chunks = await readChunks(hashes);
+  const chunks = await readChunks(hashes, 4);
   assert.ok('payload' in chunks[0]);
   assert.deepEqual(chunks[0].payload.data, new Uint8Array([1]));
   assert.equal(bodies, 1);
   assert.equal(selectors.length, 1, 'body reads reuse the exact resolved reference');
   assert.ok(selectors.every((s: any) => s.dimension === 'mod:sky/islands'));
   globalThis.fetch = async () => new Response(null, { status: 503 });
-  const failed = await readChunks(hashes.map((chunk) => ({ ...chunk, validUntil: 0 })));
+  const failed = await readChunks(
+    hashes.map((chunk) => ({ ...chunk, validUntil: 0 })),
+    4,
+  );
   assert.ok('error' in failed[0]);
   assert.equal((failed[0].error as { code: string }).code, 'RESOURCE_BACKEND_UNAVAILABLE');
   assert.equal(bodies, 1, 'expired references fail before downloading');
   globalThis.fetch = async () => Response.json({ ...head, viewId: 'e'.repeat(64), generation: 1 });
   await resourceClient.refresh();
-  const changed = await readChunks(hashes);
+  const changed = await readChunks(hashes, 4);
   assert.ok('error' in changed[0]);
   assert.equal((changed[0].error as { code: string }).code, 'RESOURCE_VIEW_EXPIRED');
   assert.equal(bodies, 1, 'a changed view cannot reuse an old chunk reference');
@@ -136,17 +139,17 @@ test('expired references renew independently and one failed body cannot discard 
     { cx: 1, cz: 0 },
     { cx: 2, cz: 0 },
   ]);
-  const result = await readChunks([{ ...rows[0], validUntil: 0 }, rows[1]]);
+  const result = await readChunks([{ ...rows[0], validUntil: 0 }, rows[1]], 4);
   assert.ok('payload' in result[0]);
   assert.deepEqual(result[0].payload.data, new Uint8Array([1]));
   assert.ok('error' in result[1]);
   assert.equal((result[1].error as { retryable: boolean }).retryable, true);
   assert.equal(renewals, 2, 'only the expired reference was renewed');
-  const recovered = await readChunks([rows[1]]);
+  const recovered = await readChunks([rows[1]], 4);
   assert.ok('payload' in recovered[0]);
   assert.deepEqual(recovered[0].payload.data, new Uint8Array([2]));
   const third = await resolveChunks('partial', 'minecraft:overworld', [{ cx: 3, cz: 0 }]);
-  const lateExpiry = await readChunks(third);
+  const lateExpiry = await readChunks(third, 4);
   assert.ok('payload' in lateExpiry[0], 'an admission-time 409 renews the lease once before retrying');
   assert.deepEqual(lateExpiry[0].payload.data, new Uint8Array([3]));
 });

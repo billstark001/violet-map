@@ -4,34 +4,14 @@ import {
   TOP_MAP_TILE_BLOCKS,
   type PreparedTopMapTile,
 } from '@violet-map/core/formats/top-map';
-import { topMapCoverageKeyFromMask } from '@violet-map/render/top-map/mesh';
 import type { ViewState } from '../view/state';
-import {
-  TOP_MAP_MAX_RADIUS_BLOCKS,
-  TOP_MAP_MAX_RESIDENT_TILES,
-  TOP_MAP_MAX_WANTED_TILES,
-  TOP_MAP_MAX_PENDING_TILES,
-  TOP_MAP_TILE_RETRY_MS,
-  TOP_MAP_MANIFEST_RETRY_MS,
-  TOP_MAP_UPDATE_INTERVAL_MS,
-} from '../scheduling/topMapPolicy';
+import { TOP_MAP_MANIFEST_RETRY_MS } from '../scheduling/topMapPolicy';
 import { fetchTopMapManifest, fetchTopMapTile } from '../api';
 import { debugLog } from '../logger';
 import { resourceClient } from '../resources/client';
 import type { TopMapDisplay } from './topMapDisplay';
-import { planTopMapTiles, topMapLodStep, topMapViewMetrics, type RegionCoordinate } from '../scheduling/topMapPlanner';
-
-const FULL_COVERAGE_KEY = '*';
-const TOP_MAP_CHUNKS_PER_AXIS = TOP_MAP_TILE_BLOCKS / 16;
-const TOP_MAP_CHUNK_MASK_BYTES = (TOP_MAP_CHUNKS_PER_AXIS * TOP_MAP_CHUNKS_PER_AXIS) / 8;
-
-function residentTileBudget(): number {
-  const memory =
-    typeof navigator !== 'undefined' ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory : undefined;
-  if (memory !== undefined && memory <= 4) return Math.min(TOP_MAP_MAX_RESIDENT_TILES, 48);
-  if (memory !== undefined && memory <= 8) return Math.min(TOP_MAP_MAX_RESIDENT_TILES, 72);
-  return TOP_MAP_MAX_RESIDENT_TILES;
-}
+import type { RegionCoordinate } from '../scheduling/topMapPlanner';
+import { TopMapScheduler } from '../scheduling/topMapScheduler';
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError';
@@ -58,39 +38,6 @@ export interface TopMapDiagnosticSnapshot {
 interface TopMapTile {
   key: string;
   data: PreparedTopMapTile;
-  lastUsed: number;
-}
-
-interface TileCoverage {
-  key: string;
-  mask: Uint8Array;
-}
-
-function buildTileCoverage(onlineChunks: ReadonlySet<string> | undefined): Map<string, TileCoverage> {
-  const masks = new Map<string, Uint8Array>();
-  if (!onlineChunks?.size) return new Map();
-  for (const chunkKey of onlineChunks) {
-    const separator = chunkKey.indexOf(',');
-    if (separator < 1) continue;
-    const cx = Number(chunkKey.slice(0, separator));
-    const cz = Number(chunkKey.slice(separator + 1));
-    if (!Number.isInteger(cx) || !Number.isInteger(cz)) continue;
-    const rx = Math.floor(cx / TOP_MAP_CHUNKS_PER_AXIS);
-    const rz = Math.floor(cz / TOP_MAP_CHUNKS_PER_AXIS);
-    const tileKey = `${rx},${rz}`;
-    let mask = masks.get(tileKey);
-    if (!mask) {
-      mask = new Uint8Array(TOP_MAP_CHUNK_MASK_BYTES);
-      masks.set(tileKey, mask);
-    }
-    const localX = cx - rx * TOP_MAP_CHUNKS_PER_AXIS;
-    const localZ = cz - rz * TOP_MAP_CHUNKS_PER_AXIS;
-    const index = localZ * TOP_MAP_CHUNKS_PER_AXIS + localX;
-    mask[index >> 3] |= 1 << (index & 7);
-  }
-  const coverage = new Map<string, TileCoverage>();
-  for (const [key, mask] of masks) coverage.set(key, { key: topMapCoverageKeyFromMask(mask), mask });
-  return coverage;
 }
 
 export class TopMapRuntime {
@@ -107,20 +54,17 @@ export class TopMapRuntime {
   private manifestRetryAt = 0;
   private regions = new Map<string, RegionCoordinate>();
   private failedTiles = new Map<string, number>();
-  private wantedTiles = new Set<string>();
-  private latestMode: ViewState['mode'] = 'top';
-  private latestCameraX = 0;
-  private latestCameraZ = 0;
-  private latestZoom = 1;
-  private latestCoverage = new Map<string, TileCoverage>();
-  private coverageSource: ReadonlySet<string> | undefined;
-  private lastUpdateAt = -Infinity;
   private disposed = false;
-  private readonly residentLimit = residentTileBudget();
   private manifestAbort: AbortController | null = null;
   private sourceScope = '';
 
-  constructor(private readonly display: TopMapDisplay) {
+  private readonly scheduler: TopMapScheduler;
+
+  constructor(
+    private readonly display: TopMapDisplay,
+    residentLimit: number,
+  ) {
+    this.scheduler = new TopMapScheduler(residentLimit);
     this.display.setEnabled(false);
     this.unsubscribe = resourceClient.subscribe(() => {
       const scope = resourceClient.current(this.world)?.sourceScope ?? '';
@@ -132,6 +76,7 @@ export class TopMapRuntime {
         this.tileDigests.clear();
         this.manifestLoaded = false;
         this.clearTiles();
+        this.scheduler.clear();
       }
       if (this.topMapEnabled && !this.disposed) void this.loadManifest(this.world, this.dimension, ++this.manifestSeq);
     });
@@ -152,11 +97,8 @@ export class TopMapRuntime {
     this.display.setEnabled(topMapEnabled);
     this.pendingTiles.clear();
     this.failedTiles.clear();
-    this.wantedTiles.clear();
-    this.latestCoverage.clear();
-    this.coverageSource = undefined;
-    this.lastUpdateAt = -Infinity;
     this.clearTiles();
+    this.scheduler.clear();
     debugLog('top-map', 'configure', { world, dimension, topMapEnabled });
     if (topMapEnabled) void this.loadManifest(world, dimension, this.manifestSeq);
   }
@@ -174,67 +116,29 @@ export class TopMapRuntime {
         void this.loadManifest(this.world, this.dimension, this.manifestSeq);
       return;
     }
-    if (now - this.lastUpdateAt < TOP_MAP_UPDATE_INTERVAL_MS) return;
-    this.lastUpdateAt = now;
-
-    const view = topMapViewMetrics(viewState);
-    this.latestMode = viewState.mode;
-    this.latestCameraX = viewState.position.x;
-    this.latestCameraZ = viewState.position.z;
-    this.latestZoom = view.zoom;
-    if (this.coverageSource !== onlineChunks) {
-      this.coverageSource = onlineChunks;
-      this.latestCoverage = buildTileCoverage(onlineChunks);
-    }
-    this.display.setEnabled(true);
-    const radiusX = view.width / 2 + TOP_MAP_TILE_BLOCKS;
-    const radiusZ = view.height / 2 + TOP_MAP_TILE_BLOCKS;
-    const minRx = Math.floor((viewState.position.x - radiusX) / TOP_MAP_TILE_BLOCKS);
-    const maxRx = Math.floor((viewState.position.x + radiusX) / TOP_MAP_TILE_BLOCKS);
-    const minRz = Math.floor((viewState.position.z - radiusZ) / TOP_MAP_TILE_BLOCKS);
-    const maxRz = Math.floor((viewState.position.z + radiusZ) / TOP_MAP_TILE_BLOCKS);
-    const activeCandidates = planTopMapTiles(this.regions, {
-      bounds: { minRx, maxRx, minRz, maxRz },
-      cameraX: viewState.position.x,
-      cameraZ: viewState.position.z,
-      maxDistanceBlocks: TOP_MAP_MAX_RADIUS_BLOCKS,
-      limit: Math.min(TOP_MAP_MAX_WANTED_TILES, this.residentLimit),
-      mode: viewState.mode,
-      zoom: view.zoom,
+    const plan = this.scheduler.plan({
+      view: viewState,
+      now,
+      regions: this.regions,
+      pending: this.pendingTiles,
+      failed: this.failedTiles,
+      onlineChunks,
     });
-
-    const wanted = new Set<string>();
-    for (const candidate of activeCandidates) {
-      const tile = this.tiles.get(candidate.key);
-      const step = candidate.step;
-      const coverage = this.latestCoverage.get(candidate.key);
-      const coverageKey = coverage?.key ?? '';
-      if (!tile && coverageKey === FULL_COVERAGE_KEY) continue;
-      wanted.add(candidate.key);
-      if (tile) {
-        tile.lastUsed = now;
-        this.display.update(tile.key, step, coverageKey, coverage?.mask);
-      } else if (
-        !this.pendingTiles.has(candidate.key) &&
-        !this.tileFailedRecently(candidate.key, now) &&
-        this.pendingTiles.size < TOP_MAP_MAX_PENDING_TILES
-      ) {
-        void this.loadTile(candidate.rx, candidate.rz, candidate.key, now, step);
-      }
-    }
-
-    for (const [key, abort] of this.tileAborts) {
-      if (wanted.has(key)) continue;
-      abort.abort();
+    if (!plan) return;
+    this.display.setEnabled(true);
+    for (const key of plan.cancel) {
+      this.tileAborts.get(key)!.abort();
       this.tileAborts.delete(key);
       this.pendingTiles.delete(key);
     }
-    this.display.setWanted(wanted);
-    this.wantedTiles = wanted;
-    this.evictTiles(wanted);
+    for (const demand of plan.wanted.values())
+      if (this.tiles.has(demand.key)) this.display.update(demand.key, demand.step, demand.coverageKey, demand.mask);
+    this.display.setWanted(new Set(plan.wanted.keys()));
+    for (const key of plan.evict) this.removeTile(key);
+    for (const demand of plan.load) void this.loadTile(demand.rx, demand.rz, demand.key);
     debugLog('top-map', 'update', {
       mode: viewState.mode,
-      candidates: activeCandidates.length,
+      wanted: plan.wanted.size,
       resident: this.tiles.size,
       pending: this.pendingTiles.size,
     });
@@ -246,11 +150,10 @@ export class TopMapRuntime {
     this.unsubscribe();
     this.manifestSeq++;
     this.abortPendingLoads();
-    this.display.dispose();
     this.pendingTiles.clear();
-    this.latestCoverage.clear();
-    this.coverageSource = undefined;
     this.clearTiles();
+    this.scheduler.clear();
+    this.display.dispose();
   }
 
   surfaceYAtChunk(cx: number, cz: number): number | null {
@@ -280,12 +183,12 @@ export class TopMapRuntime {
       manifestLoaded: this.manifestLoaded,
       availableTiles: this.regions.size,
       pendingTiles: [...this.pendingTiles].sort(),
-      wantedTiles: [...this.wantedTiles].sort(),
+      wantedTiles: [...this.scheduler.wantedKeys()].sort(),
       residentTiles: [...this.tiles.values()]
         .map((tile) => ({
           key: tile.key,
           ...this.display.snapshot(tile.key),
-          lastUsed: tile.lastUsed,
+          lastUsed: this.scheduler.residentSince(tile.key),
         }))
         .sort((a, b) => a.key.localeCompare(b.key)),
     };
@@ -345,7 +248,7 @@ export class TopMapRuntime {
     }
   }
 
-  private async loadTile(rx: number, rz: number, key: string, now: number, step: number) {
+  private async loadTile(rx: number, rz: number, key: string) {
     if (
       this.disposed ||
       this.pendingTiles.has(key) ||
@@ -375,17 +278,14 @@ export class TopMapRuntime {
       const tile: TopMapTile = {
         key,
         data,
-        lastUsed: now,
       };
       this.failedTiles.delete(key);
       this.tiles.set(key, tile);
+      this.scheduler.loaded(key, performance.now());
       this.display.add(key, data);
-      if (this.wantedTiles.has(key)) {
-        const latestCoverage = this.latestCoverage.get(key);
-        const latestCoverageKey = latestCoverage?.key ?? '';
-        this.display.update(key, this.latestStepForTile(rx, rz), latestCoverageKey, latestCoverage?.mask);
-      }
-      debugLog('top-map', 'tile-loaded', { key, rx, rz, chunks: payload.chunks, step, approach: payload.approach });
+      const demand = this.scheduler.demandFor(key);
+      if (demand) this.display.update(key, demand.step, demand.coverageKey, demand.mask);
+      debugLog('top-map', 'tile-loaded', { key, rx, rz, chunks: payload.chunks, approach: payload.approach });
     } catch (error) {
       if (isAbortError(error) || abort.signal.aborted || this.tileAborts.get(key) !== abort) return;
       if (this.disposed || world !== this.world || dimension !== this.dimension) return;
@@ -396,37 +296,6 @@ export class TopMapRuntime {
         this.tileAborts.delete(key);
         this.pendingTiles.delete(key);
       }
-    }
-  }
-
-  private latestStepForTile(rx: number, rz: number): number {
-    const centerX = rx * TOP_MAP_TILE_BLOCKS + TOP_MAP_TILE_BLOCKS / 2;
-    const centerZ = rz * TOP_MAP_TILE_BLOCKS + TOP_MAP_TILE_BLOCKS / 2;
-    return topMapLodStep(
-      Math.hypot(centerX - this.latestCameraX, centerZ - this.latestCameraZ),
-      this.latestMode,
-      this.latestZoom,
-    );
-  }
-
-  private tileFailedRecently(key: string, now: number): boolean {
-    const failedAt = this.failedTiles.get(key);
-    if (failedAt === undefined) return false;
-    if (now - failedAt < TOP_MAP_TILE_RETRY_MS) return true;
-    this.failedTiles.delete(key);
-    return false;
-  }
-
-  private evictTiles(wanted: ReadonlySet<string>) {
-    if (this.tiles.size <= this.residentLimit) return;
-    const stale = [...this.tiles.values()]
-      .filter((tile) => !wanted.has(tile.key))
-      .sort((a, b) => a.lastUsed - b.lastUsed);
-    let resident = this.tiles.size;
-    for (const tile of stale) {
-      if (resident <= this.residentLimit) break;
-      this.removeTile(tile.key);
-      resident--;
     }
   }
 
@@ -443,6 +312,7 @@ export class TopMapRuntime {
 
   private removeTile(key: string) {
     if (!this.tiles.delete(key)) return;
+    this.scheduler.removed(key);
     this.display.remove(key);
   }
 }

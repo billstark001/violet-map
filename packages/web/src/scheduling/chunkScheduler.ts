@@ -1,3 +1,4 @@
+import { surfaceRepresentationAllowed } from '../view/representation';
 import { selectChunkEvictions } from './chunkRetention';
 import { ChunkViewPlanner } from './chunkView';
 import type {
@@ -96,8 +97,11 @@ export class ChunkScheduler {
   }
 
   tick(input: SchedulerTickInput): SchedulerTickResult {
-    this.opts = input.options;
-    const frame = this.view.plan({ ...input, demands: this.demands });
+    this.opts = {
+      ...input.options,
+      disableLod: input.options.disableLod === true || !surfaceRepresentationAllowed(input.view.mode, input.view.clip),
+    };
+    const frame = this.view.plan({ ...input, options: this.opts, demands: this.demands });
     const actions: SchedulerAction[] = [];
     let newCandidates = 0;
     for (const candidate of frame.demands) this.rememberDemand(candidate, input.entries.get(candidate.key));
@@ -281,15 +285,6 @@ export class ChunkScheduler {
   entrySatisfied(entry: ChunkSchedulerEntry): boolean {
     const demand = this.demands.get(entry.key);
     return !!demand && meshSatisfiesTarget(entry, demand.targetStep, this.opts.disableLod === true);
-  }
-
-  compareReleaseCandidates(a: string, b: string): number {
-    const ad = this.demands.get(a),
-      bd = this.demands.get(b);
-    if (!ad || !bd) return Number(!!ad) - Number(!!bd);
-    const ap = this.priorityFor(ad),
-      bp = this.priorityFor(bd);
-    return bp.tier - ap.tier || ad.wantedAt - bd.wantedAt || bp.score - ap.score;
   }
 
   private rememberDemand(candidate: ChunkCandidate, entry: ChunkSchedulerEntry | undefined) {

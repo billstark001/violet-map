@@ -1,3 +1,5 @@
+import { readViewerCapabilities } from '../runtime/capabilities';
+import { resolveViewerResourceBudget, type ViewerResourceBudget } from '../scheduling/resourceBudget';
 import { ChunkScene } from './chunkScene';
 import type { TopClipRange } from '../view/worldGeometry';
 import { captureView } from './viewSnapshot';
@@ -33,7 +35,11 @@ import {
   type TerrainMaterials,
   type TextureAnimationUniforms,
 } from './materials';
-import { OverlayManager, type OverlayDiagnosticSnapshot } from './overlayManager';
+import { OverlayScene } from './overlayScene';
+import { OverlayRuntime, overlayTransport } from '../runtime/overlayRuntime';
+import { createOverlayMediaLoader } from '../runtime/overlayMediaLoader';
+import { decodeOverlayMedia } from './overlayMedia';
+import type { OverlayDiagnosticSnapshot } from '../diagnostics/overlay';
 import { buildRenderKey } from './resourceKey';
 import { TopMapScene } from './topMapScene';
 import { TopMapRuntime, type TopMapDiagnosticSnapshot } from '../runtime/topMapRuntime';
@@ -96,7 +102,7 @@ export type ViewerStatsPayload = ChunkSchedulerStats & {
 };
 
 export interface ViewerDiagnosticSnapshot {
-  schema: 1;
+  schema: 2;
   capturedAt: string;
   browser: {
     userAgent: string;
@@ -105,7 +111,7 @@ export interface ViewerDiagnosticSnapshot {
   };
   camera: ViewerStatsPayload;
   schedulerPreset: SchedulerPreset;
-  chunkManager: ChunkRuntimeDiagnosticSnapshot | null;
+  chunkRuntime: ChunkRuntimeDiagnosticSnapshot | null;
   topMap: TopMapDiagnosticSnapshot;
   overlays: OverlayDiagnosticSnapshot;
   transparency: TransparencyDiagnosticSnapshot;
@@ -133,6 +139,7 @@ interface ViewerResources {
 }
 
 interface Engine {
+  budget: ViewerResourceBudget;
   renderer: THREE.WebGLRenderer;
   transparency: TransparencyRenderer;
   scene: THREE.Scene;
@@ -144,7 +151,8 @@ interface Engine {
   topPerspectiveControls: TopDownControls;
   topOrthographicControls: TopDownControls;
   topMap: TopMapRuntime;
-  overlays: OverlayManager;
+  overlays: OverlayRuntime;
+  overlayScene: OverlayScene;
   materials: TerrainMaterials;
   terrainTexture: THREE.Texture;
   textureAnimations: TextureAnimationUniforms;
@@ -190,7 +198,7 @@ interface FrameState {
 
 interface FrameContext {
   engine: Engine;
-  manager: ChunkRuntime | null;
+  chunks: ChunkRuntime | null;
   latestStats: ChunkSchedulerStats;
   props: ViewerOptions;
   capabilities: WorldCapabilities | null;
@@ -277,13 +285,13 @@ function statsForCamera(s: ChunkSchedulerStats, camera: THREE.Camera, viewMode: 
 
 function diagnosticSnapshotForViewer(
   engine: Engine,
-  manager: ChunkRuntime | null,
+  chunks: ChunkRuntime | null,
   stats: ChunkSchedulerStats,
   viewMode: ViewMode,
   schedulerPreset: SchedulerPreset,
 ): ViewerDiagnosticSnapshot {
   return {
-    schema: 1,
+    schema: 2,
     capturedAt: new Date().toISOString(),
     browser: {
       userAgent: navigator.userAgent,
@@ -292,7 +300,7 @@ function diagnosticSnapshotForViewer(
     },
     camera: statsForCamera(stats, engine.activeCamera, viewMode),
     schedulerPreset,
-    chunkManager: manager?.diagnosticSnapshot() ?? null,
+    chunkRuntime: chunks?.diagnosticSnapshot() ?? null,
     topMap: engine.topMap.diagnosticSnapshot(),
     overlays: engine.overlays.diagnosticSnapshot(),
     transparency: engine.transparency.diagnosticSnapshot(),
@@ -740,9 +748,12 @@ function createEngine(
   const textureAnimations = createTextureAnimationUniforms(resources.atlas.animations);
   const materials = createMaterials(terrainTexture, shared, textureAnimations);
   const controls = createControls(renderer.domElement, cameras, initialView, fastMoveMultiplier, inertiaEnabled);
-  const topMap = new TopMapRuntime(new TopMapScene(scene, shared));
+  const budget = resolveViewerResourceBudget(readViewerCapabilities());
+  const overlayScene = new OverlayScene(scene, shared, createOverlayMediaLoader(decodeOverlayMedia));
+  const topMap = new TopMapRuntime(new TopMapScene(scene, shared), budget.topMapResidentTiles);
 
   const engine: Engine = {
+    budget,
     renderer,
     transparency,
     scene,
@@ -754,7 +765,8 @@ function createEngine(
     topPerspectiveControls: controls.topPerspectiveControls,
     topOrthographicControls: controls.topOrthographicControls,
     topMap,
-    overlays: new OverlayManager(scene, shared),
+    overlays: new OverlayRuntime(overlayScene, overlayTransport),
+    overlayScene,
     materials,
     terrainTexture,
     textureAnimations,
@@ -838,7 +850,7 @@ function updateActiveControls(engine: Engine, viewMode: ViewMode, dt: number) {
 
 function updateChunksAndTopMap(
   engine: Engine,
-  manager: ChunkRuntime | null,
+  chunks: ChunkRuntime | null,
   props: ViewerOptions,
   capabilities: WorldCapabilities | null,
   now: number,
@@ -849,8 +861,8 @@ function updateChunksAndTopMap(
 
   engine.topMap.configure(props.world, props.dimension, offlineTopMap);
   const view = captureView(engine.activeCamera, topView, props.topClipRange);
-  manager?.update(view, now);
-  engine.topMap.update(view, now, manager ? manager.terrain.displayedChunkKeys() : new Set());
+  chunks?.update(view, now);
+  engine.topMap.update(view, now, chunks ? chunks.terrain.displayedChunkKeys() : new Set());
 
   return dimDef;
 }
@@ -860,10 +872,10 @@ function dayFactorForDimension(dimDef: ViewerDimensionDef, timeOfDay: number): n
   return clamp01(Math.cos(timeOfDay * Math.PI * 2) * 2 + 0.5);
 }
 
-function resolveBiomeName(manager: ChunkRuntime | null, dimDef: ViewerDimensionDef, camera: THREE.Camera): string {
+function resolveBiomeName(chunks: ChunkRuntime | null, dimDef: ViewerDimensionDef, camera: THREE.Camera): string {
   const ccx = Math.floor(camera.position.x / 16);
   const ccz = Math.floor(camera.position.z / 16);
-  return manager?.biomeAt(ccx, ccz) ?? dimDef?.defaultBiome ?? 'minecraft:plains';
+  return chunks?.biomeAt(ccx, ccz) ?? dimDef?.defaultBiome ?? 'minecraft:plains';
 }
 
 function dimensionSkyMode(dimDef: ViewerDimensionDef): 'normal' | 'nether' | 'end' {
@@ -906,7 +918,7 @@ function applyFogRange(engine: Engine, topView: boolean, dense: boolean, viewDis
 
 function applyLightingAndFog(
   engine: Engine,
-  manager: ChunkRuntime | null,
+  chunks: ChunkRuntime | null,
   props: ViewerOptions,
   dimDef: ViewerDimensionDef,
   topView: boolean,
@@ -921,7 +933,7 @@ function applyLightingAndFog(
   engine.shared.ambient.value = dimDef?.ambientLight ?? 0.18;
   applyFogRange(engine, topView, dense, props.viewDistance, props.lodDistance);
 
-  const biomeName = resolveBiomeName(manager, dimDef, camera);
+  const biomeName = resolveBiomeName(chunks, dimDef, camera);
   const biome = engine.biomes[biomeName] ?? engine.biomes['default'];
   if (!biome) return;
 
@@ -993,7 +1005,7 @@ function maybePersistActiveView(
   if (updateUrl) state.lastUrlPersist = now;
 }
 
-function renderFrame({ engine, manager, latestStats, props, capabilities, state }: FrameContext) {
+function renderFrame({ engine, chunks, latestStats, props, capabilities, state }: FrameContext) {
   const now = performance.now();
   state.timer.update(now);
   const dt = Math.min(state.timer.getDelta(), 0.1);
@@ -1002,8 +1014,8 @@ function renderFrame({ engine, manager, latestStats, props, capabilities, state 
   updateActiveControls(engine, props.viewMode, dt);
 
   const topView = isTopViewMode(props.viewMode);
-  const dimDef = updateChunksAndTopMap(engine, manager, props, capabilities, now);
-  applyLightingAndFog(engine, manager, props, dimDef, topView, state.skyColor, state.horizonColor);
+  const dimDef = updateChunksAndTopMap(engine, chunks, props, capabilities, now);
+  applyLightingAndFog(engine, chunks, props, dimDef, topView, state.skyColor, state.horizonColor);
 
   const camera = engine.activeCamera;
   engine.overlays.configure(
@@ -1011,7 +1023,8 @@ function renderFrame({ engine, manager, latestStats, props, capabilities, state 
     props.dimension,
     !!props.overlaysEnabled && !!serviceCapabilities().delivery.families.includes('overlay-media'),
   );
-  engine.overlays.update(engine.renderer, {
+  engine.overlays.tick(now);
+  engine.overlayScene.render(engine.renderer, {
     camera,
     topView,
     width: engine.renderer.domElement.clientWidth,
@@ -1028,19 +1041,24 @@ function renderFrame({ engine, manager, latestStats, props, capabilities, state 
   engine.transparency.render(engine.scene, camera);
 }
 
-function createWorldManager(engine: Engine, props: ViewerOptions): ChunkRuntime {
+function createChunkRuntime(engine: Engine, props: ViewerOptions): ChunkRuntime {
   const dimDef = dimensionDefinition(engine.dimensions, props.dimension);
-  return new ChunkRuntime(new ChunkScene(engine.scene, engine.materials), engine.initPayload, {
-    renderRoot: resourceClient.current(props.world)!.renderRoot,
-    world: props.world,
-    sourceScope: resourceClient.current(props.world)!.sourceScope,
-    dimension: props.dimension,
-    renderKey: engine.renderKey,
-    dimensionDef: dimDef,
-    topMapSurfaceYAt: (cx, cz) => engine.topMap.surfaceYAtChunk(cx, cz),
-    disableLod: false,
-    scheduling: schedulerTuningForPreset(props.schedulerPreset, props.viewDistance, props.lodDistance),
-  });
+  return new ChunkRuntime(
+    new ChunkScene(engine.scene, engine.materials),
+    engine.initPayload,
+    {
+      renderRoot: resourceClient.current(props.world)!.renderRoot,
+      world: props.world,
+      sourceScope: resourceClient.current(props.world)!.sourceScope,
+      dimension: props.dimension,
+      renderKey: engine.renderKey,
+      dimensionDef: dimDef,
+      topMapSurfaceYAt: (cx, cz) => engine.topMap.surfaceYAtChunk(cx, cz),
+      disableLod: false,
+      scheduling: schedulerTuningForPreset(props.schedulerPreset, props.viewDistance, props.lodDistance),
+    },
+    engine.budget,
+  );
 }
 
 function updateFastMoveMultiplier(engine: Engine | null, fastMoveMultiplier: number) {
@@ -1070,9 +1088,9 @@ function moveCameraToTarget(engine: Engine, target: CameraPositionRequest, viewM
   setControlsEnabled(engine, viewMode);
 }
 
-function updateManagerAfterCameraTarget(engine: Engine, manager: ChunkRuntime | null, props: ViewerOptions) {
+function updateRuntimeAfterCameraTarget(engine: Engine, chunks: ChunkRuntime | null, props: ViewerOptions) {
   const topView = isTopViewMode(props.viewMode);
-  manager?.update(captureView(engine.activeCamera, topView, props.topClipRange), performance.now(), true);
+  chunks?.update(captureView(engine.activeCamera, topView, props.topClipRange), performance.now(), true);
 }
 
 /**
@@ -1083,7 +1101,7 @@ function updateManagerAfterCameraTarget(engine: Engine, manager: ChunkRuntime | 
  */
 export class ViewerController {
   private engine: Engine | null = null;
-  private manager: ChunkRuntime | null = null;
+  private chunks: ChunkRuntime | null = null;
   private latestStats: ChunkSchedulerStats = { ...EMPTY_CHUNK_SCHEDULER_STATS };
   private capabilities: WorldCapabilities | null = null;
   private capabilityGeneration = 0;
@@ -1109,7 +1127,7 @@ export class ViewerController {
       } else if (current.sourceScope !== previous.sourceScope && resourceClient.current(this.props.world) === current) {
         this.syncEngine(null);
       } else {
-        void this.manager?.refreshResources().catch((error) => this.onError(String(error)));
+        void this.chunks?.refreshResources().catch((error) => this.onError(String(error)));
         void this.engine?.overlays.refresh();
       }
     });
@@ -1141,8 +1159,8 @@ export class ViewerController {
         props.inertiaEnabled,
       );
       if (this.engine) {
-        this.manager?.dispose();
-        this.manager = null;
+        this.chunks?.dispose();
+        this.chunks = null;
         this.frameState?.timer.dispose();
         if (this.onResize) window.removeEventListener('resize', this.onResize);
         disposeEngine(this.engine);
@@ -1158,7 +1176,7 @@ export class ViewerController {
         try {
           renderFrame({
             engine,
-            manager: this.manager,
+            chunks: this.chunks,
             latestStats: this.latestStats,
             props: this.props,
             capabilities: this.capabilities,
@@ -1197,7 +1215,7 @@ export class ViewerController {
       this.engine
         ? diagnosticSnapshotForViewer(
             this.engine,
-            this.manager,
+            this.chunks,
             this.latestStats,
             this.props.viewMode,
             this.props.schedulerPreset,
@@ -1234,16 +1252,16 @@ export class ViewerController {
     }
     const contextChanged = !previous || previous.world !== props.world || previous.dimension !== props.dimension;
     if (contextChanged) {
-      this.manager?.dispose();
-      this.manager = null;
+      this.chunks?.dispose();
+      this.chunks = null;
       this.latestStats = { ...EMPTY_CHUNK_SCHEDULER_STATS };
       if (props.world) {
-        const manager = createWorldManager(engine, props);
-        manager.onStats = (stats) => {
+        const chunks = createChunkRuntime(engine, props);
+        chunks.onStats = (stats) => {
           this.latestStats = stats;
           this.props.onStats?.(statsForCamera(stats, engine.activeCamera, this.props.viewMode));
         };
-        this.manager = manager;
+        this.chunks = chunks;
       }
     }
     if (!previous || previous.fastMoveMultiplier !== props.fastMoveMultiplier)
@@ -1256,10 +1274,10 @@ export class ViewerController {
       previous?.viewDistance !== props.viewDistance ||
       previous?.lodDistance !== props.lodDistance
     ) {
-      this.manager?.setScheduling(
+      this.chunks?.setScheduling(
         schedulerTuningForPreset(props.schedulerPreset, props.viewDistance, props.lodDistance),
       );
-      this.manager?.update(
+      this.chunks?.update(
         captureView(engine.activeCamera, isTopViewMode(props.viewMode), props.topClipRange),
         performance.now(),
         true,
@@ -1270,7 +1288,7 @@ export class ViewerController {
       moveCameraToTarget(engine, target, props.viewMode);
       persistView(getPersistableView(engine, engine.activeCamera, props.viewMode), true);
       props.onStats?.(statsForCamera(this.latestStats, engine.activeCamera, props.viewMode));
-      updateManagerAfterCameraTarget(engine, this.manager, props);
+      updateRuntimeAfterCameraTarget(engine, this.chunks, props);
     }
   }
 
@@ -1287,8 +1305,8 @@ export class ViewerController {
     this.props.onDiagnosticSnapshotProvider?.(null);
     if (this.onResize) window.removeEventListener('resize', this.onResize);
     this.frameState?.timer.dispose();
-    this.manager?.dispose();
-    this.manager = null;
+    this.chunks?.dispose();
+    this.chunks = null;
     if (this.engine) disposeEngine(this.engine);
     this.engine = null;
   }

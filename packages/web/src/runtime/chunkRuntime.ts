@@ -1,3 +1,6 @@
+import { chunkRetryDelayMs } from '../scheduling/chunkPolicy';
+import type { ViewerResourceBudget } from '../scheduling/resourceBudget';
+import { selectResidencyReleases, workerDataReleasable, WORKER_NEIGHBOR_HOLD_MS } from '../scheduling/chunkResidency';
 import { EMPTY_CHUNK_DISPLAY, type ChunkDisplayState } from '../view/terrain';
 import { ChunkIoBatch } from './chunkIo';
 import type { ChunkDisplay } from './chunkDisplay';
@@ -33,18 +36,6 @@ import {
 
 const UPDATE_INTERVAL_MS = 80;
 const STATS_REPORT_INTERVAL_MS = 100;
-const MAX_ACTIVE_MESH_TASKS = 4;
-const DEFAULT_MAX_MESH_WORKERS = 2;
-const ABSOLUTE_MAX_MESH_WORKERS = 4;
-const WORKER_LIMIT_STORAGE_KEY = 'violet-map:maxMeshWorkers';
-const STALE_WORKER_RELEASE_MS = 4000;
-const STALE_MESH_RELEASE_MS = 8000;
-const WORKER_NEIGHBOR_HOLD_MS = 3500;
-const MIN_WORKER_RESIDENT_COLUMNS = 192;
-const MAX_WORKER_RESIDENT_COLUMNS = 1400;
-// Every resident column is cloned into every meshing worker. Budget the total
-// number of copies, rather than letting worker count multiply memory usage.
-const TARGET_WORKER_RESIDENT_COPIES = 768;
 
 type MeshCacheBaseParts = Omit<MeshCacheKeyParts, 'mode' | 'step'>;
 
@@ -89,7 +80,7 @@ export interface ChunkEntryDiagnosticSnapshot {
 }
 
 export interface ChunkRuntimeDiagnosticSnapshot {
-  schema: 1;
+  schema: 2;
   capturedAt: string;
   world: string;
   dimension: string;
@@ -256,10 +247,11 @@ export class ChunkRuntime {
     readonly terrain: ChunkDisplay,
     private initPayload: Omit<WorkerInit, 'type'>,
     public opts: ChunkRuntimeOptions,
+    private readonly budget: ViewerResourceBudget,
   ) {
     this.scheduler = new ChunkScheduler(this.schedulerOptions());
     void this.loadChunkSourceCoverage();
-    const workerCount = this.resolveWorkerCount();
+    const workerCount = this.budget.meshWorkers;
     for (let i = 0; i < workerCount; i++) {
       this.createWorker(i);
     }
@@ -269,23 +261,6 @@ export class ChunkRuntime {
   // #endregion
 
   // #region Keys and workers
-
-  private resolveWorkerCount(): number {
-    const hardware = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 2 : 2;
-    const hardwareLimit = hardware > 2 ? hardware - 1 : 1;
-    const memory =
-      typeof navigator !== 'undefined' ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory : undefined;
-    const defaultLimit = memory !== undefined && memory <= 4 ? 1 : DEFAULT_MAX_MESH_WORKERS;
-    let requested = defaultLimit;
-    try {
-      const raw = localStorage.getItem(WORKER_LIMIT_STORAGE_KEY);
-      const stored = raw === null ? NaN : Number(raw);
-      if (Number.isFinite(stored)) requested = stored;
-    } catch {
-      // Local storage can be unavailable in private or restricted contexts.
-    }
-    return Math.max(1, Math.min(ABSOLUTE_MAX_MESH_WORKERS, hardwareLimit, Math.floor(requested)));
-  }
 
   private createWorker(index: number) {
     const worker = new Worker(new URL('../worker/meshWorker.ts', import.meta.url), { type: 'module' });
@@ -314,7 +289,7 @@ export class ChunkRuntime {
 
   private recoverWorkers(reason: string) {
     if (this.disposed || this.workerRestartTimer) return;
-    const count = this.resolveWorkerCount();
+    const count = this.budget.meshWorkers;
     const affected = new Set([...this.meshJobs.values()].map((job) => job.entry));
     for (const [version, job] of this.meshJobs) {
       this.clearPendingMesh(job.entry, job.kind);
@@ -334,7 +309,7 @@ export class ChunkRuntime {
         this.queueIo('fetch', e.key);
       }
     }
-    debugLog('chunk-manager', 'worker-restart', { reason, count: this.workerRestarts });
+    debugLog('chunk-runtime', 'worker-restart', { reason, count: this.workerRestarts });
     this.workerRestartTimer = setTimeout(
       () => {
         this.workerRestartTimer = undefined;
@@ -399,7 +374,7 @@ export class ChunkRuntime {
         this.markUnavailable(e, 'absent', true);
       }
       if (markedAbsent > 0) this.scheduler.clear();
-      debugLog('chunk-manager', 'coverage-loaded', {
+      debugLog('chunk-runtime', 'coverage-loaded', {
         world: this.opts.world,
         dimension: this.opts.dimension,
         regions: this.chunkCoverage.regions.size,
@@ -411,7 +386,7 @@ export class ChunkRuntime {
     } catch (error) {
       if (this.disposed || seq !== this.coverageSeq) return;
       this.chunkCoverage = null;
-      debugLog('chunk-manager', 'coverage-error', {
+      debugLog('chunk-runtime', 'coverage-error', {
         world: this.opts.world,
         dimension: this.opts.dimension,
         error: error instanceof Error ? error.message : String(error),
@@ -489,7 +464,7 @@ export class ChunkRuntime {
       });
 
     return {
-      schema: 1,
+      schema: 2,
       capturedAt: new Date().toISOString(),
       world: `${this.opts.sourceScope}:${this.opts.world}`,
       dimension: this.opts.dimension,
@@ -563,8 +538,7 @@ export class ChunkRuntime {
     });
 
     for (const action of frame.actions) this.applySchedulerAction(action);
-    this.releaseStaleEntries(frame.keepKeys, now);
-    this.releaseWorkerDataOverBudget();
+    this.applyResidencyPlan(frame.keepKeys, now);
     this.metrics.checkDelayed(now);
     this.flushMeshQueue();
     this.flushIoQueue('hash');
@@ -573,7 +547,7 @@ export class ChunkRuntime {
     this.terrain.updateVisibility(frame.fullDetailKeys);
     if (isDebugLoggingEnabled()) {
       this.syncSchedulerStats();
-      debugLog('chunk-manager', 'update', {
+      debugLog('chunk-runtime', 'update', {
         world: this.opts.world,
         dimension: this.opts.dimension,
         topDownView: view.mode === 'top',
@@ -715,7 +689,7 @@ export class ChunkRuntime {
   }
 
   private maxActiveMeshTasks(): number {
-    return Math.max(1, Math.min(MAX_ACTIVE_MESH_TASKS, this.workers.length || 1));
+    return this.workers.length;
   }
 
   private finishActiveMesh(version: number, durationMs?: number) {
@@ -1149,11 +1123,11 @@ export class ChunkRuntime {
     e.retryAttempts++;
     if (error instanceof ResourceError && error.code === 'RESOURCE_VIEW_EXPIRED') e.resolution = undefined;
     this.activity.retries++;
-    e.retryAt = performance.now() + Math.min(30000, 250 * 2 ** Math.min(7, e.retryAttempts - 1));
+    e.retryAt = performance.now() + chunkRetryDelayMs(e.retryAttempts);
     e.state = e.contentDigest ? 'hashed' : 'checking';
     if (e.state === 'checking') this.queueIo('hash', e.key);
     else this.queueIo('fetch', e.key);
-    debugLog('chunk-manager', 'io-retry', { key: e.key, attempt: e.retryAttempts, error: e.lastError });
+    debugLog('chunk-runtime', 'io-retry', { key: e.key, attempt: e.retryAttempts, error: e.lastError });
   }
 
   private resetAfterSourceChange(e: ChunkEntry) {
@@ -1167,58 +1141,25 @@ export class ChunkRuntime {
   }
 
   private releaseWorkerData(e: ChunkEntry): boolean {
-    if (e.state !== 'stored') return false;
-    if (performance.now() < e.workerKeepUntil) return false;
-    if (e.workerPins > 0 || e.pendingFull || e.pendingLod || !e.contentDigest) return false;
+    if (!workerDataReleasable(e, performance.now())) return false;
     this.broadcast({ type: 'drop', key: e.key });
     e.workerReadyMask = 0;
     e.state = 'hashed';
     return true;
   }
 
-  private maxWorkerResidentColumns(): number {
-    const memory =
-      typeof navigator !== 'undefined' ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory : undefined;
-    const copyBudget =
-      memory !== undefined && memory <= 4
-        ? 256
-        : memory !== undefined && memory <= 8
-          ? 512
-          : TARGET_WORKER_RESIDENT_COPIES;
-    const perWorkerBudget = Math.floor(copyBudget / Math.max(1, this.workers.length));
-    return Math.max(MIN_WORKER_RESIDENT_COLUMNS, Math.min(MAX_WORKER_RESIDENT_COLUMNS, perWorkerBudget));
-  }
-
-  private releaseWorkerDataOverBudget() {
-    const resident = [...this.chunks.values()].filter((e) => e.state === 'stored');
-    const budget = this.maxWorkerResidentColumns();
-    const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-    const byteBudget =
-      (memory !== undefined && memory <= 4 ? 128 : memory !== undefined && memory <= 8 ? 256 : 384) * 1024 ** 2;
-    let bytes = resident.reduce((sum, e) => sum + e.estimatedColumnBytes * this.workerReadyCount(e), 0);
-    if (resident.length <= budget && bytes <= byteBudget) return;
-    const victims = resident
-      .filter((e) => !e.pendingFull && !e.pendingLod && this.scheduler.entrySatisfied(e) && !!e.contentDigest)
-      .sort((a, b) => this.scheduler.compareReleaseCandidates(a.key, b.key));
-    let count = resident.length;
-    for (const e of victims) {
-      if (count <= budget && bytes <= byteBudget) break;
-      const released = e.estimatedColumnBytes * this.workerReadyCount(e);
-      if (this.releaseWorkerData(e)) {
-        count--;
-        bytes -= released;
-      }
-    }
-  }
-
-  private releaseStaleEntries(keepKeys: Set<string>, now: number) {
-    for (const e of this.chunks.values()) {
-      if (keepKeys.has(e.key)) continue;
-      const demand = this.scheduler.demandFor(e.key);
-      const age = demand ? now - demand.wantedAt : Infinity;
-      if (age > STALE_WORKER_RELEASE_MS) this.releaseWorkerData(e);
-      if (age > STALE_MESH_RELEASE_MS && e.displayed !== 'none') this.removeDisplayedMesh(e);
-    }
+  private applyResidencyPlan(keepKeys: ReadonlySet<string>, now: number) {
+    const plan = selectResidencyReleases({
+      entries: [...this.chunks.values()].map((entry) => ({ ...entry, workerCopies: this.workerReadyCount(entry) })),
+      keepKeys,
+      workers: this.workers.length,
+      now,
+      budget: this.budget,
+      demandFor: (key) => this.scheduler.demandFor(key),
+      isSatisfied: (entry) => this.scheduler.entrySatisfied(entry),
+    });
+    for (const key of plan.workerKeys) this.releaseWorkerData(this.chunks.get(key)!);
+    for (const key of plan.meshKeys) this.removeDisplayedMesh(this.chunks.get(key)!);
   }
 
   async refreshResources() {
@@ -1307,10 +1248,10 @@ export class ChunkRuntime {
       for (const e of entries) {
         if (!seen.has(e.key) && batch.current(e.key, this.chunks)) this.markUnavailable(e, 'absent', true);
       }
-      debugLog('chunk-manager', 'hash-batch', { requested: entries.length, returned: payloads.length, missing });
+      debugLog('chunk-runtime', 'hash-batch', { requested: entries.length, returned: payloads.length, missing });
     } catch (error) {
       if (this.disposed) return;
-      debugLog('chunk-manager', 'hash-batch-error', {
+      debugLog('chunk-runtime', 'hash-batch-error', {
         requested: entries.length,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -1397,6 +1338,7 @@ export class ChunkRuntime {
       }
       const payloads = await readChunks(
         entries.filter((e) => batch.current(e.key, this.chunks)).map((e) => e.resolution!),
+        this.budget.chunkDownloadConcurrency,
         this.requests.signal,
       );
       if (this.disposed) return;
@@ -1420,7 +1362,7 @@ export class ChunkRuntime {
       for (const e of entries) {
         if (!seen.has(e.key) && batch.current(e.key, this.chunks)) this.markUnavailable(e, 'absent', true);
       }
-      debugLog('chunk-manager', 'chunk-batch', {
+      debugLog('chunk-runtime', 'chunk-batch', {
         requested: entries.length,
         returned: payloads.length,
         missing,
@@ -1428,7 +1370,7 @@ export class ChunkRuntime {
       });
     } catch (error) {
       if (this.disposed) return;
-      debugLog('chunk-manager', 'chunk-batch-error', {
+      debugLog('chunk-runtime', 'chunk-batch-error', {
         requested: entries.length,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -1579,7 +1521,7 @@ export class ChunkRuntime {
     Object.assign(e, this.terrain.replace(e, mesh, version, step));
     this.scheduler.notify({ type: 'meshDisplayed', entry: e, kind: mesh.mode, step, version, now: performance.now() });
     if (mesh.mode === 'lod' && this.scheduler.demandFor(e.key)?.targetStep === 1) this.flushMeshQueue();
-    debugLog('chunk-manager', 'display-mesh', { key: e.key, mode: mesh.mode, step, meshBytes: e.meshBytes });
+    debugLog('chunk-runtime', 'display-mesh', { key: e.key, mode: mesh.mode, step, meshBytes: e.meshBytes });
     this.reportStats();
   }
 

@@ -1,6 +1,4 @@
 import {
-  normalizeContentDimension,
-  parseOverlayManifest,
   type CurveFeature,
   type OverlayFeature,
   type OverlayManifest,
@@ -20,37 +18,19 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { log } from '../logger';
-import { resourceClient } from '../resources/client';
-import { apiFetch } from '../runtime';
 import type { SharedUniforms } from './materials';
-import { planOverlayAdmission, curveSamplingBudget, type OverlayCandidate } from '../scheduling/overlayPlanner';
-import { OVERLAY_LIMITS } from './overlayLimits';
+import {
+  planOverlayAdmission,
+  planOverlayFeatures,
+  curveSamplingBudget,
+  type OverlayCandidate,
+} from '../scheduling/overlayPlanner';
+import { OVERLAY_ADMISSION_LIMITS, OVERLAY_RETRY_MS } from '../scheduling/overlayPolicy';
 import { OverlayMask, createMaskMaterial } from './overlayMask';
-import { loadOverlayMedia, type OverlayMediaResource } from './overlayMedia';
+import type { OverlayMediaResource } from './overlayMedia';
+import type { OverlayMediaLoader } from '../runtime/overlayMediaLoader';
+import type { OverlayDisplay, OverlayDisplaySnapshot } from '../runtime/overlayDisplay';
 import { OverlayResourcePool, type ResourceLease } from '../resources/overlayPool';
-
-const REFRESH_MS = 30_000;
-const RETRY_MS = 12_000;
-const MANIFEST_TIMEOUT_MS = 30_000;
-
-export interface OverlayDiagnosticSnapshot {
-  mapId: string | null;
-  dimension: string;
-  enabled: boolean;
-  loading: boolean;
-  sourceStatus: string | null;
-  features: number;
-  active: number;
-  suppressed: number;
-  versions: number;
-  pending: number;
-  resourceBytes: number;
-  maskBytes: number;
-  maskLimited: boolean;
-  samplingLimited: number;
-  curvePoints: number;
-  errors: { feature: string; message: string }[];
-}
 
 interface RecordBase {
   key: string;
@@ -77,7 +57,7 @@ export interface OverlayFrame {
   surfaceMaxY: number;
 }
 
-export class OverlayManager {
+export class OverlayScene implements OverlayDisplay {
   readonly group = new THREE.Group();
   private readonly mask: OverlayMask;
   private readonly records = new Map<string, RecordBase>();
@@ -87,16 +67,8 @@ export class OverlayManager {
   private readonly hemisphere = new THREE.HemisphereLight(0xffffff, 0x888899, 1);
   private readonly sun = new THREE.DirectionalLight(0xffffff, 2);
   private readonly issues = new Map<string, string>();
-  private abort: AbortController | null = null;
-  private mapId: string | null = null;
-  private dimension = '';
   private enabled = false;
-  private loading = false;
   private disposed = false;
-  private generation = 0;
-  private nextRefresh = 0;
-  private etag: string | undefined;
-  private sourceStatus: string | null = null;
   private suppressed = 0;
   private samplingLimited = 0;
   private curvePoints = 0;
@@ -108,11 +80,7 @@ export class OverlayManager {
   constructor(
     private readonly scene: THREE.Scene,
     private readonly shared: SharedUniforms,
-    private readonly dependencies: {
-      manifest?: typeof apiFetch;
-      media?: typeof loadOverlayMedia;
-      head?: typeof resourceClient.head;
-    } = {},
+    private readonly loadMedia: OverlayMediaLoader<OverlayMediaResource>,
   ) {
     this.mask = new OverlayMask(shared);
     this.group.name = 'map-overlays';
@@ -122,105 +90,47 @@ export class OverlayManager {
     this.lights.visible = false;
     scene.add(this.lights);
   }
-  configure(mapId: string | null, dimension: string, enabled: boolean) {
-    if (this.disposed) return;
-    const dim = normalizeContentDimension(dimension);
-    const active = !!mapId && enabled;
-    if (this.mapId === mapId && this.dimension === dim && this.enabled === active) return;
-    this.generation++;
-    this.abort?.abort();
-    this.abort = null;
-    this.loading = false;
+  setEnabled(enabled: boolean) {
+    this.enabled = enabled;
+    this.group.visible = enabled;
+    if (!enabled) {
+      this.shared.overlayMaskEnabled.value = 0;
+      this.lights.visible = false;
+    }
+  }
+
+  reset() {
     this.clear();
     this.pool.dispose();
     this.pool = new OverlayResourcePool<OverlayMediaResource>();
-    this.mapId = mapId;
-    this.dimension = dim;
-    this.enabled = active;
-    this.etag = undefined;
-    this.sourceStatus = null;
-    this.nextRefresh = 0;
-    if (active) void this.refresh();
   }
-  async refresh() {
-    if (this.disposed || !this.enabled || !this.mapId || this.loading) return;
-    const generation = this.generation,
-      mapId = this.mapId,
-      dimension = this.dimension,
-      controller = new AbortController();
-    this.abort = controller;
-    this.loading = true;
-    try {
-      const view = await (this.dependencies.head ?? resourceClient.head.bind(resourceClient))(
-        '',
-        false,
-        controller.signal,
-      );
-      const response = await (this.dependencies.manifest ?? apiFetch)(
-        `api/maps/${encodeURIComponent(mapId)}/overlays?dimension=${encodeURIComponent(dimension)}&viewId=${encodeURIComponent(view.viewId)}`,
-        {
-          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(MANIFEST_TIMEOUT_MS)]),
-          headers: this.etag ? { 'if-none-match': this.etag } : undefined,
-        },
-      );
-      if (controller.signal.aborted || generation !== this.generation || this.disposed) return;
-      if (response.status === 304) {
-        this.issues.delete('manifest');
-        return;
-      }
-      if (!response.ok) throw new Error(`overlay manifest: HTTP ${response.status}`);
-      const manifest = parseOverlayManifest(await response.json());
-      if (controller.signal.aborted || generation !== this.generation || this.disposed) return;
-      if (!this.dependencies.head) resourceClient.assertCurrent(view);
-      if (manifest.mapId !== mapId || manifest.dimension !== dimension)
-        throw new Error('overlay manifest belongs to a different map/dimension');
-      this.apply(manifest);
-      this.etag = response.headers.get('etag') ?? undefined;
-      this.issues.delete('manifest');
-    } catch (error) {
-      if (!controller.signal.aborted && generation === this.generation && !this.disposed) this.issue('manifest', error);
-    } finally {
-      if (generation === this.generation) {
-        this.loading = false;
-        this.abort = null;
-        this.nextRefresh = performance.now() + (this.issues.has('manifest') ? RETRY_MS : REFRESH_MS);
-      }
-    }
-  }
-  private apply(manifest: OverlayManifest) {
-    this.sourceStatus = manifest.sourceStatus;
+
+  apply(manifest: OverlayManifest) {
     const nextMedia = new Map(
       manifest.media.map((item) => [`${item.version.assetId}/${item.version.versionId}`, item]),
     );
     this.media = nextMedia;
     const wanted = new Set<string>();
-    let order = 0;
-    const layers = manifest.layers
-      .slice()
-      .sort((a, b) => a.binding.order - b.binding.order || a.binding.bindingId.localeCompare(b.binding.bindingId));
-    if (['verified', 'unverified'].includes(manifest.sourceStatus))
-      for (const layer of layers)
-        for (const feature of layer.document.features.slice().sort((a, b) => a.featureId.localeCompare(b.featureId))) {
-          const key = `${layer.binding.bindingId}/${layer.document.layerId}/${feature.featureId}`;
-          wanted.add(key);
-          const existing = this.records.get(key);
-          if (existing && JSON.stringify(existing.feature) === JSON.stringify(feature)) {
-            existing.order = order++;
-            if (existing.object) this.orderObject(existing.object, existing.order);
-            if (existing.fill) existing.fill.renderOrder = existing.order;
-            continue;
-          }
-          if (existing) {
-            this.release(existing);
-            this.records.delete(key);
-          }
-          try {
-            const bounds = this.featureBounds(feature);
-            this.records.set(key, { key, feature, order: order++, bounds });
-          } catch (error) {
-            this.issue(key, error);
-          }
-        }
+    for (const { key, feature, order } of planOverlayFeatures(manifest)) {
+      wanted.add(key);
+      const existing = this.records.get(key);
+      if (existing && JSON.stringify(existing.feature) === JSON.stringify(feature)) {
+        existing.order = order;
+        if (existing.object) this.orderObject(existing.object, existing.order);
+        if (existing.fill) existing.fill.renderOrder = existing.order;
+        continue;
+      }
+      if (existing) {
+        this.release(existing);
+        this.records.delete(key);
+      }
+      try {
+        const bounds = this.featureBounds(feature);
+        this.records.set(key, { key, feature, order, bounds });
+      } catch (error) {
+        this.issue(key, error);
+      }
+    }
     for (const [key, record] of this.records)
       if (!wanted.has(key)) {
         this.release(record);
@@ -248,19 +158,13 @@ export class OverlayManager {
     if (!item) throw new Error(`unknown media version ${feature.assetId}/${feature.versionId}`);
     return mediaBounds(feature, item.version);
   }
-  update(renderer: THREE.WebGLRenderer, frame: OverlayFrame) {
+  render(renderer: THREE.WebGLRenderer, frame: OverlayFrame) {
     if (this.disposed) return;
     if (!this.enabled) {
       this.shared.overlayMaskEnabled.value = 0;
       this.lights.visible = false;
       return;
     }
-    if (
-      !this.loading &&
-      frame.now >= this.nextRefresh &&
-      (typeof document === 'undefined' || document.visibilityState !== 'hidden')
-    )
-      void this.refresh();
     const camera = frame.camera;
     camera.updateMatrixWorld();
     this.matrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
@@ -317,7 +221,7 @@ export class OverlayManager {
         topView: frame.topView,
         projectionChanged: resample,
       },
-      OVERLAY_LIMITS,
+      OVERLAY_ADMISSION_LIMITS,
     );
     this.suppressed = plan.suppressed;
     for (const key of plan.release) this.release(this.records.get(key)!);
@@ -328,7 +232,7 @@ export class OverlayManager {
         try {
           this.activate(record, renderer);
         } catch (error) {
-          record.retryAt = frame.now + RETRY_MS;
+          record.retryAt = frame.now + OVERLAY_RETRY_MS;
           this.issue(record.key, error);
         }
       }
@@ -461,7 +365,7 @@ export class OverlayManager {
       const item = this.media.get(`${feature.assetId}/${feature.versionId}`);
       if (!item) throw new Error('unknown pinned media version');
       const lease = this.pool.acquire(`${item.version.digest}:${item.version.mediaType}:decode-v1`, (signal) =>
-        (this.dependencies.media ?? loadOverlayMedia)(item, signal, renderer.capabilities.maxTextureSize),
+        this.loadMedia(item, signal, renderer.capabilities.maxTextureSize),
       );
       record.lease = lease;
       lease.promise
@@ -480,7 +384,7 @@ export class OverlayManager {
           if (record.lease !== lease || this.disposed) return;
           lease.release();
           record.lease = undefined;
-          record.retryAt = performance.now() + RETRY_MS;
+          record.retryAt = performance.now() + OVERLAY_RETRY_MS;
           if (!(error instanceof DOMException && error.name === 'AbortError')) this.issue(record.key, error);
         });
     }
@@ -491,7 +395,7 @@ export class OverlayManager {
     try {
       const sampled = sampleCurve(feature, {
         projection: { matrix: this.matrix.elements, width: frame.width, height: frame.height },
-        ...curveSamplingBudget(this.curvePoints, record.curve!.positions.length / 3, OVERLAY_LIMITS),
+        ...curveSamplingBudget(this.curvePoints, record.curve!.positions.length / 3, OVERLAY_ADMISSION_LIMITS),
       });
       record.curve!.capped = sampled.capped;
       const origin = feature.nodes[0].anchor,
@@ -509,7 +413,7 @@ export class OverlayManager {
     } catch (error) {
       this.issue(record.key, error);
       this.release(record);
-      record.retryAt = frame.now + RETRY_MS;
+      record.retryAt = frame.now + OVERLAY_RETRY_MS;
     }
   }
   private issue(key: string, error: unknown) {
@@ -542,14 +446,9 @@ export class OverlayManager {
     this.issues.clear();
     this.lights.visible = false;
   }
-  diagnosticSnapshot(): OverlayDiagnosticSnapshot {
+  diagnosticSnapshot(): OverlayDisplaySnapshot {
     const resources = this.pool.snapshot();
     return {
-      mapId: this.mapId,
-      dimension: this.dimension,
-      enabled: this.enabled,
-      loading: this.loading,
-      sourceStatus: this.sourceStatus,
       features: this.records.size,
       active: [...this.records.values()].filter((record) => record.object || record.fill || record.lease).length,
       suppressed: this.suppressed,
@@ -566,8 +465,6 @@ export class OverlayManager {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
-    this.generation++;
-    this.abort?.abort();
     this.clear();
     this.pool.dispose();
     this.scene.remove(this.group, this.lights);

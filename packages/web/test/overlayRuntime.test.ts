@@ -3,7 +3,28 @@ import { test } from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import * as THREE from 'three';
 import { createSharedUniforms } from '../src/render/materials.js';
-import { OverlayManager, type OverlayFrame } from '../src/render/overlayManager.js';
+import { OverlayScene, type OverlayFrame } from '../src/render/overlayScene.js';
+import { OverlayRuntime, type OverlayTransport } from '../src/runtime/overlayRuntime.js';
+import { createOverlayMediaLoader, type OverlayMediaLoader } from '../src/runtime/overlayMediaLoader.js';
+import { decodeOverlayMedia, type OverlayMediaResource } from '../src/render/overlayMedia.js';
+
+function overlayFixture(
+  dependencies: Pick<OverlayTransport, 'head' | 'manifest'> & {
+    media?: OverlayMediaLoader<OverlayMediaResource>;
+  },
+) {
+  const display = new OverlayScene(
+    new THREE.Scene(),
+    createSharedUniforms(),
+    dependencies.media === undefined ? createOverlayMediaLoader(decodeOverlayMedia) : dependencies.media,
+  );
+  const manager = new OverlayRuntime(display, {
+    head: dependencies.head,
+    manifest: dependencies.manifest,
+    assertCurrent() {},
+  });
+  return { manager, display };
+}
 
 const manifest = (id: string) => ({
   schemaVersion: 2,
@@ -60,7 +81,7 @@ function frame(): OverlayFrame {
 test('context changes abort requests and ignore stale manifests, including after disable/dispose', async () => {
   const pending = new Map<string, (response: Response) => void>();
   let requests = 0;
-  const manager = new OverlayManager(new THREE.Scene(), createSharedUniforms(), {
+  const { manager, display } = overlayFixture({
     head: async () => ({
       schemaVersion: 1,
       viewId: '1'.repeat(64),
@@ -83,15 +104,15 @@ test('context changes abort requests and ignore stale manifests, including after
   await setImmediate();
   assert.equal(manager.diagnosticSnapshot().mapId, 'new');
   assert.equal(manager.diagnosticSnapshot().features, 1);
-  manager.update(renderer, frame());
+  display.render(renderer, frame());
   assert.equal(manager.diagnosticSnapshot().active, 1);
   let geometryDisposed = 0;
-  const line = manager.group.children[0] as THREE.Mesh;
+  const line = display.group.children[0] as THREE.Mesh;
   line.geometry.addEventListener('dispose', () => {
     geometryDisposed++;
   });
   manager.configure('new', 'overworld', false);
-  assert.equal(manager.group.children.length, 0);
+  assert.equal(display.group.children.length, 0);
   assert.equal(geometryDisposed, 1);
   assert.equal(manager.diagnosticSnapshot().resourceBytes, 0);
   manager.dispose();
@@ -101,7 +122,7 @@ test('context changes abort requests and ignore stale manifests, including after
 
 test('ETag refresh retains pinned revision objects and transient errors remain local to overlays', async () => {
   let calls = 0;
-  const manager = new OverlayManager(new THREE.Scene(), createSharedUniforms(), {
+  const { manager, display } = overlayFixture({
     head: async () => ({
       schemaVersion: 1,
       viewId: '1'.repeat(64),
@@ -120,15 +141,15 @@ test('ETag refresh retains pinned revision objects and transient errors remain l
   });
   manager.configure('m', 'overworld', true);
   await setImmediate();
-  manager.update(renderer, frame());
-  const object = manager.group.children[0];
+  display.render(renderer, frame());
+  const object = display.group.children[0];
   await manager.refresh();
-  assert.equal(manager.group.children[0], object);
+  assert.equal(display.group.children[0], object);
   await manager.refresh();
   assert.equal(manager.diagnosticSnapshot().features, 1);
   assert.match(manager.diagnosticSnapshot().errors[0].message, /offline/);
   manager.dispose();
-  assert.equal(manager.group.children.length, 0);
+  assert.equal(display.group.children.length, 0);
 });
 
 test('a stalled manifest times out, releases loading state and can be retried', async (t) => {
@@ -138,7 +159,7 @@ test('a stalled manifest times out, releases loading state and can be retried', 
     return timeout.signal;
   });
   let calls = 0;
-  const manager = new OverlayManager(new THREE.Scene(), createSharedUniforms(), {
+  const { manager } = overlayFixture({
     head: async () => ({
       schemaVersion: 1,
       viewId: '1'.repeat(64),
@@ -194,7 +215,7 @@ test('unknown and failed media leave unrelated curves active and identify the fa
     ],
   };
   let known = false;
-  const manager = new OverlayManager(new THREE.Scene(), createSharedUniforms(), {
+  const { manager, display } = overlayFixture({
     head: async () => ({
       schemaVersion: 1,
       viewId: '1'.repeat(64),
@@ -237,15 +258,15 @@ test('unknown and failed media leave unrelated curves active and identify the fa
   });
   manager.configure('m', 'overworld', true);
   await setImmediate();
-  manager.update(renderer, frame());
-  assert.equal(manager.group.children.length, 1);
+  display.render(renderer, frame());
+  assert.equal(display.group.children.length, 1);
   assert.match(manager.diagnosticSnapshot().errors[0].feature, /unknown/);
   assert.match(manager.diagnosticSnapshot().errors[0].message, /unknown media/);
   known = true;
   await manager.refresh();
-  manager.update(renderer, frame());
+  display.render(renderer, frame());
   await setImmediate();
-  assert.equal(manager.group.children.length, 1);
+  assert.equal(display.group.children.length, 1);
   assert.match(manager.diagnosticSnapshot().errors[0].message, /HTTP 503/);
   manager.dispose();
 });

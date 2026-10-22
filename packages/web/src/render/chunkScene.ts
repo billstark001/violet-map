@@ -1,3 +1,4 @@
+import { surfaceRepresentationAllowed } from '../view/representation';
 import type { ViewState } from '../view/state';
 import type { TopClipRange } from '../view/worldGeometry';
 import type { RenderLayer } from '@violet-map/core/assets';
@@ -176,7 +177,7 @@ export class ChunkScene implements ChunkDisplay {
   }
 
   private lodVisibleForTopClip(): boolean {
-    return !this.topDownView || this.topClipRange.maxY >= WORLD_MAX_Y;
+    return surfaceRepresentationAllowed(this.topDownView ? 'top' : 'perspective', this.topClipRange);
   }
 
   private applyFullSectionTopClip() {

@@ -104,17 +104,17 @@ export interface ChunkSchedulerEntry {
 }
 
 export interface ChunkDemand {
-  key: string;
-  cx: number;
-  cz: number;
-  wantedAt: number;
-  targetStep: LodStep;
-  importance: number;
-  satisfaction: number;
-  gap: number;
-  priority: ChunkPriority;
-  boost: (ChunkPriority & { reason: 'dependency' | 'repair' }) | null;
-  meshRetryAt: number;
+  readonly key: string;
+  readonly cx: number;
+  readonly cz: number;
+  readonly wantedAt: number;
+  readonly targetStep: LodStep;
+  readonly importance: number;
+  readonly satisfaction: number;
+  readonly gap: number;
+  readonly priority: Readonly<ChunkPriority>;
+  readonly boost: Readonly<ChunkPriority & { reason: 'dependency' | 'repair' }> | null;
+  readonly meshRetryAt: number;
 }
 
 export interface SchedulerQueueStats {

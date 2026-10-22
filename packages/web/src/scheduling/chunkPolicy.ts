@@ -342,3 +342,8 @@ export function meshMatchesTarget(kind: 'full' | 'lod', step: LodStep, target: L
 export function isDemandFresh(record: Readonly<ChunkDemand> | undefined, now: number): boolean {
   return !!record && now - record.wantedAt <= IO_QUEUE_RETENTION_MS;
 }
+
+export function chunkRetryDelayMs(attempt: number): number {
+  if (!Number.isSafeInteger(attempt) || attempt < 1) throw new RangeError('retry attempt must be positive');
+  return Math.min(30000, 250 * 2 ** Math.min(7, attempt - 1));
+}

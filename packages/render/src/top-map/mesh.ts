@@ -34,8 +34,6 @@ const CELL_STATUS_ABSENT = 0;
 const CELL_STATUS_PRESENT = 1;
 const CELL_STATUS_ONLINE_BOUNDARY = 2;
 const FULL_TILE_CHUNKS = 32 * 32;
-const TOP_MAP_CHUNK_MASK_BYTES = FULL_TILE_CHUNKS / 8;
-const FULL_COVERAGE_KEY = '*';
 const EPS = 1e-4;
 
 function clamp(value: number, min: number, max: number): number {
@@ -190,47 +188,6 @@ function chunkKeyForLocal(data: PreparedTopMapTile, x: number, z: number): strin
   const wx = data.payload.origin.x + x;
   const wz = data.payload.origin.z + z;
   return `${Math.floor(wx / 16)},${Math.floor(wz / 16)}`;
-}
-
-export function topMapCoverageKeyForTile(
-  rx: number,
-  rz: number,
-  onlineChunks: ReadonlySet<string> | undefined,
-): string {
-  if (!onlineChunks?.size) return '';
-  const parts: string[] = [];
-  const minCx = rx * 32;
-  const minCz = rz * 32;
-  for (let dz = 0; dz < 32; dz++) {
-    for (let dx = 0; dx < 32; dx++) {
-      if (onlineChunks.has(`${minCx + dx},${minCz + dz}`)) parts.push((dz * 32 + dx).toString(36));
-    }
-  }
-  if (parts.length === FULL_TILE_CHUNKS) return FULL_COVERAGE_KEY;
-  return parts.join('.');
-}
-
-export function topMapCoverageKeyFromMask(mask: Uint8Array | undefined): string {
-  if (!mask?.byteLength) return '';
-  const parts: string[] = [];
-  let covered = 0;
-  const byteLength = Math.min(mask.byteLength, TOP_MAP_CHUNK_MASK_BYTES);
-  for (let byteIndex = 0; byteIndex < byteLength; byteIndex++) {
-    let bits = mask[byteIndex];
-    if (!bits) continue;
-    for (let bit = 0; bit < 8; bit++) {
-      if ((bits & (1 << bit)) === 0) continue;
-      covered++;
-      parts.push((byteIndex * 8 + bit).toString(36));
-    }
-  }
-  return covered === FULL_TILE_CHUNKS ? FULL_COVERAGE_KEY : parts.join('.');
-}
-
-export function topMapCoverageChunkCount(coverageKey: string): number {
-  if (!coverageKey) return 0;
-  if (coverageKey === FULL_COVERAGE_KEY) return FULL_TILE_CHUNKS;
-  return coverageKey.split('.').length;
 }
 
 function buildCells(

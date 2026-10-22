@@ -6,8 +6,13 @@ import {
   createTextureAnimationUniforms,
   createTopMapMaterial,
 } from '../src/render/materials';
-import { OVERLAY_LIMITS } from '../src/render/overlayLimits';
-import { OverlayManager } from '../src/render/overlayManager';
+import { OVERLAY_RENDER_LIMITS } from '../src/render/overlayLimits';
+import { OVERLAY_ADMISSION_LIMITS } from '../src/scheduling/overlayPolicy';
+import { OVERLAY_RESOURCE_LIMITS } from '../src/resources/overlayLimits';
+import { OverlayScene } from '../src/render/overlayScene';
+import { OverlayRuntime, overlayTransport } from '../src/runtime/overlayRuntime';
+import { createOverlayMediaLoader } from '../src/runtime/overlayMediaLoader';
+import { decodeOverlayMedia } from '../src/render/overlayMedia';
 import { TransparencyRenderer } from '../src/render/transparency';
 import { resourceDownloader } from '../src/resources/download';
 import { initializeRuntime } from '../src/runtime';
@@ -59,7 +64,9 @@ const terrain = new THREE.Group();
 
 scene.add(terrain);
 
-const manager = new OverlayManager(scene, shared);
+const overlayScene = new OverlayScene(scene, shared, createOverlayMediaLoader(decodeOverlayMedia));
+const manager = new OverlayRuntime(overlayScene, overlayTransport);
+const limits = { ...OVERLAY_RENDER_LIMITS, ...OVERLAY_ADMISSION_LIMITS, ...OVERLAY_RESOURCE_LIMITS };
 const perspective = new THREE.PerspectiveCamera(50, 4 / 3, 0.1, 2000),
   orthographic = new THREE.OrthographicCamera(-80, 80, 60, -60, 0.1, 2000);
 let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = orthographic,
@@ -119,7 +126,8 @@ function draw() {
     if (lastFrame) intervals.push(start - lastFrame);
     lastFrame = start;
   }
-  manager.update(renderer, {
+  manager.tick(performance.now());
+  overlayScene.render(renderer, {
     camera,
     topView,
     width: 800,
@@ -216,7 +224,7 @@ const harness = {
   },
   status: () => manager.diagnosticSnapshot(),
   memory: () => ({ ...renderer.info.memory, programs: renderer.info.programs?.length ?? 0 }),
-  limits: () => OVERLAY_LIMITS,
+  limits: () => limits,
   benchmark: async () => {
     cpu = [];
     intervals = [];
@@ -273,7 +281,7 @@ const harness = {
     };
   },
   objects: () =>
-    manager.group.children.map((object) => ({
+    overlayScene.group.children.map((object) => ({
       position: object.position.toArray(),
       scale: object.scale.toArray(),
       bounds: (() => {

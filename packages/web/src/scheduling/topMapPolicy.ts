@@ -1,5 +1,4 @@
 export const TOP_MAP_MAX_RADIUS_BLOCKS = 1024 * 16;
-export const TOP_MAP_MAX_RESIDENT_TILES = 96;
 export const TOP_MAP_MAX_WANTED_TILES = 96;
 export const TOP_MAP_MAX_PENDING_TILES = 6;
 export const TOP_MAP_TILE_RETRY_MS = 12000;

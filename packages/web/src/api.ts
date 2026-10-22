@@ -121,9 +121,13 @@ export type ChunkReadOutcome = { cx: number; cz: number } & (
 
 /** Read each selected chunk independently. Renew an expiring delivery lease
  * within the same view; callers decide when to retry other failures. */
-export async function readChunks(chunks: ResolvedChunk[], signal?: AbortSignal): Promise<ChunkReadOutcome[]> {
+export async function readChunks(
+  chunks: ResolvedChunk[],
+  concurrency: number,
+  signal?: AbortSignal,
+): Promise<ChunkReadOutcome[]> {
   signal?.throwIfAborted();
-  return mapWithConcurrency(chunks, 4, async (original): Promise<ChunkReadOutcome> => {
+  return mapWithConcurrency(chunks, concurrency, async (original): Promise<ChunkReadOutcome> => {
     let chunk = original;
     try {
       for (let attempt = 0; ; attempt++) {

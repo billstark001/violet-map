@@ -1,10 +1,6 @@
 import type { ChunkScheduler } from '../../src/scheduling/chunkScheduler.js';
-import type {
-  ChunkCandidate,
-  ChunkSchedulerEntry,
-  LodStep,
-  SchedulerViewInput,
-} from '../../src/scheduling/contracts.js';
+import type { ChunkCandidate, ChunkSchedulerEntry, SchedulerViewInput } from '../../src/scheduling/contracts.js';
+import type { LodStep } from '../../src/view/terrain.js';
 import { UNCLIPPED_VIEW } from '../../src/view/worldGeometry.js';
 import type { ViewState } from '../../src/view/state.js';
 

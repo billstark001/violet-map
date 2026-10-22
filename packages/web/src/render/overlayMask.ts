@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { OVERLAY_LIMITS } from './overlayLimits';
+import { OVERLAY_RENDER_LIMITS } from './overlayLimits';
 import { areaMaskLayout, type MaskLayout } from '@violet-map/render/overlays';
 import type { SharedUniforms } from './materials';
 
@@ -25,7 +25,7 @@ export class OverlayMask {
       this.disposeTarget();
       return;
     }
-    const limit = Math.min(OVERLAY_LIMITS.maskPixels, renderer.capabilities.maxTextureSize);
+    const limit = Math.min(OVERLAY_RENDER_LIMITS.maskPixels, renderer.capabilities.maxTextureSize);
     const layout = areaMaskLayout(bounds, worldPerPixel, limit);
     const signature = [...layout.origin, ...layout.size, layout.width, layout.height].join(',');
     if (signature !== this.signature) {

@@ -1,8 +1,11 @@
+import { createOverlayMediaLoader } from '../src/runtime/overlayMediaLoader.js';
 import type { MediaFeature, MediaVersion } from '@violet-map/core/overlays';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as THREE from 'three';
-import { loadOverlayMedia, modelResource } from '../src/render/overlayMedia.js';
+import { decodeOverlayMedia, modelResource } from '../src/render/overlayMedia.js';
+
+const loadMedia = createOverlayMediaLoader(decodeOverlayMedia);
 
 test('GLB instances share immutable GPU data and close shared image bitmaps exactly once', () => {
   let closed = 0,
@@ -65,7 +68,7 @@ test('media failures and download limits fail before optional loaders, preservin
     mediaType: 'image/png',
   } as MediaVersion;
   await assert.rejects(
-    loadOverlayMedia(
+    loadMedia(
       {
         version,
         resource: {
@@ -81,7 +84,7 @@ test('media failures and download limits fail before optional loaders, preservin
     /resource (?:size|digest)/,
   );
   await assert.rejects(
-    loadOverlayMedia(
+    loadMedia(
       {
         version: { ...version, bytes: 100 * 1024 ** 2 },
         resource: {
@@ -111,7 +114,7 @@ test('media failures and download limits fail before optional loaders, preservin
       { headers: { 'content-type': 'image/png' } },
     );
   await assert.rejects(
-    loadOverlayMedia(
+    loadMedia(
       {
         version,
         resource: {
@@ -129,7 +132,7 @@ test('media failures and download limits fail before optional loaders, preservin
   assert.equal(cancelled, true);
   globalThis.fetch = async () => new Response(null, { status: 503 });
   await assert.rejects(
-    loadOverlayMedia(
+    loadMedia(
       {
         version,
         resource: {

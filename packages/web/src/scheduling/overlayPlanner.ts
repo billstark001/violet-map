@@ -1,4 +1,22 @@
-import type { OverlayFeature } from '@violet-map/core/overlays';
+import type { OverlayFeature, OverlayManifest } from '@violet-map/core/overlays';
+
+export function planOverlayFeatures(
+  manifest: OverlayManifest,
+): { key: string; feature: OverlayFeature; order: number }[] {
+  if (manifest.sourceStatus !== 'verified' && manifest.sourceStatus !== 'unverified') return [];
+  const layers = [...manifest.layers].sort(
+    (a, b) => a.binding.order - b.binding.order || a.binding.bindingId.localeCompare(b.binding.bindingId),
+  );
+  const features = [];
+  for (const layer of layers)
+    for (const feature of [...layer.document.features].sort((a, b) => a.featureId.localeCompare(b.featureId)))
+      features.push({
+        key: layer.binding.bindingId + '/' + layer.document.layerId + '/' + feature.featureId,
+        feature,
+        order: features.length,
+      });
+  return features;
+}
 
 export interface OverlayAdmissionLimits {
   activeFeatures: number;

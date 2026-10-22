@@ -11,6 +11,7 @@ import { resolveChunkScheduling, diskCellCount } from '../src/scheduling/chunkPo
 import { schedulerTuningForPreset } from '../src/scheduling/profiles.js';
 import { LoadingMetrics } from '../src/diagnostics/loadingMetrics.js';
 import type { ChunkSchedulerEntry, ChunkState } from '../src/scheduling/contracts.js';
+import { testView } from './helpers/scheduling.js';
 
 function entry(key: string, state: ChunkState = 'stored'): ChunkSchedulerEntry {
   return {
@@ -47,6 +48,34 @@ test('capacity normalization reserves the promised disks even with conflicting c
   assert.ok(config.maxTrackedChunks >= diskCellCount(32));
 });
 
+test('height slices demand full geometry and reject a ready surface task', () => {
+  const scheduler = new ChunkScheduler();
+  const chunk = { ...entry('0,0'), displayed: 'lod' as const, displayedLodStep: 2 };
+  const entries = new Map([[chunk.key, chunk]]);
+  scheduler.tick({
+    view: { ...testView, mode: 'top', clip: { minY: 0, maxY: 48 } },
+    now: 1000,
+    options: { scheduling: { activeRadiusChunks: 8, fullDetailRadiusChunks: 1 } },
+    keyFor: (cx, cz) => `${cx},${cz}`,
+    entries,
+    cellInfoFor: () => ({ hasChunkSource: true, topMapSurfaceY: 64 }),
+  });
+  assert.equal(scheduler.demandFor(chunk.key)?.targetStep, 1);
+  assert.equal(scheduler.diagnosticSnapshot(1000, entries).lodDisabled, true);
+  const work = scheduler.nextWork({
+    now: 1000,
+    entries,
+    activeHashBatches: 0,
+    activeFetchBatches: 0,
+    activeMeshTasks: 0,
+    maxMeshTasks: 1,
+    includeHash: false,
+    includeFetch: false,
+  });
+  assert.equal(work.meshTasks[0]?.kind, 'full');
+  assert.equal(scheduler.shouldAcceptMeshResult({ entry: chunk, kind: 'lod', step: 2, version: 1, now: 1000 }), false);
+});
+
 test('queue and retention tuning preserve the camera attention history', () => {
   const view = new ChunkViewPlanner();
   const camera = new THREE.PerspectiveCamera(75, 1.44, 0.1, 10000);
@@ -76,7 +105,7 @@ test('queue and retention tuning preserve the camera attention history', () => {
 
 test('invalidations and queued meshes obey the current quality target', () => {
   const scheduler = new ChunkScheduler();
-  const chunk = { ...entry('chunk'), displayed: 'full' as const, lastTargetStep: 4 as const, dirty: true };
+  const chunk = { ...entry('chunk'), displayed: 'full' as const, dirty: true };
   planFixtureDemands(scheduler, new Map([[chunk.key, chunk]]), 100, () => 4);
   scheduler.notify({ type: 'meshInvalidated', entry: chunk, now: 100 });
   const input = {
@@ -94,7 +123,7 @@ test('invalidations and queued meshes obey the current quality target', () => {
   assert.equal(task.step, 4, 'repair must not replace the camera demand with an old full mesh');
   assert.equal(scheduler.shouldAcceptMeshResult({ entry: chunk, kind: 'full', step: 1, version: 1, now: 100 }), false);
   const upgraded = new ChunkScheduler();
-  const pending = { ...entry('chunk'), lastTargetStep: 2 as const };
+  const pending = { ...entry('chunk') };
   planFixtureDemands(upgraded, new Map([[pending.key, pending]]), 100, () => 2);
   assert.equal(upgraded.nextWork({ ...input, entries: new Map([[pending.key, pending]]) }).meshTasks[0].step, 2);
 });

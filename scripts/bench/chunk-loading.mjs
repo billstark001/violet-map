@@ -265,45 +265,44 @@ const snapshot = async (label) => {
   const file = path.join(out, label + '.json');
   await (await downloading).saveAs(file);
   const value = JSON.parse(await fs.readFile(file, 'utf8'));
+  assert.equal(value.schema, 2, 'benchmark requires the current viewer diagnostic schema');
+  assert.equal(value.chunkRuntime?.schema, 2, 'benchmark requires the current chunk runtime diagnostic schema');
   report.snapshots.push({
     label,
     capturedAt: value.capturedAt,
-    activity: value.chunkManager.activity,
-    workers: value.chunkManager.workers,
-    stats: value.chunkManager.stats,
+    activity: value.chunkRuntime.activity,
+    workers: value.chunkRuntime.workers,
+    stats: value.chunkRuntime.stats,
   });
   return value;
 };
 
 const assertSettled = (value) => {
   assert.equal(value.camera.viewMode, 'perspective');
-  const manager = value.chunkManager;
+  const chunks = value.chunkRuntime;
   assert.ok(
-    manager.chunks.some((c) => c.displayed !== 'none'),
+    chunks.chunks.some((c) => c.displayed !== 'none'),
     'terrain never appeared',
   );
-  assertFullDetailCoverage(manager, values.world, sourceCoverage);
-  assert.equal(manager.chunks.filter((c) => c.state === 'error').length, 0, 'unrecovered error chunks');
-  assert.equal(manager.chunks.filter((c) => c.dirty).length, 0, 'terrain invalidation never settled');
-  assert.equal(manager.stats.retryingChunks, 0, 'retries never settled');
+  assertFullDetailCoverage(chunks, values.world, sourceCoverage);
+  assert.equal(chunks.chunks.filter((c) => c.state === 'error').length, 0, 'unrecovered error chunks');
+  assert.equal(chunks.chunks.filter((c) => c.dirty).length, 0, 'terrain invalidation never settled');
+  assert.equal(chunks.stats.retryingChunks, 0, 'retries never settled');
   assert.deepEqual(
     [
-      manager.workers.checking,
-      manager.workers.fetching,
-      manager.stats.hashQueued,
-      manager.stats.fetchQueued,
-      manager.stats.meshQueued,
-      manager.workers.activeMeshTasks,
-      manager.workers.cacheLookups,
-      manager.workers.waitingMeshes,
+      chunks.workers.checking,
+      chunks.workers.fetching,
+      chunks.stats.hashQueued,
+      chunks.stats.fetchQueued,
+      chunks.stats.meshQueued,
+      chunks.workers.activeMeshTasks,
+      chunks.workers.cacheLookups,
+      chunks.workers.waitingMeshes,
     ],
     [0, 0, 0, 0, 0, 0, 0, 0],
     'loading did not settle',
   );
-  assert.ok(
-    manager.chunks.length <= manager.scheduling.trackedChunkLimit,
-    'tracked chunk limit exceeded after settling',
-  );
+  assert.ok(chunks.chunks.length <= chunks.scheduling.trackedChunkLimit, 'tracked chunk limit exceeded after settling');
 };
 
 const waitSettled = async (label) => {
@@ -396,10 +395,10 @@ try {
   assertSettled(stationary);
   if (values.compare) {
     const reference = JSON.parse(await fs.readFile(values.compare, 'utf8'));
-    assert.equal(reference.chunkManager.renderKey, stationary.chunkManager.renderKey);
+    assert.equal(reference.chunkRuntime.renderKey, stationary.chunkRuntime.renderKey);
     assert.deepEqual(reference.camera.pos, stationary.camera.pos);
     const fullGeometry = (value) =>
-      value.chunkManager.chunks
+      value.chunkRuntime.chunks
         .filter((chunk) => chunk.displayed === 'full')
         .map((chunk) => [chunk.key, chunk.meshBytes])
         .sort(([a], [b]) => a.localeCompare(b));
@@ -408,8 +407,8 @@ try {
   }
   for (const key of ['chunkDispatches', 'meshRequests', 'meshApplications', 'retries'])
     assert.equal(
-      stationary.chunkManager.activity[key],
-      baseline.chunkManager.activity[key],
+      stationary.chunkRuntime.activity[key],
+      baseline.chunkRuntime.activity[key],
       key + ' kept growing in a stationary view',
     );
   await page.screenshot({ path: path.join(out, 'stationary.png') });
@@ -418,7 +417,7 @@ try {
       resolveFailure && leaseShortened && bodyExpired && bodyFailed && delayedBodies === 4,
       'not all transport faults were exercised',
     );
-    assert.ok(stationary.chunkManager.activity.retries >= 2, 'transport errors did not exercise retry recovery');
+    assert.ok(stationary.chunkRuntime.activity.retries >= 2, 'transport errors did not exercise retry recovery');
     await move({ ...position, yaw: position.yaw + 180 });
     await waitSettled('rotated');
     await page.evaluate(() => {
@@ -433,8 +432,8 @@ try {
     await move({ ...position, x: position.x + 96, y: position.y + 16 });
     await page.waitForFunction(() => window.__loadingProbe.dropped === 1, null, { timeout: 30000 });
     const recovered = await waitSettled('worker-watchdog');
-    assert.ok(recovered.chunkManager.workers.restarts >= 2, 'worker errors and stalled jobs did not both recover');
-    assert.equal(recovered.chunkManager.workers.count, stationary.chunkManager.workers.count);
+    assert.ok(recovered.chunkRuntime.workers.restarts >= 2, 'worker errors and stalled jobs did not both recover');
+    assert.equal(recovered.chunkRuntime.workers.count, stationary.chunkRuntime.workers.count);
     await move(position);
     await waitSettled('return-to-origin');
     const supported = await page.evaluate(() => {

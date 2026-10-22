@@ -5,7 +5,7 @@ import { browserStorage, readStored } from '../browserStorage';
 import { setDebugLoggingEnabled } from '../logger';
 import { getMeshCacheStats, setMeshCacheEnabled } from '../resources/meshCache';
 import { EMPTY_CHUNK_SCHEDULER_STATS } from '../diagnostics/contracts';
-import type { OverlayDiagnosticSnapshot } from '../render/overlayManager';
+import type { OverlayDiagnosticSnapshot } from '../diagnostics/overlay';
 import type {
   CameraPositionRequest,
   ViewerDiagnosticSnapshot,
