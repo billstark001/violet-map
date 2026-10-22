@@ -41,6 +41,7 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
   const services = await createServices(config);
   t.after(() => services.close());
   await services.worldStore!.createWorld('browser');
+  await services.worldStore!.createWorld('browser-second');
   const app = createApp(config, services);
   const api = serve({
     fetch: (request) => {
@@ -82,8 +83,38 @@ test('three origins: static prefixes, CORS pixels/WebGL, uploads, capabilities a
   const viewer = await context.newPage();
   const errors: string[] = [];
   viewer.on('pageerror', (error) => errors.push(error.message));
-  await viewer.goto(web.url);
+  let releaseBundle!: () => void;
+  const bundleGate = new Promise<void>((resolve) => {
+    releaseBundle = resolve;
+  });
+  const bundleStarted = viewer.waitForRequest(
+    (request) =>
+      request.url().endsWith('/api/resources/resolve') &&
+      request.postDataJSON()?.selectors?.some((selector: { kind: string }) => selector.kind === 'asset-bundle'),
+  );
+  await viewer.route('**/api/resources/resolve', async (route) => {
+    if (
+      route
+        .request()
+        .postDataJSON()
+        ?.selectors?.some((selector: { kind: string }) => selector.kind === 'asset-bundle')
+    )
+      await bundleGate;
+    await route.continue();
+  });
+  await viewer.goto(web.url + '?world=browser');
+  await bundleStarted;
+  await viewer.locator('#world-select').selectOption('browser-second', { force: true });
+  const selectedCoverage = viewer.waitForResponse(
+    (response) =>
+      response.url().includes('/worlds/browser-second/') &&
+      new URL(response.url()).pathname.endsWith('/chunk-coverage'),
+  );
+  releaseBundle();
   await viewer.locator('canvas').first().waitFor({ timeout: 30_000 });
+  await selectedCoverage;
+  assert.equal(await viewer.locator('#world-select').inputValue(), 'browser-second');
+  assert.equal(await viewer.getByRole('alert').count(), 0, 'a bootstrap switch revived an obsolete world failure');
   const pixels = await viewer.evaluate(async (apiBase) => {
     const load = (url: string) =>
       new Promise<HTMLImageElement>((resolve, reject) => {
