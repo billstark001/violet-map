@@ -240,6 +240,7 @@ export interface SchedulerCellDiagnostic {
 
 export interface ChunkSchedulerDiagnosticSnapshot {
   capturedAt: number;
+  attention: { cachedChunks: number; activeCells: number; historyChunkLimit: number };
   center: { cx: number; cz: number };
   activeRadiusChunks: number;
   maxCandidates: number;

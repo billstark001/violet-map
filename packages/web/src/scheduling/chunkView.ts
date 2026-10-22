@@ -13,6 +13,7 @@ import {
 import { type LodStep } from '../view/terrain';
 import {
   TRACKER_CHUNK_SIZE,
+  TRACKER_HISTORY_CHUNKS,
   TRACKER_SEED_SECONDS,
   CRITICAL_CENTER_RAY_MAX_CHUNKS,
   CRITICAL_CENTER_RAY_STEP_CHUNKS,
@@ -67,6 +68,13 @@ export class ChunkViewPlanner {
   }
   get config(): Readonly<ResolvedChunkScheduling> {
     return this.currentConfig;
+  }
+  get attentionStats() {
+    return {
+      cachedChunks: this.tracker ? this.tracker.chunkCount : 0,
+      activeCells: this.tracker ? this.tracker.activeCount : 0,
+      historyChunkLimit: TRACKER_HISTORY_CHUNKS,
+    };
   }
   clear() {
     this.tracker = null;
@@ -227,6 +235,12 @@ export class ChunkViewPlanner {
     if (candidates.length > frameCandidateLimit) candidates.length = frameCandidateLimit;
     for (const candidate of candidates) protectedKeys.add(candidate.key);
 
+    tracker.trimInactiveChunks(
+      TRACKER_HISTORY_CHUNKS,
+      (function* () {
+        for (const entry of input.entries.values()) yield { i: entry.cx, j: entry.cz };
+      })(),
+    );
     return { demands, candidates, keepKeys, protectedKeys, fullDetailKeys, centerCx, centerCz };
   }
 

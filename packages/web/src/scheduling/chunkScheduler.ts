@@ -77,6 +77,7 @@ export class ChunkScheduler {
   diagnosticSnapshot(now: number, entries: ReadonlyMap<string, ChunkSchedulerEntry>): ChunkSchedulerDiagnosticSnapshot {
     return {
       capturedAt: now,
+      attention: this.viewPlanner.attentionStats,
       center: { ...this.viewPlanner.center },
       activeRadiusChunks: this.viewPlanner.config.activeRadiusChunks,
       maxCandidates: this.viewPlanner.config.maxCandidates,

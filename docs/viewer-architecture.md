@@ -51,7 +51,7 @@ Every performance profile reserves enough tracked capacity for the entire config
 
 Transparency retains sixteen depth bins and the 3,145,728-pixel target cap (192 MiB before driver overhead). A scheduling or resource-budget change must preserve that rendering precision.
 
-Terrain and Top Map use `render/staticMesh.ts` to declare that their geometry and world bounds stay fixed during a frame's render passes. The transparency renderer tests these meshes once against the frame's frustum before preparing materials and pass lists. Changes between frames still update normally; callbacks on these meshes may update uniforms but must preserve world bounds. General meshes retain Three.js culling on each pass. Temporary culling/material state and the original hierarchy are restored even if rendering throws. Frustum visibility remains entirely a display concern.
+Terrain and Top Map use `render/staticMesh.ts` to declare that their geometry and world bounds stay fixed during a frame's render passes. The transparency renderer tests these meshes once against the frame's frustum before preparing materials and pass lists. Their derived world-space sphere is reused only while the actual world matrix and geometry sphere are unchanged; parent moves, direct matrix changes and geometry edits invalidate it. Changes between frames still update normally; callbacks on these meshes may update uniforms but must preserve world bounds. General meshes retain Three.js culling on each pass. Temporary culling/material state and the original hierarchy are restored even if rendering throws. Frustum visibility remains entirely a display concern.
 
 Surface-only representations cannot display a height slice below their generated/baked surface. The view contract exposes that capability: chunk scheduling requests full models for such views, and tile scheduling does not load an unusable Top Map representation. Section clipping and actual GPU visibility remain display operations.
 
@@ -72,6 +72,8 @@ Each mesh job owns its execution phase, cache identity, dirty token and, once di
 Eviction plans include pending work and dependency pins. Tracked-entry eviction and decoded-input release share the same active-work predicate. The executor validates that precondition when applying an eviction; a violated precondition is an explicit error.
 
 Display feedback contains the actual representation, version, LOD step and geometry bytes. Available full/LOD geometry counts are derived observations, including retained geometry during repair; neither the scene nor executor stores parallel readiness flags. Empty completed geometry still satisfies demand, while error, retry and dirty state remain independent observations. Settled loading checks require every pending flag and dependency pin to be released.
+
+Attention queries and cell snapshots never realize future importance into integration state. Rank-free updates skip ranking work; half-lives retain double precision instead of replacing an underflowed value with a default. Tracker grid history retains active chunks, their one-chunk neighbor halo and cells belonging to live chunk records, plus at most 64 inactive chunks ordered by camera activity. Observation cannot renew history. Releasing a history chunk refreshes adjacent cached neighbor penalties. This bounds movement history independently of travel distance while preserving active attention, live precision and the full-detail contract.
 
 ## Validation
 

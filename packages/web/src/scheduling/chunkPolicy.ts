@@ -22,6 +22,8 @@ export const MAX_ACTIVE_RADIUS_CHUNKS = 96;
 
 export const TRACKER_CHUNK_SIZE = 32;
 
+export const TRACKER_HISTORY_CHUNKS = 64;
+
 export const TRACKER_SEED_SECONDS = 0.22;
 
 export const MAX_HASH_BATCHES = 2;

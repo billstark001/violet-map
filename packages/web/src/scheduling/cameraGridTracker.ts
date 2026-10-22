@@ -178,6 +178,7 @@ interface ResolvedConfig {
 }
 
 class Chunk {
+  lastActiveAt = -Infinity;
   readonly count: number;
 
   readonly height: Float32Array;
@@ -185,7 +186,7 @@ class Chunk {
 
   readonly importance: Float64Array;
   readonly tImportance: Float64Array;
-  readonly importanceHalfLife: Float32Array;
+  readonly importanceHalfLife: Float64Array;
 
   readonly bump: Float64Array;
   readonly tBump: Float64Array;
@@ -193,7 +194,11 @@ class Chunk {
   readonly higherPrecisionNeighbors: Uint8Array;
   readonly initialized: Uint8Array;
 
-  constructor(readonly size: number) {
+  constructor(
+    readonly size: number,
+    readonly ci: number,
+    readonly cj: number,
+  ) {
     this.count = size * size;
 
     this.height = new Float32Array(this.count);
@@ -201,7 +206,7 @@ class Chunk {
 
     this.importance = new Float64Array(this.count);
     this.tImportance = new Float64Array(this.count);
-    this.importanceHalfLife = new Float32Array(this.count);
+    this.importanceHalfLife = new Float64Array(this.count);
 
     this.bump = new Float64Array(this.count);
     this.tBump = new Float64Array(this.count);
@@ -224,7 +229,7 @@ class SparseChunkGrid {
     const key = `${ci},${cj}`;
     let chunk = this.chunks.get(key);
     if (chunk === undefined) {
-      chunk = new Chunk(this.cfg.chunkSize);
+      chunk = new Chunk(this.cfg.chunkSize, ci, cj);
       this.chunks.set(key, chunk);
     }
     return chunk;
@@ -317,10 +322,26 @@ class SparseChunkGrid {
       }
     }
   }
+
+  refreshDeletedChunkBoundary(chunk: Chunk): void {
+    if (!this.cfg.usesNeighborSatisfactionPenalty) return;
+    const i0 = chunk.ci * chunk.size;
+    const j0 = chunk.cj * chunk.size;
+    for (let offset = -1; offset <= chunk.size; offset++) {
+      this.refreshHigherNeighborCount(i0 + offset, j0 - 1);
+      this.refreshHigherNeighborCount(i0 + offset, j0 + chunk.size);
+    }
+    for (let offset = 0; offset < chunk.size; offset++) {
+      this.refreshHigherNeighborCount(i0 - 1, j0 + offset);
+      this.refreshHigherNeighborCount(i0 + chunk.size, j0 + offset);
+    }
+  }
 }
 
 class ActiveSet {
-  length = 0;
+  get length(): number {
+    return this.chunks.length;
+  }
 
   i: Float64Array;
   j: Float64Array;
@@ -332,11 +353,10 @@ class ActiveSet {
     this.i = new Float64Array(cap);
     this.j = new Float64Array(cap);
     this.index = new Uint32Array(cap);
-    this.chunks = new Array<Chunk>(cap);
+    this.chunks = [];
   }
 
   clear(): void {
-    this.length = 0;
     this.chunks.length = 0;
   }
 
@@ -357,8 +377,6 @@ class ActiveSet {
     const nIndex = new Uint32Array(cap);
     nIndex.set(this.index);
     this.index = nIndex;
-
-    this.chunks.length = cap;
   }
 
   push(i: number, j: number, chunk: Chunk, index: number): void {
@@ -368,7 +386,6 @@ class ActiveSet {
     this.j[pos] = j;
     this.chunks[pos] = chunk;
     this.index[pos] = index;
-    this.length = pos + 1;
   }
 }
 
@@ -522,6 +539,7 @@ export class CameraGridTracker {
 
     this.lastPose = clonePose(pose);
     this.lastT = t;
+    if (moved) for (let pos = 0; pos < this.active.length; pos++) this.active.chunks[pos].lastActiveAt = t;
 
     return this.queryActiveSet(this.active, t, n, selection);
   }
@@ -620,7 +638,7 @@ export class CameraGridTracker {
     assertFiniteNumber(t, 't');
 
     const { chunk, index } = this.grid.getOrCreateCell(i, j, t);
-    const importance = this.realizeImportanceInPlace(chunk, index, t);
+    const importance = this.importanceAt(chunk, index, t);
     const satisfaction = this.satisfaction(chunk, index, t);
 
     return {
@@ -636,20 +654,34 @@ export class CameraGridTracker {
     };
   }
 
-  /**
-   * Release inactive chunks selected by predicate. Active chunks are retained so
-   * camera updates and cell reads continue to use the same stored state.
+  /** Keep active chunks, their neighbor halo and cells owned by live records.
+   * The remaining history is a bounded cache ordered by camera activity;
+   * observation does not renew it. Deletion also updates boundary satisfaction.
    */
-  deleteChunksWhere(predicate: (chunk: unknown) => boolean): number {
-    const activeChunks = new Set(this.active.chunks);
-    let removed = 0;
-    for (const [key, chunk] of this.grid.chunks) {
-      if (!activeChunks.has(chunk) && predicate(chunk)) {
-        this.grid.chunks.delete(key);
-        removed++;
-      }
+  trimInactiveChunks(limit: number, protectedCells: Iterable<Pick<RankedCell, 'i' | 'j'>>): number {
+    assertNonNegativeInteger(limit, 'inactive history limit');
+    const protectedChunks = new Set(this.active.chunks);
+    for (const chunk of [...protectedChunks]) {
+      for (let di = -1; di <= 1; di++)
+        for (let dj = -1; dj <= 1; dj++) {
+          const neighbor = this.grid.getChunkIfExists(chunk.ci + di, chunk.cj + dj);
+          if (neighbor) protectedChunks.add(neighbor);
+        }
     }
-    return removed;
+    for (const cell of protectedCells) {
+      const location = this.grid.cellLocation(cell.i, cell.j);
+      const chunk = this.grid.getChunkIfExists(location.ci, location.cj);
+      if (chunk) protectedChunks.add(chunk);
+    }
+    const inactive = [...this.grid.chunks.values()].filter((chunk) => !protectedChunks.has(chunk));
+    if (inactive.length <= limit) return 0;
+    inactive.sort((a, b) =>
+      a.lastActiveAt === b.lastActiveAt ? a.ci - b.ci || a.cj - b.cj : a.lastActiveAt - b.lastActiveAt,
+    );
+    const victims = inactive.slice(0, inactive.length - limit);
+    for (const chunk of victims) this.grid.chunks.delete(`${chunk.ci},${chunk.cj}`);
+    for (const chunk of victims) this.grid.refreshDeletedChunkBoundary(chunk);
+    return victims.length;
   }
 
   private buildDisk(out: ActiveSet, px: number, pz: number, now: number): void {
@@ -714,6 +746,7 @@ export class CameraGridTracker {
 
     for (let pos = 0; pos < active.length; pos++) {
       const chunk = active.chunks[pos];
+      chunk.lastActiveAt = toT;
       const index = active.index[pos];
 
       const i = active.i[pos];
@@ -740,6 +773,14 @@ export class CameraGridTracker {
   }
 
   private queryActiveSet(active: ActiveSet, t: number, n: number, selection: RankingSelection): RankingResult {
+    if (n === 0 || !(selection.importance || selection.satisfaction || selection.gap))
+      return {
+        time: t,
+        activeCount: active.length,
+        importance: { top: [], bottom: [] },
+        satisfaction: { top: [], bottom: [] },
+        gap: { top: [], bottom: [] },
+      };
     const topImportance = new BoundedRankHeap(selection.importance ? n : 0, 'largest');
     const bottomImportance = new BoundedRankHeap(selection.importance === 'both' ? n : 0, 'smallest');
     const topSatisfaction = new BoundedRankHeap(selection.satisfaction ? n : 0, 'largest');
@@ -753,18 +794,17 @@ export class CameraGridTracker {
       const i = active.i[pos];
       const j = active.j[pos];
 
-      const importance = this.realizeImportanceInPlace(chunk, index, t);
+      const importance = this.importanceAt(chunk, index, t);
       const satisfaction = this.satisfaction(chunk, index, t);
       const gap = importance - satisfaction;
 
-      topImportance.offer(i, j, importance, importance, satisfaction, gap);
-      bottomImportance.offer(i, j, importance, importance, satisfaction, gap);
-
-      topSatisfaction.offer(i, j, satisfaction, importance, satisfaction, gap);
-      bottomSatisfaction.offer(i, j, satisfaction, importance, satisfaction, gap);
-
-      topGap.offer(i, j, gap, importance, satisfaction, gap);
-      bottomGap.offer(i, j, gap, importance, satisfaction, gap);
+      if (selection.importance) topImportance.offer(i, j, importance, importance, satisfaction, gap);
+      if (selection.importance === 'both') bottomImportance.offer(i, j, importance, importance, satisfaction, gap);
+      if (selection.satisfaction) topSatisfaction.offer(i, j, satisfaction, importance, satisfaction, gap);
+      if (selection.satisfaction === 'both')
+        bottomSatisfaction.offer(i, j, satisfaction, importance, satisfaction, gap);
+      if (selection.gap) topGap.offer(i, j, gap, importance, satisfaction, gap);
+      if (selection.gap === 'both') bottomGap.offer(i, j, gap, importance, satisfaction, gap);
     }
 
     return {
@@ -785,11 +825,17 @@ export class CameraGridTracker {
     };
   }
 
+  private importanceAt(chunk: Chunk, index: number, t: number): number {
+    const dt = t - chunk.tImportance[index];
+    return dt > 0
+      ? chunk.importance[index] * Math.exp((-Math.LN2 * dt) / chunk.importanceHalfLife[index])
+      : chunk.importance[index];
+  }
+
   private realizeImportanceInPlace(chunk: Chunk, index: number, t: number): number {
     const dt = t - chunk.tImportance[index];
     if (dt > 0) {
-      const halfLife = chunk.importanceHalfLife[index] || this.cfg.defaultImportanceHalfLife;
-      chunk.importance[index] *= Math.exp((-Math.LN2 * dt) / halfLife);
+      chunk.importance[index] = this.importanceAt(chunk, index, t);
       chunk.tImportance[index] = t;
     }
     return chunk.importance[index];

@@ -310,6 +310,12 @@ const assertSettled = (value, viewMode = 'perspective') => {
     'loading did not settle',
   );
   assert.ok(chunks.chunks.length <= chunks.scheduling.trackedChunkLimit, 'tracked chunk limit exceeded after settling');
+  const attention = chunks.scheduling.attention;
+  const activeHalo = (Math.ceil((2 * chunks.scheduling.activeRadiusChunks) / 32) + 3) ** 2;
+  assert.ok(
+    attention.cachedChunks <= attention.historyChunkLimit + activeHalo + chunks.chunks.length,
+    'attention history exceeded its explicit cache bound',
+  );
 };
 
 const waitSettled = async (label, viewMode = 'perspective') => {
