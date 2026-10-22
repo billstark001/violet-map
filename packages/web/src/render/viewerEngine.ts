@@ -862,7 +862,7 @@ function updateChunksAndTopMap(
   engine.topMap.configure(props.world, props.dimension, offlineTopMap);
   const view = captureView(engine.activeCamera, topView, props.topClipRange);
   chunks?.update(view, now);
-  engine.topMap.update(view, now, chunks ? chunks.terrain.displayedChunkKeys() : new Set());
+  engine.topMap.update(view, now, chunks ? chunks.displayedChunkKeys() : new Set());
 
   return dimDef;
 }

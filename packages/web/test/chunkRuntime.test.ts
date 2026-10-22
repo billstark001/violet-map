@@ -11,6 +11,94 @@ import { chunkKey } from '../src/worker/protocol.js';
 
 // Drive a mesh request through the real cache/error path, with only the worker
 // boundary replaced. No browser globals or WebGL context are needed.
+test('a failed Worker send revokes the remaining dispatch plan and releases its execution slots', async (t) => {
+  const entries = [0, 4].map((cx, index) => ({
+    key: chunkKey('world', 'minecraft:overworld', cx, 0),
+    cx,
+    cz: 0,
+    state: 'stored' as const,
+    displayed: 'none' as const,
+    displayedLodStep: 0,
+    displayedVersion: -1,
+    pendingFull: true,
+    pendingLod: false,
+    pendingLodStep: 0,
+    pendingFullVersion: index + 1,
+    dirty: false,
+    dirtyToken: 0,
+    workerPins: 0,
+  }));
+  const chunks = new Map(entries.map((entry) => [entry.key, entry]));
+  const scheduler = new ChunkScheduler();
+  planFixtureDemands(scheduler, chunks, performance.now());
+  let sends = 0,
+    terminated = 0;
+  const queued: string[] = [];
+  const runtime = Object.assign(Object.create(ChunkRuntime.prototype), {
+    scheduler,
+    chunks,
+    metrics: new LoadingMetrics(),
+    disposed: false,
+    meshFlushing: false,
+    meshFlushScheduled: false,
+    activity: { meshRequests: 0 },
+    activeMeshTasks: 0,
+    workerLoads: [0, 0],
+    workerRestarts: 0,
+    versionWorker: new Map(),
+    inFlightMeshVersions: new Set(),
+    budget: { meshWorkers: 2 },
+    opts: { world: 'world', dimension: 'minecraft:overworld' },
+    workers: [0, 1].map(() => ({
+      postMessage() {
+        sends++;
+        throw new Error('Worker closed during mesh dispatch');
+      },
+      terminate() {
+        terminated++;
+      },
+    })),
+    meshJobs: new Map(
+      entries.map((entry, index) => [
+        index + 1,
+        {
+          entry,
+          kind: 'full',
+          step: 1,
+          phase: 'ready',
+          dependencies: [],
+          startedAt: performance.now(),
+        },
+      ]),
+    ),
+    ensureNeighborhoodWorkerData: () => true,
+    neighborhoodCacheParts: () => ({ stable: false, parts: {} }),
+    queueIo(_kind: string, key: string) {
+      queued.push(key);
+    },
+  });
+  t.after(() => {
+    runtime.disposed = true;
+    clearTimeout(runtime.workerRestartTimer);
+  });
+  assert.doesNotThrow(() => runtime.flushMeshQueue());
+  await nextTurn();
+  assert.equal(sends, 1, 'remaining decisions belong to the revoked Worker pool');
+  assert.equal(terminated, 2);
+  assert.equal(runtime.workerRestarts, 1);
+  assert.equal(runtime.meshJobs.size, 0);
+  assert.equal(runtime.activeMeshTasks, 0);
+  assert.equal(runtime.inFlightMeshVersions.size, 0);
+  assert.equal(runtime.versionWorker.size, 0);
+  assert.equal(runtime.meshFlushing, false);
+  assert.deepEqual(queued.sort(), entries.map((entry) => entry.key).sort());
+  for (const entry of entries) {
+    assert.equal(entry.pendingFull, false);
+    assert.equal(entry.workerPins, 0);
+    assert.equal(entry.state, 'hashed');
+  }
+});
+
 test('unavailable IndexedDB falls back to worker meshing for both full and LOD terrain', async () => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
   Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: undefined });

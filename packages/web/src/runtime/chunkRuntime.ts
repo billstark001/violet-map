@@ -208,8 +208,8 @@ export class ChunkRuntime {
   private workers: Worker[] = [];
   private workerLoads: number[] = [];
   private versionWorker = new Map<number, number>();
-  private chunks = new Map<string, ChunkEntry>();
-  private scheduler: ChunkScheduler;
+  private readonly chunks = new Map<string, ChunkEntry>();
+  private readonly scheduler: ChunkScheduler;
   private checking = 0;
   private hashTimer: ReturnType<typeof setTimeout> | null = null;
   private fetching = 0;
@@ -244,9 +244,9 @@ export class ChunkRuntime {
   // #region Lifecycle
 
   constructor(
-    readonly terrain: ChunkDisplay,
-    private initPayload: Omit<WorkerInit, 'type'>,
-    public opts: ChunkRuntimeOptions,
+    private readonly terrain: ChunkDisplay,
+    private readonly initPayload: Omit<WorkerInit, 'type'>,
+    private opts: ChunkRuntimeOptions,
     private readonly budget: ViewerResourceBudget,
   ) {
     this.scheduler = new ChunkScheduler(this.schedulerOptions());
@@ -332,10 +332,12 @@ export class ChunkRuntime {
     return chunkKey(this.opts.world, this.opts.dimension, cx, cz);
   }
   private allWorkersMask(): number {
-    return (1 << Math.max(1, this.workers.length)) - 1;
+    return (1 << this.workers.length) - 1;
   }
   private sendToWorker(workerIndex: number, msg: WorkerRequest, transfer: Transferable[] = []) {
-    this.workers[workerIndex]?.postMessage(msg, transfer);
+    const worker = this.workers[workerIndex];
+    if (!worker) throw new Error(`Worker dispatch selected unavailable Worker ${workerIndex}`);
+    worker.postMessage(msg, transfer);
   }
   private broadcast(msg: WorkerRequest) {
     for (const worker of this.workers) worker.postMessage(msg);
@@ -504,6 +506,10 @@ export class ChunkRuntime {
     };
   }
 
+  displayedChunkKeys(): ReadonlySet<string> {
+    return this.terrain.displayedChunkKeys();
+  }
+
   private applySchedulerAction(action: SchedulerAction) {
     switch (action.type) {
       case 'wantChunk':
@@ -660,7 +666,7 @@ export class ChunkRuntime {
         this.finishActiveMesh(version);
       }
       for (const { task, workerIndex } of dispatch.start)
-        this.dispatchWorkerMesh(task.entry as ChunkEntry, task.kind, task.step, task.version, workerIndex);
+        if (!this.dispatchWorkerMesh(task.entry as ChunkEntry, task.kind, task.step, task.version, workerIndex)) return;
       while (this.meshJobs.size < this.maxActiveMeshTasks() * 2) {
         const work = this.scheduler.nextWork({
           now: performance.now(),
@@ -788,7 +794,13 @@ export class ChunkRuntime {
     this.reportStats();
   }
 
-  private dispatchWorkerMesh(e: ChunkEntry, kind: MeshTaskKind, step: LodStep, version: number, workerIndex: number) {
+  private dispatchWorkerMesh(
+    e: ChunkEntry,
+    kind: MeshTaskKind,
+    step: LodStep,
+    version: number,
+    workerIndex: number,
+  ): boolean {
     const job = this.meshJobs.get(version)!;
     const cache = this.neighborhoodCacheParts(e);
     if (kind === 'full') {
@@ -815,8 +827,10 @@ export class ChunkRuntime {
     try {
       if (kind === 'full') this.sendToWorker(workerIndex, { type: 'mesh', key: e.key, version });
       else this.sendToWorker(workerIndex, { type: 'lod', key: e.key, step, version });
+      return true;
     } catch (error) {
       this.recoverWorkers(error instanceof Error ? error.message : String(error));
+      return false;
     }
   }
 
