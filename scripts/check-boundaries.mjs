@@ -12,6 +12,7 @@ const allowed = {
   admin: ['core'],
   cli: ['core', 'render', 'storage', 'server', 'resources'],
 };
+
 function files(dir) {
   return fs
     .readdirSync(dir, { withFileTypes: true })
@@ -23,11 +24,86 @@ function files(dir) {
           : [],
     );
 }
+
 const violations = [];
+
+function checkViewerImport(file, name, node, fail) {
+  const scope = file.slice('packages/web/src/'.length).split('/')[0];
+  const local = (
+    name.startsWith('.')
+      ? path
+          .relative(path.resolve('packages/web/src'), path.resolve(path.dirname(file), name))
+          .split(path.sep)
+          .join('/')
+      : name.startsWith('@violet-map/web/')
+        ? name.slice('@violet-map/web/'.length)
+        : undefined
+  )?.replace(/\.(?:[cm]?js|tsx?)$/, '');
+  const destination = local?.split('/')[0];
+  if (scope === 'scheduling' && local && !['scheduling', 'view'].includes(destination))
+    fail('scheduler depends on execution/display implementation ' + name);
+  if (scope === 'view' && local && destination !== 'view')
+    fail('view contract depends on application implementation ' + name);
+  if (['runtime', 'resources'].includes(scope) && destination === 'render')
+    fail('execution/resource owner depends on GPU implementation ' + name);
+  if (['scheduling', 'view', 'runtime'].includes(scope) && /^three(?:\/|$)/.test(name))
+    fail('graphics engine dependency in ' + scope + ': ' + name);
+  if (
+    ['scheduling', 'view'].includes(scope) &&
+    !local &&
+    !/^@violet-map\/core(?:\/|$)/.test(name) &&
+    !(
+      scope === 'view' &&
+      /^@violet-map\/render(?:\/|$)/.test(name) &&
+      ts.isImportDeclaration(node) &&
+      node.importClause?.isTypeOnly
+    )
+  )
+    fail('runtime dependency in pure viewer decision/contract ' + name);
+  if (
+    scope === 'render' &&
+    !file.endsWith('/viewerEngine.ts') &&
+    ['api', 'runtime', 'resources/client', 'resources/download'].includes(local)
+  )
+    fail('display owner depends on HTTP transport ' + name);
+}
+
+const pureViewerGlobals = new Set([
+  'window',
+  'document',
+  'navigator',
+  'performance',
+  'localStorage',
+  'indexedDB',
+  'globalThis',
+  'fetch',
+  'Worker',
+  'Image',
+  'OffscreenCanvas',
+  'AbortController',
+  'setTimeout',
+  'setInterval',
+  'requestAnimationFrame',
+  'queueMicrotask',
+  'Date',
+]);
+const decisionFiles = new Set(
+  files('packages/web/src').filter((file) => /^packages\/web\/src\/(?:scheduling|view)\//.test(file)),
+);
+const decisionProgram = ts.createProgram([...decisionFiles], {
+  noResolve: true,
+  noLib: true,
+  target: ts.ScriptTarget.Latest,
+});
+const decisionChecker = decisionProgram.getTypeChecker();
 const generatorDependency = /^(?:pngjs|minecraft-data|@msgpack\/msgpack)(?:\/|$)/;
+
 for (const [owner, dependencies] of Object.entries(allowed)) {
   for (const file of files(`packages/${owner}/src`)) {
-    const source = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+    const source = decisionFiles.has(file)
+      ? decisionProgram.getSourceFile(file)
+      : ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+    if (!source) throw new Error('missing boundary-check source: ' + file);
     const fail = (message) => violations.push(`${file}: ${message}`);
     function inspect(node) {
       let specifier;
@@ -81,6 +157,7 @@ for (const [owner, dependencies] of Object.entries(allowed)) {
           if (ts.isImportEqualsDeclaration(node) && !node.isTypeOnly) fail(`static optional runtime import ${name}`);
         }
         if (target && target !== owner && name.startsWith('.')) fail(`cross-package relative import ${name}`);
+        if (owner === 'web') checkViewerImport(file, name, node, fail);
         if (owner === 'core' && /^(?:node:)?(?:fs|path)(?:\/|$)|^@aws-sdk\//.test(name))
           fail(`platform implementation ${name}`);
         if (owner === 'storage' && generatorDependency.test(name)) fail(`resource generator dependency ${name}`);
@@ -112,6 +189,15 @@ for (const [owner, dependencies] of Object.entries(allowed)) {
         ['Worker', 'Image', 'OffscreenCanvas'].includes(node.expression.text)
       )
         fail(`browser implementation ${node.expression.text}`);
+      if (owner === 'web' && /^packages\/web\/src\/(?:scheduling|view)\//.test(file)) {
+        if (
+          ts.isIdentifier(node) &&
+          pureViewerGlobals.has(node.text) &&
+          !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) &&
+          (node.text === 'globalThis' || !decisionChecker.getSymbolAtLocation(node))
+        )
+          fail('platform global in pure viewer decision/contract: ' + node.text);
+      }
       ts.forEachChild(node, inspect);
     }
     inspect(source);
@@ -125,15 +211,19 @@ for (const [owner, dependencies] of Object.entries(allowed)) {
       fail('business module reads process.env');
   }
 }
+
 const cli = JSON.parse(fs.readFileSync('packages/cli/package.json', 'utf8'));
+
 if (
   JSON.stringify(Object.keys(cli.dependencies).filter((name) => name.startsWith('@violet-map/'))) !==
   JSON.stringify(['@violet-map/core'])
 )
   violations.push('CLI required project dependencies must be exactly core');
+
 for (const name of ['render', 'storage', 'server', 'resources'])
   if (!cli.peerDependenciesMeta?.[`@violet-map/${name}`]?.optional)
     violations.push(`CLI ${name} peer must be optional`);
+
 for (const [owner, dependencies] of Object.entries(allowed)) {
   const metadata = JSON.parse(fs.readFileSync(`packages/${owner}/package.json`, 'utf8'));
   for (const name of Object.keys(metadata.dependencies ?? {})) {
@@ -145,6 +235,7 @@ for (const [owner, dependencies] of Object.entries(allowed)) {
       violations.push(`web: React runtime manifest dependency ${name}`);
   }
 }
+
 if (violations.length) {
   console.error(violations.join('\n'));
   process.exitCode = 1;

@@ -12,44 +12,21 @@ Transient resolve/body failures retry with exponential backoff from 250 ms to 30
 
 ## Scheduling ownership
 
-Browser scheduling lives in `packages/web/src/scheduling/`; GPU display lives in `packages/web/src/render/chunkScene.ts`. Call these modules directly; there are no forwarding modules at the old rendering/cache paths or scheduler exports from `@violet-map/render`.
+The ownership rules and module map are maintained in [viewer architecture](viewer-architecture.md). The viewer remains one package; decision, execution, resources, display and observation have explicit directory boundaries enforced by the AST boundary check.
 
-| Module | Decisions and owned work |
-| --- | --- |
-| `contracts.ts` | Shared state and demand/work records; one definition of scheduler metadata and diagnostic DTOs |
-| `profiles.ts`, `chunkPolicy.ts` | Preset list, normalized constraints, quality predicates and priority rules; no transport or GPU ownership |
-| `cameraGridTracker.ts`, `chunkView.ts` | Attention integration, camera-to-grid adaptation, stable admission and desired full/LOD detail; no work queues |
-| `chunkScheduler.ts` | Priority/repair records, bounded resolve/body/mesh queues, backpressure, dispatch and retry wake times, result acceptance |
-| `chunkRetention.ts` | Eviction selection from explicit camera, capacity, protected-set and demand inputs; it never disposes resources |
-| `chunkIo.ts` | Executor-owned batch leases; entry and request identity checks prevent stale replies from crossing generations |
-| `chunkManager.ts` | Applies demand updates and executes IO/cache/Worker jobs; owns retry timers, dependency pins, Worker loads/residency and restart/disposal |
-| `loadingMetrics.ts` | Sampling, delay/slow-operation diagnostics and summary metrics; never influences admission, quality or backpressure |
-| `render/chunkScene.ts` | GPU mesh replacement, displayed coverage, section/special-model/clip visibility and geometry disposal; shares externally owned materials |
-| `topMapPlanner.ts`, `topMapManager.ts` | Pure tile candidate/LOD planning, followed by manifest/tile loading, identity-scoped retries and bounded resource retention |
-| `overlayResources.ts` | Coalesced media load queue, concurrency, reference ownership and memory admission |
-| `meshCache.ts` | Geometry-cache read deadlines, bounded write admission, usage touches and pruning |
+Browser scheduling lives in `packages/web/src/scheduling/`. Browser effects live in `runtime/` and `resources/`; GPU ownership lives in `render/`. Consumers import the actual owner directly. Removed scheduling/render/cache paths have no forwarding modules or aliases.
 
-```mermaid
-flowchart LR
-    Viewer --> Manager[ChunkManager: execute]
-    Manager --> Scheduler[ChunkScheduler: dispatch]
-    Scheduler --> View[ChunkViewPlanner: demand]
-    Scheduler --> Retention[ChunkRetention: select eviction]
-    Manager --> Scene[ChunkScene: GPU ownership]
-    Manager --> Metrics[LoadingMetrics: observe]
-```
+`ChunkScheduler` has one authoritative demand map. Executor entries contain actual operation/display state, without mirrored target/attention/priority fields or an entry-based fallback. Camera planning updates desired quality independently from task completion. Dependency and repair boosts are explicit additions to that demand.
 
-Both frame and dispatch inputs take one `ReadonlyMap` of entries. There is no second lookup callback or implicit requirement for re-iterable values. Planner results are the only source of camera demand; invalidations promote repair priority without inventing another quality target from the old displayed mesh. Queue selection and result acceptance use the same mesh-quality predicate.
+Mesh preparation and Worker execution are separate phases. Cache misses wait for inputs and then return to the scheduler's final dispatcher. Every Worker start is ranked against current demand, assigned to an available Worker and revalidated against entry identity, quality and demand age. The executor has no FIFO ready queue and cannot dispatch directly from a cache callback.
 
-Resolve work distinguishes queued `checking` from in-flight `resolving`; body work distinguishes eligible `hashed` from in-flight `fetching`. Only queued work can be selected again. Each batch captures both entry identity and a request token. Resource refreshes also capture entry, resolution and request identity, discard superseded refresh sequences, and revoke the old body lease when a newer source revision wins. A late response or failure cannot update an entry recreated at the same coordinates, and cleanup of an old request cannot release a newer lease. A body arriving while the Worker pool is absent remains eligible for dispatch instead of entering an unacknowledgeable decode.
+`TopMapScheduler` owns tile demand, coverage, quality and retention decisions. `TopMapRuntime` owns source identity and HTTP lifetime, and `TopMapScene` owns GPU resources. Late tile completion reads the latest demand instead of recalculating an alternative target in the executor.
 
-Backpressure reads current entry/task state directly. Completed display coverage stays complete when decoded inputs are released, and empty completed terrain counts as complete. Diagnostic NBT counts and reporting cadence cannot affect dispatch. Work selection returns exact future retry wake times; the executor schedules or advances one timer per IO stage and otherwise waits for actual request completion or new work.
+Overlay source refresh belongs to `OverlayRuntime`; manifest ordering, activation/suppression and curve sampling budgets belong to pure overlay planners. `OverlayScene` applies those plans, owns graphics resources and receives a pinned-byte media loader. A shared media pool owns reference counting and cancellation.
 
-Changing queue/frame/retention limits does not reseed camera attention. Normalization reserves at least the guaranteed presence disk and a conservative center-ray margin, and expands an inconsistent active radius rather than silently dropping promised detail. Full-detail cells already protected by the current view are excluded from downgrade scans.
+Camera snapshots, spatial limits and surface-representation capability are shared data contracts. Sliced top views request full models instead of generating hidden LOD meshes; unusable Top Map surfaces are not admitted. GPU clipping/connectivity/frustum tests remain display concerns.
 
-`render/` owns camera controls, materials, visibility and GPU pass execution. Its viewer loop calls the scheduling owners; it does not choose chunk priorities or run separate terrain queues. Mesh computation stays in `worker/`, with dispatch owned by `chunkManager.ts`. Shared resource transport, view renewal and download admission stay together in `resources/`; server-side source/admission scheduling stays in the resources package because it has a different process, budget and cancellation lifetime.
-
-Quality and admission are separate constraints: completed work must not cause repeated evictions, but a capacity bound must not silently replace requested full-detail terrain with coarse meshes. The transparency targets retain the original 3,145,728-pixel cap (192 MiB before driver overhead); rendering optimizations must preserve that resolution and the sixteen depth bins.
+Backpressure reads actual operation state. Cached or completed empty geometry remains complete when decoded inputs are released. Retry deadlines are explicit and diagnostics never influence dispatch. Device detection is separate from the pure budget policy, and every profile preserves the configured full-detail disk.
 
 ## Repeatable real-world check
 

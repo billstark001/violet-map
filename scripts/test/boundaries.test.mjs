@@ -9,6 +9,7 @@ import { test } from 'node:test';
 
 const execute = promisify(execFile);
 const project = fileURLToPath(new URL('../../', import.meta.url));
+
 test('boundary checker rejects type/reexport/dynamic/relative imports and optional-peer loading escapes', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-boundaries-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -48,5 +49,28 @@ test('boundary checker rejects type/reexport/dynamic/relative imports and option
     await fs.writeFile(file, code);
     await assert.rejects(run(), error);
     await fs.unlink(file);
+  }
+  for (const [file, code, error] of [
+    [
+      'scheduling/boundary-probe.ts',
+      'import type { OverlayDisplay } from "../runtime/overlayDisplay";',
+      /scheduler depends/,
+    ],
+    ['scheduling/boundary-probe.ts', 'export * from "../resources/download";', /scheduler depends/],
+    ['scheduling/boundary-probe.ts', 'const clock = performance.now();', /platform global in pure viewer/],
+    ['scheduling/boundary-probe.ts', 'const browser = globalThis.navigator;', /platform global in pure viewer/],
+    ['scheduling/boundary-probe.ts', 'const send = fetch;', /platform global in pure viewer/],
+    ['scheduling/boundary-probe.ts', 'const { now } = performance;', /platform global in pure viewer/],
+    ['scheduling/boundary-probe.ts', 'const clock = performance["now"]();', /platform global in pure viewer/],
+    ['view/boundary-probe.ts', 'import "../logger";', /view contract depends/],
+    ['runtime/boundary-probe.ts', 'import type { ChunkScene } from "../render/chunkScene";', /depends on GPU/],
+    ['resources/boundary-probe.ts', 'import "../render/overlayMedia";', /depends on GPU/],
+    ['render/boundary-probe.ts', 'const io = import("../api");', /depends on HTTP transport/],
+  ]) {
+    const probe = path.join(root, 'packages/web/src', file);
+    await fs.mkdir(path.dirname(probe), { recursive: true });
+    await fs.writeFile(probe, code);
+    await assert.rejects(run(), error);
+    await fs.unlink(probe);
   }
 });

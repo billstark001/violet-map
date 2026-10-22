@@ -34,6 +34,7 @@ Docker equivalents are `docker compose --profile light up` and `docker compose -
 | [World storage and synchronization](docs/world-storage.md) | Local, S3, and server storage; archive identity checks and sync commands. |
 | [Server configuration](docs/server-configuration.md) | Deployment YAML, environment variables, and defaults. |
 | [Independent deployment](docs/deployment.md) | Production artifacts, Docker services, static API configuration and subpaths. |
+| [Viewer architecture](docs/viewer-architecture.md) | Scheduling, runtime, resource and GPU ownership; quality contracts and enforced module boundaries. |
 | [Development and releases](docs/development.md) | Workspace packages, validation, version policy, and CI/CD. |
 | [Depth-binned transparency](docs/transparency.md) | OIT pipeline, GPU requirements, memory bounds and synthetic-world rendering validation. |
 
