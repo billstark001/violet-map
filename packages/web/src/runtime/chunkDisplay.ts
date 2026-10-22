@@ -4,7 +4,7 @@ import type { ChunkDisplayState, LodStep, TerrainChunk, TerrainMesh } from '../v
 
 export interface ChunkDisplay {
   readonly meshBytes: number;
-  readonly view: { topDownView: boolean; topClipRange: TopClipRange };
+  readonly view: { readonly topDownView: boolean; readonly topClipRange: Readonly<TopClipRange> };
   setView(view: ViewState): void;
   updateVisibility(fullDetailKeys: ReadonlySet<string>): void;
   updateSurface(key: string, surfaceY: number): void;

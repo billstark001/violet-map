@@ -15,6 +15,5 @@ export interface TopMapDisplay {
   setWanted(wanted: ReadonlySet<string>): void;
   snapshot(key: string): TopMapTileDisplay;
   remove(key: string): void;
-  clear(): void;
   dispose(): void;
 }

@@ -418,11 +418,6 @@ export class ChunkRuntime {
     const e = this.chunks.get(this.key(cx, cz));
     return e && e.state !== 'absent' && e.state !== 'error' && e.displayed !== 'none' ? e.biome : null;
   }
-  surfaceYAt(cx: number, cz: number): number | null {
-    const e = this.chunks.get(this.key(cx, cz));
-    return e && e.state !== 'absent' && e.state !== 'error' && e.displayed !== 'none' ? e.surfaceY : null;
-  }
-
   setScheduling(scheduling: ChunkSchedulingTuning | undefined) {
     this.opts = { ...this.opts, scheduling };
   }

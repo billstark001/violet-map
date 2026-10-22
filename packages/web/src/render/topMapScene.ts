@@ -150,7 +150,7 @@ export class TopMapScene implements TopMapDisplay {
     this.tiles.delete(key);
   }
 
-  clear() {
+  private clear() {
     for (const key of this.tiles.keys()) this.remove(key);
   }
 
