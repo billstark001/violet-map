@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { assertFullDetailCoverage } from '../bench/loading-assertions.mjs';
+import { assertFullDetailCoverage, sourceCoverageFromResponse } from '../bench/loading-assertions.mjs';
 
 test('quality acceptance uses the service world ID and distinguishes source holes from coarse terrain', () => {
   const chunk = { cx: -1, cz: -1, state: 'stored', displayed: 'full' };
@@ -22,5 +22,23 @@ test('quality acceptance uses the service world ID and distinguishes source hole
   assert.doesNotThrow(() => assertFullDetailCoverage(manager, 'Surv#Vanilla', coverage));
   assert.throws(() => assertFullDetailCoverage(manager, 'Surv#Vanilla', new Map()), /not observed/);
   coverage.values().next().value.regions.set('-1,-1', undefined);
-  assert.throws(() => assertFullDetailCoverage(manager, 'Surv#Vanilla', coverage), /never admitted/);
+  assert.throws(() => assertFullDetailCoverage(manager, 'Surv#Vanilla', coverage), /invalid source region mask/);
+});
+
+test('quality acceptance rejects malformed or partially unmasked source projections', () => {
+  const mask = Buffer.alloc(128).toString('base64');
+  assert.equal(sourceCoverageFromResponse({ regions: [{ x: 0, z: 0, mask }], chunks: [] }).regions.size, 1);
+  for (const invalid of [
+    {},
+    { regions: [] },
+    {
+      regions: [
+        { x: 0, z: 0, mask },
+        { x: 1, z: 0 },
+      ],
+      chunks: [],
+    },
+    { regions: [{ x: 0, z: 0, mask: 'invalid' }], chunks: [] },
+  ])
+    assert.throws(() => sourceCoverageFromResponse(invalid), /invalid source/);
 });

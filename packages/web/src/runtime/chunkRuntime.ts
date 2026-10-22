@@ -6,7 +6,7 @@ import { ChunkIoBatch } from './chunkIo';
 import type { ChunkDisplay } from './chunkDisplay';
 import { LoadingMetrics } from '../diagnostics/loadingMetrics';
 
-import { type ChunkCoverage, type ChunkPayload } from '@violet-map/core/contracts';
+import { type ChunkPayload } from '@violet-map/core/contracts';
 import type { DimensionDef } from '@violet-map/core/domain';
 import { ResourceError } from '@violet-map/core/resources';
 
@@ -15,6 +15,7 @@ import type { TopClipRange } from '../view/worldGeometry';
 import { resolveChunks, readChunks, fetchChunkSourceCoverage, type ResolvedChunk } from '../api';
 import { debugLog, isDebugLoggingEnabled } from '../logger';
 import { getCachedMesh, putCachedMesh, type MeshCacheKeyParts } from '../resources/meshCache';
+import type { ChunkSourceCoverage } from '../resources/chunkCoverage';
 import { type TerrainMesh } from '../view/terrain';
 import { chunkKey, type WorkerInit, type WorkerRequest, type WorkerResponse } from '../worker/protocol';
 import { ChunkScheduler } from '../scheduling/chunkScheduler';
@@ -42,13 +43,6 @@ type MeshCacheBaseParts = Omit<MeshCacheKeyParts, 'mode' | 'step'>;
 interface CachePartsResult {
   parts: MeshCacheBaseParts;
   stable: boolean;
-}
-
-interface ChunkSourceCoverage {
-  regions: Set<string>;
-  regionMasks: Map<string, Uint8Array>;
-  chunks: Set<string>;
-  hasRegionMasks: boolean;
 }
 
 export interface ChunkEntryDiagnosticSnapshot {
@@ -107,53 +101,15 @@ export interface ChunkRuntimeDiagnosticSnapshot {
     lastProgressAt: number;
   };
   coverage: {
-    loaded: boolean;
+    status: 'loading' | 'ready' | 'error';
     regionCount: number;
-    regionMaskCount: number;
     directChunkCount: number;
+    error: string | null;
   };
   chunks: ChunkEntryDiagnosticSnapshot[];
 }
 
 type IoQueueKind = 'hash' | 'fetch';
-
-function normalizeChunkSourceCoverage(payload: ChunkCoverage): ChunkSourceCoverage {
-  const regions = new Set<string>();
-  const regionMasks = new Map<string, Uint8Array>();
-  const chunks = new Set<string>();
-  let hasRegionMasks = false;
-
-  for (const region of payload.regions ?? []) {
-    if (!Number.isInteger(region.x) || !Number.isInteger(region.z)) continue;
-    const key = `${region.x},${region.z}`;
-    regions.add(key);
-    if (typeof region.mask === 'string') {
-      const mask = decodeCoverageMask(region.mask);
-      if (mask.byteLength >= 128) {
-        regionMasks.set(key, mask);
-        hasRegionMasks = true;
-      }
-    }
-  }
-
-  for (const chunk of payload.chunks ?? []) {
-    if (!Number.isInteger(chunk.cx) || !Number.isInteger(chunk.cz)) continue;
-    chunks.add(`${chunk.cx},${chunk.cz}`);
-  }
-
-  return { regions, regionMasks, chunks, hasRegionMasks };
-}
-
-function decodeCoverageMask(value: string): Uint8Array {
-  try {
-    const binary = atob(value);
-    const out = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
-    return out;
-  } catch {
-    return new Uint8Array(0);
-  }
-}
 
 interface ChunkEntry extends ChunkSchedulerEntry, ChunkDisplayState {
   ioRequest?: symbol;
@@ -230,6 +186,7 @@ export class ChunkRuntime {
   private coverageSeq = 0;
   private refreshSeq = 0;
   private chunkCoverage: ChunkSourceCoverage | null = null;
+  private coverageError: string | null = null;
   onStats?: (s: ChunkSchedulerStats) => void;
 
   // #region Lifecycle
@@ -361,10 +318,11 @@ export class ChunkRuntime {
   private async loadChunkSourceCoverage() {
     const seq = ++this.coverageSeq;
     this.chunkCoverage = null;
+    this.coverageError = null;
     try {
       const payload = await fetchChunkSourceCoverage(this.opts.world, this.opts.dimension, this.requests.signal);
       if (this.disposed || seq !== this.coverageSeq) return;
-      this.chunkCoverage = normalizeChunkSourceCoverage(payload);
+      this.chunkCoverage = payload;
       let markedAbsent = 0;
       for (const e of this.chunks.values()) {
         if (this.hasChunkSourceAt(e.cx, e.cz) !== false) continue;
@@ -376,7 +334,6 @@ export class ChunkRuntime {
         world: this.opts.world,
         dimension: this.opts.dimension,
         regions: this.chunkCoverage.regions.size,
-        regionMasks: this.chunkCoverage.regionMasks.size,
         chunks: this.chunkCoverage.chunks.size,
         markedAbsent,
       });
@@ -384,10 +341,11 @@ export class ChunkRuntime {
     } catch (error) {
       if (this.disposed || seq !== this.coverageSeq) return;
       this.chunkCoverage = null;
+      this.coverageError = error instanceof Error ? error.message : String(error);
       debugLog('chunk-runtime', 'coverage-error', {
         world: this.opts.world,
         dimension: this.opts.dimension,
-        error: error instanceof Error ? error.message : String(error),
+        error: this.coverageError,
       });
     }
   }
@@ -397,10 +355,7 @@ export class ChunkRuntime {
     if (!coverage) return null;
     if (coverage.chunks.has(`${cx},${cz}`)) return true;
     const regionKey = `${Math.floor(cx / 32)},${Math.floor(cz / 32)}`;
-    if (!coverage.regions.has(regionKey)) return false;
-    if (!coverage.hasRegionMasks) return true;
-
-    const mask = coverage.regionMasks.get(regionKey);
+    const mask = coverage.regions.get(regionKey);
     if (!mask) return false;
     const index = (cx & 31) + ((cz & 31) << 5);
     return (mask[index >> 3] & (1 << (index & 7))) !== 0;
@@ -481,10 +436,10 @@ export class ChunkRuntime {
       },
       activity: { ...this.activity },
       coverage: {
-        loaded: coverage !== null,
+        status: coverage ? 'ready' : this.coverageError ? 'error' : 'loading',
         regionCount: coverage?.regions.size ?? 0,
-        regionMaskCount: coverage?.regionMasks.size ?? 0,
         directChunkCount: coverage?.chunks.size ?? 0,
+        error: this.coverageError,
       },
       chunks,
     };

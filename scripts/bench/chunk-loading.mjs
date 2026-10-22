@@ -4,7 +4,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { chromium } from 'playwright';
 import { chromiumExecutablePath } from '../helpers/browser.mjs';
-import { assertFullDetailCoverage } from './loading-assertions.mjs';
+import { assertFullDetailCoverage, sourceCoverageFromResponse } from './loading-assertions.mjs';
 
 const { values } = parseArgs({
   options: {
@@ -148,29 +148,24 @@ page.on('console', (message) => {
 // source cells are valid holes, but a generated cell cannot silently stay coarse.
 const sourceCoverage = new Map();
 
-page.on('response', async (response) => {
-  const coveragePath = new URL(response.url()).pathname.match(/\/api\/worlds\/([^/]+)\/([^/]+)\/chunk-coverage$/);
-  if (response.ok() && coveragePath) {
-    const coverage = await response.json().catch(() => undefined);
-    if (coverage) {
+page.on('response', (response) => {
+  const task = (async () => {
+    const coveragePath = new URL(response.url()).pathname.match(/\/api\/worlds\/([^/]+)\/([^/]+)\/chunk-coverage$/);
+    if (response.ok() && coveragePath) {
+      const coverage = await response.json();
       const key = `${decodeURIComponent(coveragePath[1])}\0${decodeURIComponent(coveragePath[2])}`;
-      sourceCoverage.set(key, {
-        chunks: new Set(coverage.chunks.map(({ cx, cz }) => `${cx},${cz}`)),
-        regions: new Map(
-          coverage.regions.map(({ x, z, mask }) => [
-            `${x},${z}`,
-            typeof mask === 'string' ? Buffer.from(mask, 'base64') : undefined,
-          ]),
-        ),
-      });
+      sourceCoverage.set(key, sourceCoverageFromResponse(coverage));
     }
-  }
-  if (response.status() >= 400)
-    report.responses.push({
-      url: response.url(),
-      status: response.status(),
-      body: await response.text().catch(() => ''),
-    });
+    if (response.status() >= 400)
+      report.responses.push({
+        url: response.url(),
+        status: response.status(),
+        body: await response.text().catch(() => ''),
+      });
+  })()
+    .catch((error) => report.failures.push(error.stack || String(error)))
+    .finally(() => networkTasks.delete(task));
+  networkTasks.add(task);
 });
 
 let resolveFailure = false,
@@ -531,6 +526,7 @@ try {
     await waitSettled('perspective-restored');
     report.viewsPassed = true;
   }
+  await Promise.allSettled([...networkTasks]);
   assert.deepEqual(report.failures, []);
   assert.ok(
     report.responses.every((r) => {

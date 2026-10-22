@@ -3,7 +3,6 @@ import type { AssetBundle, BlockInfoMap } from '@violet-map/core/assets';
 import { mapWithConcurrency } from '@violet-map/core/async';
 import type {
   AtlasDocument,
-  ChunkCoverage,
   ChunkPayload,
   DiagnosticUploadResponse,
   TextureAtlasManifest,
@@ -22,6 +21,7 @@ import {
 } from '@violet-map/core/resources';
 import { resourceClient } from './resources/client';
 import { resourceDownloader } from './resources/download';
+import { decodeChunkCoverage } from './resources/chunkCoverage';
 import { apiFetch } from './runtime';
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
@@ -253,11 +253,13 @@ export const fetchTopMapManifest = (world: string, dim: string, signal?: AbortSi
     signal,
   );
 
-export const fetchChunkSourceCoverage = (world: string, dim: string, signal?: AbortSignal) =>
-  viewJson<ChunkCoverage>(
-    world,
-    `api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/chunk-coverage`,
-    signal,
+export const fetchChunkSourceCoverage = async (world: string, dim: string, signal?: AbortSignal) =>
+  decodeChunkCoverage(
+    await viewJson<unknown>(
+      world,
+      `api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/chunk-coverage`,
+      signal,
+    ),
   );
 
 export async function uploadDiagnosticSnapshot(snapshot: unknown, token?: string): Promise<DiagnosticUploadResponse> {
