@@ -5,13 +5,19 @@ import type { ObjectReader } from '@violet-map/core/storage';
 import { verifyArtifact } from '@violet-map/storage';
 import type { WorldSource } from './sources/worldChunks.js';
 import { prepareTopMapRegion, topMapAction, topMapParameters } from './topMapDependencies.js';
+import { RevisionMemo } from './revisionMemo.js';
 
 export function createTopMapSource(
   reader: ObjectReader,
   source: () => Pick<WorldSource, 'readChunks'>,
   environment: () => Promise<string>,
   dimensions: () => Promise<import('@violet-map/core/domain').DimensionMap>,
+  options?: {
+    metadataBytes: number;
+    regionRevision(world: string, dim: string, rx: number, rz: number): Promise<string | undefined>;
+  },
 ) {
+  const terrainDigests = new RevisionMemo(options?.metadataBytes ?? 0);
   async function getTopMapManifest(world: string) {
     assertWorldName(world);
     const bytes = await reader.readRange(`${world}/.violet-map/top-map/manifest.json`, 0, 1024 ** 2 + 1);
@@ -52,10 +58,14 @@ export function createTopMapSource(
     const top = (await getTopMapManifest(world))?.dimensions[dimension]?.topMap;
     const entry = top?.regions.find((r) => r.x === rx && r.z === rz);
     if (!entry || !top) return null;
-    const terrain = await prepareTopMapRegion(source(), world, dimension, rx, rz);
+    const terrain = await terrainDigests.get(
+      JSON.stringify([world, dimension, rx, rz]),
+      () => options?.regionRevision(world, dimension, rx, rz) ?? Promise.resolve(undefined),
+      async () => (await prepareTopMapRegion(source(), world, dimension, rx, rz)).digest,
+    );
     if (
       entry.hash !==
-      topMapAction(terrain.digest, top.dependency!.environment, topMapParameters(top, top.dependency!.hasSkyLight))
+      topMapAction(terrain, top.dependency!.environment, topMapParameters(top, top.dependency!.hasSkyLight))
     )
       throw new ResourceError('TOPMAP_REBAKE_REQUIRED', 'effective terrain changed; rebake this topmap region');
     const ref = entry.artifact!;

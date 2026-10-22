@@ -24,11 +24,14 @@ export async function prepareTopMapRegion(
   const dependencies: { cx: number; cz: number; digest: string | null }[] = [];
   const entries = new Map<string, { col: ReturnType<typeof parseChunkColumn>; litSky: boolean; litBlock: boolean }>();
   let inputBytes = 0;
-  for (let z = 0; z < 32; z++)
-    for (let x = 0; x < 32; x++) {
-      const cx = rx * 32 + x,
-        cz = rz * 32 + z;
-      const chunk = (await source.readChunks(world, dimension, [{ cx: cx, cz: cz }]))[0] ?? null;
+  // Two decoded columns at a time preserve the work bound even for maximum
+  // sized NBT inputs, while sharing layout/header/revision probes.
+  for (let offset = 0; offset < 1024; offset += 2) {
+    const coordinates = [offset, offset + 1].map((i) => ({ cx: rx * 32 + (i % 32), cz: rz * 32 + Math.floor(i / 32) }));
+    const chunks = await source.readChunks(world, dimension, coordinates);
+    for (let index = 0; index < coordinates.length; index++) {
+      const { cx, cz } = coordinates[index];
+      const chunk = chunks[index] ?? null;
       dependencies.push({ cx, cz, digest: chunk?.terrainDigest ?? null });
       if (chunk && columns) {
         inputBytes += chunk.data.byteLength;
@@ -38,6 +41,7 @@ export async function prepareTopMapRegion(
         entries.set(`${cx},${cz}`, { col, litSky: col.hasStoredSkyLight, litBlock: col.hasStoredBlockLight });
       }
     }
+  }
   return { digest: sha256(canonicalJson(dependencies)), entries };
 }
 

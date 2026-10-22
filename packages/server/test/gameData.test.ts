@@ -5,6 +5,32 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { loadServerConfig } from '../src/configuration.js';
 import { createGameDataService } from '../src/gameData.js';
+import { LocalStorage } from '@violet-map/storage/local';
+
+test('game data rejects oversized selected input before reading a body and rejects invalid UTF-8', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'violet-bounded-data-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const config = loadServerConfig({ env: { DEPLOYMENT_PROFILE: 'public', DATA_DIR: dir }, cwd: dir });
+  const overrides = new LocalStorage(dir);
+  let bodyReads = 0;
+  const range = overrides.readRange.bind(overrides);
+  overrides.readRange = async (...args) => {
+    bodyReads++;
+    return range(...args);
+  };
+  const key = `versions/${config.minecraft.version}/biomes.json`;
+  await overrides.replace(key, new Uint8Array(8 * 1024 ** 2 + 1));
+  const data = createGameDataService(config, overrides);
+  await assert.rejects(data.readBiomes(), { code: 'RESOURCE_BUSY' });
+  assert.equal(bodyReads, 0);
+  await overrides.replace(key, new Uint8Array([0x22, 0xff, 0x22]));
+  await assert.rejects(data.readBiomes(), /invalid JSON in versions/);
+  await overrides.replace(key, new TextEncoder().encode('{"first":{}}'));
+  const first = await data.revision();
+  await overrides.replace(key, new TextEncoder().encode('{"other":{}}'));
+  assert.notEqual(await data.revision(), first);
+  assert.deepEqual(await data.readBiomes(), { other: {} });
+});
 
 test('a malformed versioned data file reports its path instead of falling back', async (t) => {
   const config = loadServerConfig();

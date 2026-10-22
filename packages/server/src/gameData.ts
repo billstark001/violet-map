@@ -2,9 +2,10 @@ import { type BlockInfo } from '@violet-map/core/assets';
 import { defaultDataUrl } from '@violet-map/core/defaults';
 import { type BiomeMap, type DimensionMap } from '@violet-map/core/domain';
 import type { AtomicObjectStorage } from '@violet-map/core/storage';
+import { canonicalJson, ResourceError } from '@violet-map/core/resources';
+import { sha256 } from '@violet-map/storage';
 import { createGameDataSource } from '@violet-map/resources/game-data';
 import { LocalStorage } from '@violet-map/storage/local';
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ServerConfig } from './configuration.js';
@@ -14,9 +15,53 @@ export function createGameDataService(config: ServerConfig, overrides?: AtomicOb
 
   const defaultsDir = path.dirname(fileURLToPath(defaultDataUrl('biomes.json')));
   const dataFileInflight = new Map<string, Promise<unknown>>();
+  const maxBytes = 8 * 1024 ** 2;
 
-  function isMissingFile(error: unknown): boolean {
-    return (error as NodeJS.ErrnoException)?.code === 'ENOENT';
+  async function selectInput(name: string) {
+    const files = [
+      path.join(config.data.dir, 'versions', config.minecraft.version, name),
+      path.join(config.data.dir, name),
+      path.join(defaultsDir, 'versions', config.minecraft.version, name),
+      path.join(defaultsDir, name),
+    ];
+    const candidates = [
+      ...(overrides
+        ? [`versions/${config.minecraft.version}/${name}`, name].map((key) => ({ reader: overrides, key, label: key }))
+        : []),
+      ...files.map((file) => ({ reader: new LocalStorage(path.dirname(file)), key: path.basename(file), label: file })),
+    ];
+    for (const candidate of candidates) {
+      const before = await candidate.reader.stat(candidate.key);
+      if (!before) continue;
+      if (before.size > maxBytes)
+        throw new ResourceError('RESOURCE_BUSY', `game data exceeds input budget: ${candidate.label}`);
+      return {
+        label: candidate.label,
+        revision:
+          before.etag && !/^W\//i.test(before.etag)
+            ? canonicalJson([candidate.label, before.size, before.etag])
+            : undefined,
+        async read() {
+          const bytes = await candidate.reader.readRange(candidate.key, 0, before.size + 1);
+          const after = await candidate.reader.stat(candidate.key);
+          if (
+            !bytes ||
+            bytes.length !== before.size ||
+            !after ||
+            after.size !== before.size ||
+            after.etag !== before.etag ||
+            after.modifiedAt !== before.modifiedAt
+          )
+            throw new ResourceError(
+              'SOURCE_SNAPSHOT_CHANGED',
+              `game data changed during read: ${candidate.label}`,
+              true,
+            );
+          return bytes;
+        },
+      };
+    }
+    throw new Error(`missing data file: ${name}`);
   }
 
   async function readDataFile<T>(name: string): Promise<T> {
@@ -24,38 +69,13 @@ export function createGameDataService(config: ServerConfig, overrides?: AtomicOb
     if (pending) return pending as Promise<T>;
 
     const load = (async () => {
-      if (overrides) {
-        for (const key of [`versions/${config.minecraft.version}/${name}`, name]) {
-          const bytes = await overrides.read(key);
-          if (bytes) {
-            const value = JSON.parse(new TextDecoder().decode(bytes)) as T;
-            return value;
-          }
-        }
+      const input = await selectInput(name);
+      const bytes = await input.read();
+      try {
+        return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as T;
+      } catch (error) {
+        throw new Error(`invalid JSON in ${input.label}`, { cause: error });
       }
-      const candidates = [
-        path.join(config.data.dir, 'versions', config.minecraft.version, name),
-        path.join(config.data.dir, name),
-        path.join(defaultsDir, 'versions', config.minecraft.version, name),
-        path.join(defaultsDir, name),
-      ];
-      for (const file of candidates) {
-        let text: string;
-        try {
-          text = await fs.readFile(file, 'utf8');
-        } catch (error) {
-          if (isMissingFile(error)) continue;
-          throw error;
-        }
-        let value: T;
-        try {
-          value = JSON.parse(text) as T;
-        } catch (error) {
-          throw new Error(`invalid JSON in ${file}`, { cause: error });
-        }
-        return value;
-      }
-      throw new Error(`missing data file: ${name}`);
     })();
     dataFileInflight.set(name, load);
     try {
@@ -70,7 +90,9 @@ export function createGameDataService(config: ServerConfig, overrides?: AtomicOb
   async function writeDataFile(name: string, value: unknown): Promise<void> {
     const json = JSON.stringify(value, null, overrides ? undefined : 2);
     if (json === undefined) throw new TypeError('data file must contain a JSON value');
-    await writableData.replace(name, new TextEncoder().encode(json), 'application/json');
+    const bytes = new TextEncoder().encode(json);
+    if (bytes.length > maxBytes) throw new ResourceError('RESOURCE_BUSY', 'game data exceeds input budget');
+    await writableData.replace(name, bytes, 'application/json');
     clearBlockInfo();
     dataFileInflight.delete(name);
   }
@@ -87,7 +109,15 @@ export function createGameDataService(config: ServerConfig, overrides?: AtomicOb
     dataVersion: config.minecraft.dataVersion,
     readOverrides: () => readDataFile<Record<string, Partial<BlockInfo>>>('block-overrides.json'),
   });
-  return { writeDataFile, readBiomes, readDimensions, clearGameDataCaches, buildBlockInfo };
+  async function revision() {
+    const inputs = [];
+    for (const name of ['block-overrides.json', 'biomes.json', 'dimensions.json']) {
+      const input = await selectInput(name);
+      inputs.push(input.revision ?? canonicalJson([input.label, sha256(await input.read())]));
+    }
+    return sha256(canonicalJson([config.minecraft.dataVersion, inputs]));
+  }
+  return { writeDataFile, readBiomes, readDimensions, clearGameDataCaches, buildBlockInfo, revision };
 }
 
 export type GameDataService = ReturnType<typeof createGameDataService>;

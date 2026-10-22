@@ -67,6 +67,60 @@ test('source revisions invalidate cached terrain/entities without becoming conte
   assert.notEqual(changed.contentDigest, first.contentDigest);
 });
 
+test('terrain dependency revisions include overrides and additions but exclude entity-only changes', async (t) => {
+  const { storage, source } = await sourceFixture(t);
+  await storage.write('world/region/r.0.0.mca', savedRegion());
+  const before = await source.regionRevision('world', 'minecraft:overworld', 0, 0);
+  assert.ok(before);
+  await storage.write('world/entities/r.0.0.mca', savedRegion());
+  assert.equal(await source.regionRevision('world', 'minecraft:overworld', 0, 0), before);
+  await storage.write('world/chunks/minecraft%3Aoverworld/c.0.0.nbt', new Uint8Array([10, 0, 0, 0]));
+  const override = await source.regionRevision('world', 'minecraft:overworld', 0, 0);
+  assert.notEqual(override, before);
+  await storage.write('world/chunks/minecraft%3Aoverworld/c.32.0.nbt', new Uint8Array([10, 0, 0, 1]));
+  assert.equal(await source.regionRevision('world', 'minecraft:overworld', 0, 0), override);
+  const stat = storage.stat.bind(storage);
+  t.mock.method(storage, 'stat', async (key) => {
+    const info = await stat(key);
+    return info ? { ...info, etag: 'W/"weak"' } : null;
+  });
+  assert.equal(await source.regionRevision('world', 'minecraft:overworld', 0, 0), undefined);
+});
+
+test('batched metadata probes preserve independent request failures for a corrupt neighboring region', async (t) => {
+  const { source, storage } = await sourceFixture(t);
+  await storage.write('world/region/r.0.0.mca', savedRegion());
+  await storage.write('world/region/r.1.0.mca', new Uint8Array([1]));
+  const [healthy, corrupt] = await Promise.allSettled([
+    source.readChunks('world', 'minecraft:overworld', [{ cx: 0, cz: 0 }]),
+    source.readChunks('world', 'minecraft:overworld', [{ cx: 32, cz: 0 }]),
+  ]);
+  assert.equal(healthy.status, 'fulfilled');
+  if (healthy.status === 'fulfilled') assert.deepEqual(healthy.value[0]?.data, new Uint8Array([10, 0, 0, 0]));
+  assert.equal(corrupt.status, 'rejected');
+  if (corrupt.status === 'rejected') assert.equal(corrupt.reason.code, 'RESOURCE_INTEGRITY_FAILED');
+});
+
+test('cancellation removes a waiting snapshot owner without blocking its replacement', async () => {
+  const gate = new SnapshotGate(2, 1),
+    held = deferred();
+  const active = gate.write(async () => held.promise);
+  const controller = new AbortController();
+  const waiting = gate.read(
+    async () => {
+      throw new Error('canceled read entered snapshot');
+    },
+    undefined,
+    controller.signal,
+  );
+  controller.abort(new Error('left queue'));
+  await assert.rejects(waiting, /left queue/);
+  const replacement = gate.read(async () => 'new owner');
+  held.release();
+  await active;
+  assert.equal(await replacement, 'new owner');
+});
+
 test('bounded observations coalesce and detect changed bytes with unchanged weak file metadata', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: 10000 });
   const coordinator = new InvalidationCoordinator();

@@ -11,7 +11,7 @@ import {
   VANILLA_DIMENSION_IDS,
 } from '@violet-map/core/domain';
 import { parseRegionFileName, regionChunkRange, parseRegionChunkRecord } from '@violet-map/core/region';
-import { ResourceError } from '@violet-map/core/resources';
+import { canonicalJson, ResourceError } from '@violet-map/core/resources';
 import type { ObjectReader, StoredFileInfo } from '@violet-map/core/storage';
 import { cleanStoragePath, sha256 } from '@violet-map/storage';
 import type { ObjectScanner } from '@violet-map/storage';
@@ -484,6 +484,29 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     }
     return [...out.values()].sort((a, b) => a.cx - b.cx || a.cz - b.cz);
   }
+  const inspections = new Map<string, Promise<{ regionBase: string; entityBase: string; hasOverrides: boolean }>>();
+  async function inspectLayout(world: string, dim: string) {
+    const key = JSON.stringify([storageCacheGeneration, world, dim]);
+    const known = inspections.get(key);
+    if (known) return known;
+    if (inspections.size >= MAX_PARALLEL_STORAGE_READS)
+      throw new ResourceError('RESOURCE_BUSY', 'source inspection limit exhausted', true);
+    const owned = Promise.all([
+      regionDir(world, dim),
+      entityDir(world, dim),
+      worldStorage.listDirectories(`${world}/chunks`),
+    ]).then(([regionBase, entityBase, directories]) => ({
+      regionBase,
+      entityBase,
+      hasOverrides: directories.includes(dimDirName(dim)),
+    }));
+    inspections.set(key, owned);
+    try {
+      return await owned;
+    } finally {
+      if (inspections.get(key) === owned) inspections.delete(key);
+    }
+  }
   async function inspectChunks(
     world: string,
     dim: string,
@@ -491,15 +514,10 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
   ): Promise<ChunkMetadata[]> {
     assertWorldName(world);
     const overrideDirectory = chunkOverrideDir(world, dim);
-    const [regionBase, entityBase, overrideDirectories] = await Promise.all([
-      regionDir(world, dim),
-      entityDir(world, dim),
-      worldStorage.listDirectories(`${world}/chunks`),
-    ]);
+    const { regionBase, entityBase, hasOverrides } = await inspectLayout(world, dim);
     // Most archives contain only MCA regions. One delimiter listing avoids a
     // missing-object HEAD for every requested chunk; writes invalidate the
     // storage directory cache, and external changes follow its configured TTL.
-    const hasOverrides = overrideDirectories.includes(dimDirName(dim));
     const out = new Array<ChunkMetadata>(chunks.length);
     const byRegion = new Map<
       string,
@@ -584,6 +602,20 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     });
 
     return out;
+  }
+  async function regionRevision(world: string, dim: string, rx: number, rz: number) {
+    const dir = await regionDir(world, dim);
+    const region = await worldStorage.stat(regionPathFromDir(dir, rx, rz));
+    const inputs: (import('@violet-map/core/storage').StoredFileInfo | null)[] = [region];
+    const files = await worldStorage.list(chunkOverrideDir(world, dim));
+    if (files.length > 32768) throw new ResourceError('RESOURCE_BUSY', 'override inventory exceeds metadata budget');
+    for (const file of files) {
+      const match = CHUNK_RE.exec(file.path.split('/').pop() ?? '');
+      if (match && Math.floor(Number(match[1]) / 32) === rx && Math.floor(Number(match[2]) / 32) === rz)
+        inputs.push(file);
+    }
+    if (inputs.some((info) => info && (!info.etag || /^W\//i.test(info.etag)))) return undefined;
+    return sha256(canonicalJson(inputs.map((info) => (info ? [info.path, info.size, info.etag] : null))));
   }
   async function readChunks(
     world: string,
@@ -692,6 +724,7 @@ export function createWorldSource(worldStorage: ObjectReader, config: WorldSourc
     listChunkSourceCoverage,
     inspectChunks,
     readChunks,
+    regionRevision,
     invalidateStoredFile,
     invalidateWorldList,
     invalidatePath,

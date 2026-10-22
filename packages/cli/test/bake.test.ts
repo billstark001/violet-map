@@ -114,6 +114,22 @@ test('topmap uses effective overrides and complete environment dependencies whil
   );
   try {
     assert.ok(await services.topMap!.readTopMapTile('world', 'minecraft:overworld', 0, 0));
+    const worldReader = services.mounts.worlds!;
+    const readRange = worldReader.readRange.bind(worldReader);
+    let terrainReads = 0;
+    const observed = t.mock.method(worldReader, 'readRange', async (...args: Parameters<typeof readRange>) => {
+      if (args[0].endsWith('.nbt') || args[0].endsWith('.mca')) terrainReads++;
+      return readRange(...args);
+    });
+    assert.ok(await services.topMap!.readTopMapTile('world', 'minecraft:overworld', 0, 0));
+    assert.equal(terrainReads, 0, 'reliable unchanged terrain revisions reuse dependency digests');
+    const savedTile = await fs.readFile(tile);
+    await fs.writeFile(tile, new Uint8Array(savedTile.length));
+    await assert.rejects(services.topMap!.readTopMapTile('world', 'minecraft:overworld', 0, 0), {
+      code: 'RESOURCE_INTEGRITY_FAILED',
+    });
+    await fs.writeFile(tile, savedTile);
+    observed.mock.restore();
     const dimensions = await services.gameData!.readDimensions();
     await services.gameData!.writeDataFile('dimensions.json', {
       ...dimensions,
