@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { TopMapScheduler } from '../src/scheduling/topMapScheduler.js';
 import { testView } from './helpers/scheduling.js';
 import type { ViewState } from '../src/view/state.js';
-import type { RegionCoordinate } from '../src/scheduling/topMapPlanner.js';
+import type { RegionCoordinate } from '../src/view/topMapCoverage.js';
 
 const topView: ViewState = {
   ...testView,

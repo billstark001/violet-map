@@ -1,12 +1,7 @@
 import type { ViewState } from '../view/state';
 import { TOP_MAP_MAX_RADIUS_BLOCKS } from './topMapPolicy';
 import { TOP_MAP_TILE_BLOCKS } from '@violet-map/core/formats/top-map';
-
-export interface RegionCoordinate {
-  rx: number;
-  rz: number;
-  key: string;
-}
+import type { RegionCoordinate } from '../view/topMapCoverage';
 
 export interface RegionBounds {
   minRx: number;

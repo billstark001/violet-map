@@ -1,8 +1,8 @@
 import { surfaceRepresentationAllowed } from '../view/representation';
 import { TOP_MAP_TILE_BLOCKS } from '@violet-map/core/formats/top-map';
 import type { ViewState } from '../view/state';
-import { buildTileCoverage, type TileCoverage } from '../view/topMapCoverage';
-import { planTopMapTiles, topMapViewMetrics, type RegionCoordinate } from './topMapPlanner';
+import { buildTileCoverage, type TileCoverage, type RegionCoordinate } from '../view/topMapCoverage';
+import { planTopMapTiles, topMapViewMetrics } from './topMapPlanner';
 import {
   TOP_MAP_MAX_RADIUS_BLOCKS,
   TOP_MAP_MAX_WANTED_TILES,

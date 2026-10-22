@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { planTopMapTiles, topMapViewMetrics, type RegionCoordinate } from '../src/scheduling/topMapPlanner.js';
+import { planTopMapTiles, topMapViewMetrics } from '../src/scheduling/topMapPlanner.js';
+import type { RegionCoordinate } from '../src/view/topMapCoverage.js';
 import { testView } from './helpers/scheduling.js';
 
 test('wide views visit existing tiles without scanning empty grid coordinates', () => {

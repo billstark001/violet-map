@@ -6,22 +6,23 @@ import type {
   ChunkPayload,
   DiagnosticUploadResponse,
   TextureAtlasManifest,
-  TopMapDimensionManifest,
   WorldCapabilities,
   WorldInfo,
 } from '@violet-map/core/contracts';
 import type { BiomeMap, DimensionMap } from '@violet-map/core/domain';
-import type { TopMapTilePayload } from '@violet-map/core/formats/top-map';
+import { prepareTopMapTile, type PreparedTopMapTile, type TopMapTilePayload } from '@violet-map/core/formats/top-map';
 import {
   ResourceError,
   canonicalJson,
   type ResourceRef,
   type ResourceSelector,
   type ResourceViewHead,
+  type ArtifactRef,
 } from '@violet-map/core/resources';
 import { resourceClient } from './resources/client';
 import { resourceDownloader } from './resources/download';
 import { decodeChunkCoverage } from './resources/chunkCoverage';
+import { decodeTopMapManifest } from './resources/topMapManifest';
 import { apiFetch } from './runtime';
 
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
@@ -246,11 +247,15 @@ async function viewJson<T>(world: string, url: string, signal?: AbortSignal): Pr
 export const fetchWorldCapabilities = (world: string, signal?: AbortSignal) =>
   viewJson<WorldCapabilities>(world, `api/worlds/${encodeURIComponent(world)}/capabilities`, signal);
 
-export const fetchTopMapManifest = (world: string, dim: string, signal?: AbortSignal) =>
-  viewJson<TopMapDimensionManifest>(
+export const fetchTopMapManifest = async (world: string, dim: string, signal?: AbortSignal) =>
+  decodeTopMapManifest(
+    await viewJson<unknown>(
+      world,
+      `api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/top-map/manifest`,
+      signal,
+    ),
     world,
-    `api/worlds/${encodeURIComponent(world)}/${encodeURIComponent(dim)}/top-map/manifest`,
-    signal,
+    dim,
   );
 
 export const fetchChunkSourceCoverage = async (world: string, dim: string, signal?: AbortSignal) =>
@@ -284,8 +289,9 @@ export async function fetchTopMapTile(
   dim: string,
   rx: number,
   rz: number,
+  expected: ArtifactRef,
   signal?: AbortSignal,
-): Promise<TopMapTilePayload> {
+): Promise<PreparedTopMapTile> {
   const { head, resources } = await resourceClient.resolve(
     [{ kind: 'top-map-tile', world, dimension: dim, rx, rz }],
     world,
@@ -294,7 +300,11 @@ export async function fetchTopMapTile(
   const result = resources[0];
   if (!('resource' in result) || result.resource.artifact.format !== 'topmap-msgpack-v6')
     throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'invalid top map resource');
+  if (canonicalJson(result.resource.artifact) !== canonicalJson(expected))
+    throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'top map resource differs from its selected manifest', true);
   const payload = decode(await resourceDownloader.download(result.resource, signal)) as TopMapTilePayload;
   resourceClient.assertCurrent(head, world);
-  return payload;
+  if (payload?.dimension !== dim || payload.region?.x !== rx || payload.region?.z !== rz)
+    throw new ResourceError('UNSUPPORTED_RESOURCE_FORMAT', 'top map payload belongs to a different region');
+  return prepareTopMapTile(payload);
 }

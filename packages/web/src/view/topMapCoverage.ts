@@ -3,6 +3,12 @@ import { TOP_MAP_TILE_BLOCKS } from '@violet-map/core/formats/top-map';
 const TOP_MAP_CHUNKS_PER_AXIS = TOP_MAP_TILE_BLOCKS / 16;
 const TOP_MAP_CHUNK_MASK_BYTES = (TOP_MAP_CHUNKS_PER_AXIS * TOP_MAP_CHUNKS_PER_AXIS) / 8;
 
+export interface RegionCoordinate {
+  rx: number;
+  rz: number;
+  key: string;
+}
+
 export interface TileCoverage {
   key: string;
   mask: Uint8Array;

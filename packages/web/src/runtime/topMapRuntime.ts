@@ -1,16 +1,11 @@
-import {
-  prepareTopMapTile,
-  TOP_MAP_MISSING_HEIGHT,
-  TOP_MAP_TILE_BLOCKS,
-  type PreparedTopMapTile,
-} from '@violet-map/core/formats/top-map';
+import { TOP_MAP_MISSING_HEIGHT, TOP_MAP_TILE_BLOCKS, type PreparedTopMapTile } from '@violet-map/core/formats/top-map';
 import type { ViewState } from '../view/state';
 import { TOP_MAP_MANIFEST_RETRY_MS } from '../scheduling/topMapPolicy';
 import { fetchTopMapManifest, fetchTopMapTile } from '../api';
 import { debugLog } from '../logger';
 import { resourceClient } from '../resources/client';
 import type { TopMapDisplay } from './topMapDisplay';
-import type { RegionCoordinate } from '../scheduling/topMapPlanner';
+import type { TopMapSourceRegion } from '../resources/topMapManifest';
 import { TopMapScheduler } from '../scheduling/topMapScheduler';
 
 function isAbortError(error: unknown): boolean {
@@ -35,16 +30,9 @@ export interface TopMapDiagnosticSnapshot {
   }[];
 }
 
-interface TopMapTile {
-  key: string;
-  data: PreparedTopMapTile;
-}
-
 export class TopMapRuntime {
-  private readonly tiles = new Map<string, TopMapTile>();
-  private readonly pendingTiles = new Set<string>();
-  private readonly tileAborts = new Map<string, AbortController>();
-  private readonly tileDigests = new Map<string, string>();
+  private readonly tiles = new Map<string, PreparedTopMapTile>();
+  private readonly tileRequests = new Map<string, AbortController>();
   private readonly unsubscribe: () => void;
   private world = '';
   private dimension = '';
@@ -52,7 +40,7 @@ export class TopMapRuntime {
   private manifestLoaded = false;
   private manifestSeq = 0;
   private manifestRetryAt = 0;
-  private regions = new Map<string, RegionCoordinate>();
+  private regions: ReadonlyMap<string, TopMapSourceRegion> = new Map();
   private failedTiles = new Map<string, number>();
   private disposed = false;
   private manifestAbort: AbortController | null = null;
@@ -71,9 +59,8 @@ export class TopMapRuntime {
       if (scope !== this.sourceScope) {
         this.sourceScope = scope;
         this.abortPendingLoads();
-        this.pendingTiles.clear();
         this.failedTiles.clear();
-        this.tileDigests.clear();
+        this.regions = new Map();
         this.manifestLoaded = false;
         this.clearTiles();
         this.scheduler.clear();
@@ -93,9 +80,8 @@ export class TopMapRuntime {
     this.manifestRetryAt = 0;
     this.manifestSeq++;
     this.abortPendingLoads();
-    this.regions.clear();
+    this.regions = new Map();
     this.display.setEnabled(topMapEnabled);
-    this.pendingTiles.clear();
     this.failedTiles.clear();
     this.clearTiles();
     this.scheduler.clear();
@@ -120,16 +106,15 @@ export class TopMapRuntime {
       view: viewState,
       now,
       regions: this.regions,
-      pending: this.pendingTiles,
+      pending: new Set(this.tileRequests.keys()),
       failed: this.failedTiles,
       onlineChunks,
     });
     if (!plan) return;
     this.display.setEnabled(true);
     for (const key of plan.cancel) {
-      this.tileAborts.get(key)!.abort();
-      this.tileAborts.delete(key);
-      this.pendingTiles.delete(key);
+      this.tileRequests.get(key)!.abort();
+      this.tileRequests.delete(key);
     }
     for (const demand of plan.wanted.values())
       if (this.tiles.has(demand.key)) this.display.update(demand.key, demand.step, demand.coverageKey, demand.mask);
@@ -140,7 +125,7 @@ export class TopMapRuntime {
       mode: viewState.mode,
       wanted: plan.wanted.size,
       resident: this.tiles.size,
-      pending: this.pendingTiles.size,
+      pending: this.tileRequests.size,
     });
   }
 
@@ -150,7 +135,6 @@ export class TopMapRuntime {
     this.unsubscribe();
     this.manifestSeq++;
     this.abortPendingLoads();
-    this.pendingTiles.clear();
     this.clearTiles();
     this.scheduler.clear();
     this.display.dispose();
@@ -165,13 +149,13 @@ export class TopMapRuntime {
     const tile = this.tiles.get(`${rx},${rz}`);
     if (!tile) return null;
 
-    const localX = worldX - tile.data.payload.origin.x;
-    const localZ = worldZ - tile.data.payload.origin.z;
-    const stride = tile.data.payload.sampleStride;
-    const samples = tile.data.payload.size.samples;
+    const localX = worldX - tile.payload.origin.x;
+    const localZ = worldZ - tile.payload.origin.z;
+    const stride = tile.payload.sampleStride;
+    const samples = tile.payload.size.samples;
     const sx = Math.max(0, Math.min(samples - 1, Math.floor(localX / stride)));
     const sz = Math.max(0, Math.min(samples - 1, Math.floor(localZ / stride)));
-    const height = tile.data.heights[sz * samples + sx];
+    const height = tile.heights[sz * samples + sx];
     return height === TOP_MAP_MISSING_HEIGHT ? null : height;
   }
 
@@ -182,13 +166,13 @@ export class TopMapRuntime {
       enabled: this.topMapEnabled,
       manifestLoaded: this.manifestLoaded,
       availableTiles: this.regions.size,
-      pendingTiles: [...this.pendingTiles].sort(),
+      pendingTiles: [...this.tileRequests.keys()].sort(),
       wantedTiles: [...this.scheduler.wantedKeys()].sort(),
-      residentTiles: [...this.tiles.values()]
-        .map((tile) => ({
-          key: tile.key,
-          ...this.display.snapshot(tile.key),
-          lastUsed: this.scheduler.residentSince(tile.key),
+      residentTiles: [...this.tiles.keys()]
+        .map((key) => ({
+          key,
+          ...this.display.snapshot(key),
+          lastUsed: this.scheduler.residentSince(key),
         }))
         .sort((a, b) => a.key.localeCompare(b.key)),
     };
@@ -199,32 +183,17 @@ export class TopMapRuntime {
     this.manifestAbort?.abort();
     this.manifestAbort = abort;
     try {
-      const manifest = await fetchTopMapManifest(world, dimension, abort.signal);
+      const regions = await fetchTopMapManifest(world, dimension, abort.signal);
       if (this.disposed || seq !== this.manifestSeq || world !== this.world || dimension !== this.dimension) return;
       this.sourceScope = resourceClient.current(world)!.sourceScope;
-      if (manifest.hasTopMap && manifest.topMap?.regions.some((region) => !region.artifact))
-        throw new Error('topmap manifest has no current artifact references');
-      const nextDigests = new Map(
-        (manifest.topMap?.regions ?? []).map((region) => [`${region.x},${region.z}`, region.artifact!.digest]),
-      );
-      for (const [key, digest] of this.tileDigests)
-        if (nextDigests.get(key) !== digest) {
-          this.tileAborts.get(key)?.abort();
-          this.tileAborts.delete(key);
-          this.pendingTiles.delete(key);
+      for (const [key, region] of this.regions)
+        if (regions.get(key)?.artifact.digest !== region.artifact.digest) {
+          this.tileRequests.get(key)?.abort();
+          this.tileRequests.delete(key);
           this.removeTile(key);
           this.failedTiles.delete(key);
         }
-      this.tileDigests.clear();
-      for (const [key, digest] of nextDigests) this.tileDigests.set(key, digest);
-      this.regions = new Map(
-        (manifest.hasTopMap ? (manifest.topMap?.regions ?? []) : [])
-          .filter((region) => Number.isSafeInteger(region.x) && Number.isSafeInteger(region.z))
-          .map((region) => {
-            const key = `${region.x},${region.z}`;
-            return [key, { rx: region.x, rz: region.z, key }] as const;
-          }),
-      );
+      this.regions = regions;
       this.manifestLoaded = true;
       this.manifestRetryAt = 0;
       debugLog('top-map', 'manifest-loaded', {
@@ -251,50 +220,49 @@ export class TopMapRuntime {
   private async loadTile(rx: number, rz: number, key: string) {
     if (
       this.disposed ||
-      this.pendingTiles.has(key) ||
+      this.tileRequests.has(key) ||
       this.tiles.has(key) ||
       !this.topMapEnabled ||
       !this.regions.has(key)
     )
       return;
-    this.pendingTiles.add(key);
     const abort = new AbortController();
-    this.tileAborts.set(key, abort);
+    this.tileRequests.set(key, abort);
     const world = this.world;
     const dimension = this.dimension;
-    const digest = this.tileDigests.get(key);
+    const region = this.regions.get(key)!;
     try {
-      const payload = await fetchTopMapTile(world, dimension, rx, rz, abort.signal);
+      const data = await fetchTopMapTile(world, dimension, rx, rz, region.artifact, abort.signal);
       if (
         abort.signal.aborted ||
         this.disposed ||
         world !== this.world ||
         dimension !== this.dimension ||
         !this.topMapEnabled ||
-        this.tileDigests.get(key) !== digest
+        this.tileRequests.get(key) !== abort ||
+        this.regions.get(key)?.artifact.digest !== region.artifact.digest
       )
         return;
-      const data = prepareTopMapTile(payload);
-      const tile: TopMapTile = {
-        key,
-        data,
-      };
+      try {
+        this.display.add(key, data);
+        const demand = this.scheduler.demandFor(key);
+        if (demand) this.display.update(key, demand.step, demand.coverageKey, demand.mask);
+      } catch (error) {
+        this.display.remove(key);
+        throw error;
+      }
       this.failedTiles.delete(key);
-      this.tiles.set(key, tile);
+      this.tiles.set(key, data);
       this.scheduler.loaded(key, performance.now());
-      this.display.add(key, data);
-      const demand = this.scheduler.demandFor(key);
-      if (demand) this.display.update(key, demand.step, demand.coverageKey, demand.mask);
-      debugLog('top-map', 'tile-loaded', { key, rx, rz, chunks: payload.chunks, approach: payload.approach });
+      debugLog('top-map', 'tile-loaded', { key, rx, rz, chunks: data.payload.chunks, approach: data.payload.approach });
     } catch (error) {
-      if (isAbortError(error) || abort.signal.aborted || this.tileAborts.get(key) !== abort) return;
+      if (isAbortError(error) || abort.signal.aborted || this.tileRequests.get(key) !== abort) return;
       if (this.disposed || world !== this.world || dimension !== this.dimension) return;
       this.failedTiles.set(key, performance.now());
       debugLog('top-map', 'tile-error', { key, rx, rz, error: error instanceof Error ? error.message : String(error) });
     } finally {
-      if (this.tileAborts.get(key) === abort) {
-        this.tileAborts.delete(key);
-        this.pendingTiles.delete(key);
+      if (this.tileRequests.get(key) === abort) {
+        this.tileRequests.delete(key);
       }
     }
   }
@@ -306,8 +274,8 @@ export class TopMapRuntime {
   private abortPendingLoads() {
     this.manifestAbort?.abort();
     this.manifestAbort = null;
-    for (const abort of this.tileAborts.values()) abort.abort();
-    this.tileAborts.clear();
+    for (const abort of this.tileRequests.values()) abort.abort();
+    this.tileRequests.clear();
   }
 
   private removeTile(key: string) {
