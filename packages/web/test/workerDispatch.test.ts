@@ -44,7 +44,6 @@ test('Worker dispatch applies current priorities after cache completion and assi
   const plan = scheduler.dispatchWorkers({
     entries,
     now: 100,
-    activeTasks: 1,
     maxTasks: 2,
     workerLoads: [1, 0],
     ready,
@@ -62,7 +61,7 @@ test('waiting jobs are revalidated against target quality, entry identity and de
   const entries = new Map([[chunk.key, chunk]]);
   planFixtureDemands(scheduler, entries, 100, () => 2);
   const ready: ReadyMeshTask[] = [{ entry: chunk, kind: 'lod', step: 8, version: 1 }];
-  const input = { entries, now: 100, activeTasks: 0, maxTasks: 1, workerLoads: [0], ready };
+  const input = { entries, now: 100, maxTasks: 1, workerLoads: [0], ready };
   assert.deepEqual(scheduler.dispatchWorkers(input), { start: [], discard: [1] });
   ready[0] = { ...ready[0], step: 2 };
   assert.equal(scheduler.dispatchWorkers(input).start.length, 1);

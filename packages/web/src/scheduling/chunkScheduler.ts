@@ -210,14 +210,13 @@ export class ChunkScheduler {
       return comparePriority(ap, bp) || a.step - b.step || a.version - b.version;
     });
     const loads = [...input.workerLoads];
-    const start = ready
-      .slice(0, Math.max(0, Math.min(input.maxTasks, loads.length) - input.activeTasks))
-      .map((task) => {
-        let workerIndex = 0;
-        for (let i = 1; i < loads.length; i++) if (loads[i] < loads[workerIndex]) workerIndex = i;
-        loads[workerIndex]++;
-        return { task, workerIndex };
-      });
+    const activeTasks = loads.reduce((sum, load) => sum + load, 0);
+    const start = ready.slice(0, Math.max(0, Math.min(input.maxTasks, loads.length) - activeTasks)).map((task) => {
+      let workerIndex = 0;
+      for (let i = 1; i < loads.length; i++) if (loads[i] < loads[workerIndex]) workerIndex = i;
+      loads[workerIndex]++;
+      return { task, workerIndex };
+    });
     return { start, discard };
   }
 

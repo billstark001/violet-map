@@ -208,7 +208,6 @@ export interface ReadyMeshTask {
 
 export interface WorkerDispatchInput {
   now: number;
-  activeTasks: number;
   maxTasks: number;
   workerLoads: readonly number[];
   ready: readonly ReadyMeshTask[];

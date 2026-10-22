@@ -42,11 +42,7 @@ test('a failed Worker send revokes the remaining dispatch plan and releases its 
     meshFlushing: false,
     meshFlushScheduled: false,
     activity: { meshRequests: 0 },
-    activeMeshTasks: 0,
-    workerLoads: [0, 0],
     workerRestarts: 0,
-    versionWorker: new Map(),
-    inFlightMeshVersions: new Set(),
     budget: { meshWorkers: 2 },
     opts: { world: 'world', dimension: 'minecraft:overworld' },
     workers: [0, 1].map(() => ({
@@ -65,7 +61,7 @@ test('a failed Worker send revokes the remaining dispatch plan and releases its 
           entry,
           kind: 'full',
           step: 1,
-          phase: 'ready',
+          state: { phase: 'ready' },
           dependencies: [],
           startedAt: performance.now(),
         },
@@ -88,9 +84,7 @@ test('a failed Worker send revokes the remaining dispatch plan and releases its 
   assert.equal(terminated, 2);
   assert.equal(runtime.workerRestarts, 1);
   assert.equal(runtime.meshJobs.size, 0);
-  assert.equal(runtime.activeMeshTasks, 0);
-  assert.equal(runtime.inFlightMeshVersions.size, 0);
-  assert.equal(runtime.versionWorker.size, 0);
+  assert.equal(runtime.workerExecution().activeTasks, 0);
   assert.equal(runtime.meshFlushing, false);
   assert.deepEqual(queued.sort(), entries.map((entry) => entry.key).sort());
   for (const entry of entries) {
@@ -121,7 +115,6 @@ test('unavailable IndexedDB falls back to worker meshing for both full and LOD t
         metrics: new LoadingMetrics(),
         chunks: new Map([[entry.key, entry]]),
         meshJobs: new Map(),
-        activeMeshTasks: 0,
         versionCounter: 0,
         workers: [{}],
         fullCacheMisses: 0,
@@ -143,7 +136,7 @@ test('unavailable IndexedDB falls back to worker meshing for both full and LOD t
         }),
         flushMeshQueue() {
           const [version, job] = [...this.meshJobs][0];
-          assert.equal(job.phase, 'waiting-input', 'cache miss waits for scheduler dispatch');
+          assert.equal(job.state.phase, 'waiting-input', 'cache miss waits for scheduler dispatch');
           resolve({ kind: job.kind, version });
         },
       });
@@ -156,7 +149,7 @@ test('unavailable IndexedDB falls back to worker meshing for both full and LOD t
         }),
       ]);
       assert.deepEqual(worker, { kind, version: 1 });
-      assert.equal(manager.activeMeshTasks, 0, 'cache lookup never reserves a worker execution slot');
+      assert.equal(manager.workerExecution().activeTasks, 0, 'cache lookup never reserves a worker execution slot');
     }
   } finally {
     if (previous) Object.defineProperty(globalThis, 'indexedDB', previous);
@@ -164,8 +157,13 @@ test('unavailable IndexedDB falls back to worker meshing for both full and LOD t
   }
 });
 
-test('invalid Worker precision replies rebuild the pool without stranding pending work', async (t) => {
-  for (const returnedStep of [1, 3, 8]) {
+test('invalid Worker precision or ownership replies rebuild the pool without stranding pending work', async (t) => {
+  for (const [returnedStep, workerIndex] of [
+    [1, 0],
+    [3, 0],
+    [8, 0],
+    [2, 1],
+  ]) {
     const entry = {
       key: 'chunk',
       state: 'stored',
@@ -186,16 +184,22 @@ test('invalid Worker precision replies rebuild the pool without stranding pendin
       disposed: false,
       workerRestarts: 0,
       metrics: new LoadingMetrics(),
-      budget: { meshWorkers: 1 },
+      budget: { meshWorkers: 2 },
       meshFlushScheduled: false,
       meshJobs: new Map([
-        [1, { entry, kind: 'lod', step: 2, phase: 'worker', dependencies: [entry], startedAt: performance.now() }],
+        [
+          1,
+          {
+            entry,
+            kind: 'lod',
+            step: 2,
+            state: { phase: 'worker', workerIndex: 0 },
+            dependencies: [entry],
+            startedAt: performance.now(),
+          },
+        ],
       ]),
-      workers: [{ terminate() {} }],
-      workerLoads: [1],
-      activeMeshTasks: 1,
-      versionWorker: new Map([[1, 0]]),
-      inFlightMeshVersions: new Set([1]),
+      workers: [{ terminate() {} }, { terminate() {} }],
       queueIo(_kind: string, key: string) {
         queued.push(key);
       },
@@ -204,12 +208,15 @@ test('invalid Worker precision replies rebuild the pool without stranding pendin
       runtime.disposed = true;
       clearTimeout(runtime.workerRestartTimer);
     });
-    runtime.handleMessage({ type: 'lodResult', key: entry.key, version: 1, step: returnedStep, mesh: null }, 0);
+    runtime.handleMessage(
+      { type: 'lodResult', key: entry.key, version: 1, step: returnedStep, mesh: null },
+      workerIndex,
+    );
     clearTimeout(runtime.workerRestartTimer);
     await nextTurn();
     assert.equal(runtime.workerRestarts, 1);
     assert.equal(runtime.meshJobs.size, 0);
-    assert.equal(runtime.activeMeshTasks, 0);
+    assert.equal(runtime.workerExecution().activeTasks, 0);
     assert.equal(entry.pendingLod, false);
     assert.equal(entry.pendingLodStep, 0);
     assert.equal(entry.workerPins, 0);
@@ -262,11 +269,8 @@ test('disposing a manager cancels pending IO and ignores even an unabortable lat
         fetchTimer: null,
         deferredMeshTimers: new Map(),
         meshJobs: new Map(),
-        inFlightMeshVersions: new Set(),
-        versionWorker: new Map(),
 
         workers: [],
-        workerLoads: [],
       });
       const request = kind === 'hash' ? manager.fetchHashBatch([entry.key]) : manager.fetchBatch([entry.key]);
       await (kind === 'hash' ? manager.fetchHashBatch([entry.key]) : manager.fetchBatch([entry.key]));
@@ -354,11 +358,8 @@ test('active neighborhood pins prevent eviction and settle exactly once', async 
   const drops: unknown[] = [];
   const manager = Object.assign(Object.create(ChunkRuntime.prototype), {
     metrics: new LoadingMetrics(),
-    meshJobs: new Map([[1, { dependencies: [dependency] }]]),
-    inFlightMeshVersions: new Set([1]),
-    versionWorker: new Map([[1, 0]]),
-    activeMeshTasks: 1,
-    workerLoads: [1],
+    meshJobs: new Map([[1, { dependencies: [dependency], state: { phase: 'worker', workerIndex: 0 } }]]),
+    workers: [{}],
     meshFlushScheduled: false,
     disposed: false,
     broadcast(message: unknown) {
@@ -371,8 +372,8 @@ test('active neighborhood pins prevent eviction and settle exactly once', async 
   manager.finishActiveMesh(1);
   await Promise.resolve();
   assert.equal(dependency.workerPins, 0);
-  assert.equal(manager.activeMeshTasks, 0);
-  assert.deepEqual(manager.workerLoads, [0]);
+  assert.equal(manager.workerExecution().activeTasks, 0);
+  assert.deepEqual(manager.workerExecution().loads, [0]);
   assert.equal(manager.releaseWorkerData(dependency), true);
   assert.equal(dependency.state, 'hashed');
   assert.equal(drops.length, 1);
@@ -407,9 +408,6 @@ test('a known neighborhood hits cached geometry before restoring any worker colu
     workers: [{}],
     meshJobs: new Map(),
     versionCounter: 0,
-    inFlightMeshVersions: new Set(),
-    versionWorker: new Map(),
-    activeMeshTasks: 0,
     fullCacheHits: 0,
     disposed: false,
     scheduler: { shouldAcceptMeshResult: () => true },
@@ -428,7 +426,7 @@ test('a known neighborhood hits cached geometry before restoring any worker colu
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(displays, 1);
   assert.equal(manager.meshJobs.size, 0);
-  assert.equal(manager.activeMeshTasks, 0);
+  assert.equal(manager.workerExecution().activeTasks, 0);
   await clearMeshCache();
 });
 
@@ -455,7 +453,7 @@ test('transient IO backs off without discarding displayed terrain; a worker dead
   assert.equal(entry.displayed, 'full');
   assert.equal(entry.retryAttempts, 1);
   assert.equal(queued, 1);
-  manager.meshJobs.set(1, { phase: 'worker', startedAt: performance.now() - 30001 });
+  manager.meshJobs.set(1, { state: { phase: 'worker', workerIndex: 0 }, startedAt: performance.now() - 30001 });
   manager.checkWorkerHealth();
   assert.equal(queued, 2);
 });

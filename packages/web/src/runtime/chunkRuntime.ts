@@ -183,7 +183,7 @@ interface MeshJob {
   entry: ChunkEntry;
   kind: MeshTaskKind;
   step: LodStep;
-  phase: 'cache' | 'waiting-input' | 'ready' | 'worker';
+  state: { phase: 'cache' | 'waiting-input' | 'ready' } | { phase: 'worker'; workerIndex: number };
   startedAt: number;
   dependencies: ChunkEntry[];
 }
@@ -205,8 +205,6 @@ export interface ChunkRuntimeOptions {
 export class ChunkRuntime {
   private readonly metrics = new LoadingMetrics();
   private workers: Worker[] = [];
-  private workerLoads: number[] = [];
-  private versionWorker = new Map<number, number>();
   private readonly chunks = new Map<string, ChunkEntry>();
   private readonly scheduler: ChunkScheduler;
   private checking = 0;
@@ -215,8 +213,6 @@ export class ChunkRuntime {
   private fetchTimer: ReturnType<typeof setTimeout> | null = null;
   private ioWakeAt = { hash: Infinity, fetch: Infinity };
   private deferredMeshTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private activeMeshTasks = 0;
-  private inFlightMeshVersions = new Set<number>();
   private meshJobs = new Map<number, MeshJob>();
   private meshFlushScheduled = false;
   private meshFlushing = false;
@@ -264,7 +260,6 @@ export class ChunkRuntime {
   private createWorker(index: number) {
     const worker = new Worker(new URL('../worker/meshWorker.ts', import.meta.url), { type: 'module' });
     this.workers[index] = worker;
-    this.workerLoads[index] = 0;
     worker.onmessage = (ev: MessageEvent<WorkerResponse>) => {
       if (this.workers[index] === worker) this.handleMessage(ev.data, index);
     };
@@ -280,7 +275,7 @@ export class ChunkRuntime {
     if (this.disposed) return;
     const now = performance.now();
     if (
-      [...this.meshJobs.values()].some((job) => job.phase === 'worker' && now - job.startedAt > 30000) ||
+      [...this.meshJobs.values()].some((job) => job.state.phase === 'worker' && now - job.startedAt > 30000) ||
       [...this.chunks.values()].some((e) => e.state === 'decoding' && now - (e.decodingStartedAt ?? now) > 30000)
     )
       this.recoverWorkers('mesh worker exceeded its progress deadline');
@@ -296,7 +291,6 @@ export class ChunkRuntime {
     }
     for (const worker of this.workers) worker.terminate();
     this.workers = [];
-    this.workerLoads = [];
     this.workerRestarts++;
     for (const e of this.chunks.values()) {
       if (e.state === 'stored' || e.state === 'decoding') e.state = 'hashed';
@@ -332,6 +326,16 @@ export class ChunkRuntime {
   }
   private allWorkersMask(): number {
     return (1 << this.workers.length) - 1;
+  }
+  private workerExecution() {
+    const loads = Array<number>(this.workers.length).fill(0);
+    let activeTasks = 0;
+    for (const job of this.meshJobs.values()) {
+      if (job.state.phase !== 'worker') continue;
+      loads[job.state.workerIndex]++;
+      activeTasks++;
+    }
+    return { loads, activeTasks };
   }
   private sendToWorker(workerIndex: number, msg: WorkerRequest, transfer: Transferable[] = []) {
     const worker = this.workers[workerIndex];
@@ -425,6 +429,7 @@ export class ChunkRuntime {
   diagnosticSnapshot(): ChunkRuntimeDiagnosticSnapshot {
     const now = performance.now();
     const stats = this.syncSchedulerStats();
+    const execution = this.workerExecution();
     const coverage = this.chunkCoverage;
     const chunks = [...this.chunks.values()]
       .sort((a, b) => a.cz - b.cz || a.cx - b.cx)
@@ -471,13 +476,13 @@ export class ChunkRuntime {
       stats: { ...stats, diagnostics: [...stats.diagnostics] },
       workers: {
         count: this.workers.length,
-        loads: [...this.workerLoads],
-        activeMeshTasks: this.activeMeshTasks,
+        loads: execution.loads,
+        activeMeshTasks: execution.activeTasks,
         checking: this.checking,
         fetching: this.fetching,
-        cacheLookups: [...this.meshJobs.values()].filter((job) => job.phase === 'cache').length,
+        cacheLookups: [...this.meshJobs.values()].filter((job) => job.state.phase === 'cache').length,
         waitingMeshes: [...this.meshJobs.values()].filter(
-          (job) => job.phase === 'waiting-input' || job.phase === 'ready',
+          (job) => job.state.phase === 'waiting-input' || job.state.phase === 'ready',
         ).length,
         oldestTaskMs: Math.max(0, ...[...this.meshJobs.values()].map((job) => now - job.startedAt)),
         restarts: this.workerRestarts,
@@ -623,7 +628,7 @@ export class ChunkRuntime {
     try {
       const now = performance.now();
       for (const [version, job] of this.meshJobs) {
-        if (job.phase === 'cache' || job.phase === 'worker') continue;
+        if (job.state.phase === 'cache' || job.state.phase === 'worker') continue;
         if (
           !this.scheduler.shouldAcceptMeshResult({
             entry: job.entry,
@@ -637,16 +642,15 @@ export class ChunkRuntime {
           this.finishActiveMesh(version);
           continue;
         }
-        job.phase = this.ensureNeighborhoodWorkerData(job.entry, now) ? 'ready' : 'waiting-input';
+        job.state = { phase: this.ensureNeighborhoodWorkerData(job.entry, now) ? 'ready' : 'waiting-input' };
       }
       const dispatch = this.scheduler.dispatchWorkers({
         now,
-        activeTasks: this.activeMeshTasks,
         maxTasks: this.maxActiveMeshTasks(),
-        workerLoads: this.workerLoads,
+        workerLoads: this.workerExecution().loads,
         entries: this.chunks,
         ready: [...this.meshJobs]
-          .filter(([, job]) => job.phase === 'ready')
+          .filter(([, job]) => job.state.phase === 'ready')
           .map(([version, job]) => ({
             entry: job.entry,
             kind: job.kind,
@@ -698,14 +702,6 @@ export class ChunkRuntime {
     if (job.diagnosticId !== undefined) this.metrics.finish(job.diagnosticId, durationMs);
     this.meshJobs.delete(version);
     for (const dependency of job.dependencies) dependency.workerPins--;
-    if (this.inFlightMeshVersions.delete(version)) {
-      const workerIndex = this.versionWorker.get(version);
-      if (workerIndex !== undefined) {
-        this.workerLoads[workerIndex] = Math.max(0, (this.workerLoads[workerIndex] ?? 0) - 1);
-        this.versionWorker.delete(version);
-      }
-      this.activeMeshTasks = Math.max(0, this.activeMeshTasks - 1);
-    }
     // A result must update pending/displayed state before another task can
     // observe it. In particular cache hits must not synchronously re-enter.
     if (!this.meshFlushScheduled) {
@@ -715,14 +711,6 @@ export class ChunkRuntime {
         if (!this.disposed) this.flushMeshQueue();
       });
     }
-  }
-
-  private markWorkerMesh(version: number, workerIndex: number) {
-    this.activity.meshRequests++;
-    this.activeMeshTasks++;
-    this.inFlightMeshVersions.add(version);
-    this.workerLoads[workerIndex]++;
-    this.versionWorker.set(version, workerIndex);
   }
 
   private deferMesh(entry: ChunkEntry) {
@@ -745,7 +733,7 @@ export class ChunkRuntime {
       entry: e,
       kind,
       step,
-      phase: 'cache',
+      state: { phase: 'cache' },
       startedAt: performance.now(),
       dependencies: [],
     });
@@ -812,9 +800,9 @@ export class ChunkRuntime {
           job.dependencies.push(n);
         }
       }
-    job.phase = 'worker';
+    job.state = { phase: 'worker', workerIndex };
     job.startedAt = performance.now();
-    this.markWorkerMesh(version, workerIndex);
+    this.activity.meshRequests++;
     const op = kind === 'full' ? 'fullMesh' : 'lodMesh';
     const detail = kind === 'full' ? e.key : `${e.key} LOD ${step}`;
     job.diagnosticId = this.metrics.begin(op, detail);
@@ -985,7 +973,7 @@ export class ChunkRuntime {
         if (!hit) {
           if (kind === 'full') this.fullCacheMisses++;
           else this.lodCacheMisses++;
-          this.meshJobs.get(version)!.phase = 'waiting-input';
+          this.meshJobs.get(version)!.state = { phase: 'waiting-input' };
           this.flushMeshQueue();
           return;
         }
@@ -1041,7 +1029,7 @@ export class ChunkRuntime {
         now,
         activeHashBatches: this.checking,
         activeFetchBatches: this.fetching,
-        activeMeshTasks: this.activeMeshTasks,
+        activeMeshTasks: this.workerExecution().activeTasks,
         maxMeshTasks: this.maxActiveMeshTasks(),
         entries: this.chunks,
         includeHash: kind === 'hash',
@@ -1399,10 +1387,20 @@ export class ChunkRuntime {
 
   // #region Worker messages
 
-  private matchWorkerMeshReply(key: string, version: number, kind: MeshTaskKind): MeshJob | undefined {
+  private matchWorkerMeshReply(
+    key: string,
+    version: number,
+    kind: MeshTaskKind,
+    workerIndex: number,
+  ): MeshJob | undefined {
     const job = this.meshJobs.get(version);
     if (!job) return undefined;
-    if (job.phase !== 'worker' || job.entry.key !== key || job.kind !== kind) {
+    if (
+      job.state.phase !== 'worker' ||
+      job.state.workerIndex !== workerIndex ||
+      job.entry.key !== key ||
+      job.kind !== kind
+    ) {
       this.recoverWorkers('mesh worker returned a reply for a different task');
       return undefined;
     }
@@ -1443,7 +1441,7 @@ export class ChunkRuntime {
         break;
       }
       case 'meshError': {
-        if (!this.matchWorkerMeshReply(msg.key, msg.version, msg.kind)) return;
+        if (!this.matchWorkerMeshReply(msg.key, msg.version, msg.kind, workerIndex)) return;
         this.finishActiveMesh(msg.version);
         const e = this.chunks.get(msg.key);
         if (e && (msg.kind === 'full' ? e.pendingFullVersion : e.pendingLodVersion) === msg.version) {
@@ -1454,7 +1452,7 @@ export class ChunkRuntime {
         break;
       }
       case 'meshResult': {
-        if (!this.matchWorkerMeshReply(msg.key, msg.version, 'full')) return;
+        if (!this.matchWorkerMeshReply(msg.key, msg.version, 'full', workerIndex)) return;
         this.finishActiveMesh(msg.version, msg.profile?.meshMs);
         const e = this.chunks.get(msg.key);
         if (!e || e.pendingFullVersion !== msg.version) return;
@@ -1491,7 +1489,7 @@ export class ChunkRuntime {
         break;
       }
       case 'lodResult': {
-        const job = this.matchWorkerMeshReply(msg.key, msg.version, 'lod');
+        const job = this.matchWorkerMeshReply(msg.key, msg.version, 'lod', workerIndex);
         if (!job) return;
         if (!LOD_STEPS.includes(msg.step as LodStep) || msg.step <= 1 || msg.step !== job.step) {
           this.recoverWorkers('mesh worker returned an invalid or mismatched LOD step');
@@ -1567,13 +1565,13 @@ export class ChunkRuntime {
   private collectProfileStats(): ChunkProfileStats {
     return {
       workerCount: this.workers.length,
-      activeMeshTasks: this.activeMeshTasks,
+      activeMeshTasks: this.workerExecution().activeTasks,
       workerChunkCopies: [...this.chunks.values()].reduce((sum, e) => sum + this.workerReadyCount(e), 0),
       estimatedWorkerBytes: [...this.chunks.values()].reduce(
         (sum, e) => sum + this.workerReadyCount(e) * e.estimatedColumnBytes,
         0,
       ),
-      cacheLookups: [...this.meshJobs.values()].filter((job) => job.phase === 'cache').length,
+      cacheLookups: [...this.meshJobs.values()].filter((job) => job.state.phase === 'cache').length,
       errorChunks: [...this.chunks.values()].filter((e) => e.state === 'error').length,
       retryingChunks: [...this.chunks.values()].filter((e) => e.retryAttempts > 0 && e.state !== 'error').length,
       displayedMeshBytes: this.terrain.meshBytes,
@@ -1628,13 +1626,10 @@ export class ChunkRuntime {
     }
     for (const timer of this.deferredMeshTimers.values()) clearTimeout(timer);
     this.deferredMeshTimers.clear();
-    this.inFlightMeshVersions.clear();
     this.meshJobs.clear();
-    this.versionWorker.clear();
     this.metrics.clear();
     for (const worker of this.workers) worker.terminate();
     this.workers = [];
-    this.workerLoads = [];
   }
 
   // #endregion
