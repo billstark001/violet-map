@@ -61,14 +61,13 @@ export interface ChunkEntryDiagnosticSnapshot {
   surfaceY: number;
   displayed: ChunkEntry['displayed'];
   displayedLodStep: number;
-  fullReady: boolean;
-  lodReadyStep: number;
   dirty: boolean;
   dirtyToken: number;
   pendingFull: boolean;
   pendingLod: boolean;
   pendingLodStep: number;
   workerReadyCount: number;
+  workerPins: number;
   meshBytes: number;
   demand: Readonly<ChunkDemand> | null;
   tracker: import('../scheduling/contracts').SchedulerCellDiagnostic | null;
@@ -439,14 +438,13 @@ export class ChunkRuntime {
           surfaceY: entry.surfaceY,
           displayed: entry.displayed,
           displayedLodStep: entry.displayedLodStep,
-          fullReady: entry.fullReady,
-          lodReadyStep: entry.lodReadyStep,
           dirty: entry.dirty,
           dirtyToken: entry.dirtyToken,
           pendingFull: entry.pendingFull,
           pendingLod: entry.pendingLod,
           pendingLodStep: entry.pendingLodStep,
           workerReadyCount: this.workerReadyCount(entry),
+          workerPins: entry.workerPins,
           meshBytes: entry.meshBytes,
           demand: this.scheduler.demandFor(entry.key) ?? null,
           tracker,
@@ -588,8 +586,6 @@ export class ChunkRuntime {
       displayed: 'none',
       displayedVersion: -1,
       displayedLodStep: 0,
-      lodReadyStep: 0,
-      fullReady: false,
       dirty: false,
       dirtyToken: 0,
       meshBytes: 0,
@@ -1044,11 +1040,6 @@ export class ChunkRuntime {
     return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
   }
 
-  private clearReadyFlags(e: ChunkEntry) {
-    e.lodReadyStep = 0;
-    e.fullReady = false;
-  }
-
   private markUnavailable(
     e: ChunkEntry,
     state: Extract<ChunkState, 'absent' | 'error'>,
@@ -1061,7 +1052,6 @@ export class ChunkRuntime {
       e.contentDigest = null;
       e.resolution = undefined;
     }
-    this.clearReadyFlags(e);
     this.invalidatePendingMeshes(e);
     if (state === 'absent') this.markNeighborsDirty(e);
     if (removeMesh) this.removeDisplayedMesh(e);
@@ -1101,7 +1091,6 @@ export class ChunkRuntime {
     this.markNeighborsDirty(e);
     e.displayedVersion = -1;
     e.dirty = false;
-    this.clearReadyFlags(e);
   }
 
   private releaseWorkerData(e: ChunkEntry): boolean {
@@ -1510,10 +1499,14 @@ export class ChunkRuntime {
       fullRendered = 0;
     for (const e of this.chunks.values()) {
       if (e.state === 'decoding' || e.state === 'stored') nbt++;
-      if (e.lodReadyStep > 0) lodReady++;
-      if (e.displayed === 'lod' && this.terrain.hasVisibleMesh(e.key)) lodRendered++;
-      if (e.fullReady) fullReady++;
-      if (e.displayed === 'full' && this.terrain.hasVisibleMesh(e.key)) fullRendered++;
+      if (e.meshBytes <= 0 || e.displayed === 'none') continue;
+      if (e.displayed === 'lod') {
+        lodReady++;
+        if (this.terrain.hasVisibleMesh(e.key)) lodRendered++;
+      } else {
+        fullReady++;
+        if (this.terrain.hasVisibleMesh(e.key)) fullRendered++;
+      }
     }
     return { trackedChunks: this.chunks.size, nbt, lodReady, lodRendered, fullReady, fullRendered };
   }

@@ -26,8 +26,6 @@ export interface ChunkDisplayState {
   displayed: 'none' | 'full' | 'lod';
   displayedVersion: number;
   displayedLodStep: number;
-  fullReady: boolean;
-  lodReadyStep: number;
   meshBytes: number;
 }
 
@@ -35,7 +33,5 @@ export const EMPTY_CHUNK_DISPLAY: Readonly<ChunkDisplayState> = Object.freeze({
   displayed: 'none',
   displayedVersion: -1,
   displayedLodStep: 0,
-  fullReady: false,
-  lodReadyStep: 0,
   meshBytes: 0,
 });

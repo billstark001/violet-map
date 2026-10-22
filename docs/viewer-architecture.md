@@ -63,6 +63,8 @@ Each mesh job owns its execution phase, cache identity, dirty token and, once di
 
 Eviction plans include pending work and dependency pins. Tracked-entry eviction and decoded-input release share the same active-work predicate. The executor validates that precondition when applying an eviction; a violated precondition is an explicit error.
 
+Display feedback contains the actual representation, version, LOD step and geometry bytes. Available full/LOD geometry counts are derived observations, including retained geometry during repair; neither the scene nor executor stores parallel readiness flags. Empty completed geometry still satisfies demand, while error, retry and dirty state remain independent observations. Settled loading checks require every pending flag and dependency pin to be released.
+
 ## Validation
 
 Run `pnpm typecheck`, `pnpm boundary:check`, `pnpm lint`, `pnpm format:check`, `pnpm test` and `pnpm build`. Browser checks are `pnpm test:frontend`, `pnpm test:overlays` and `pnpm test:transparency`.

@@ -706,6 +706,25 @@ test('a recovered resolve or explicit absence clears obsolete retry state even w
   assert.equal(entry.retryAt, 0);
 });
 
+test('display residency is observed from geometry even during transport failure or input release', () => {
+  const full = { key: 'full', state: 'stored', displayed: 'full', meshBytes: 1024 };
+  const lod = { key: 'lod', state: 'hashed', displayed: 'lod', meshBytes: 128 };
+  const empty = { key: 'empty', state: 'stored', displayed: 'full', meshBytes: 0 };
+  const runtime = Object.assign(Object.create(ChunkRuntime.prototype), {
+    chunks: new Map([full, lod, empty].map((entry) => [entry.key, entry])),
+    terrain: { hasVisibleMesh: (key: string) => key === full.key },
+  });
+  runtime.markUnavailable(full, 'error', false, false);
+  assert.deepEqual(runtime.collectRenderStats(), {
+    trackedChunks: 3,
+    nbt: 1,
+    fullReady: 1,
+    fullRendered: 1,
+    lodReady: 1,
+    lodRendered: 0,
+  });
+});
+
 test('resource refresh ignores replacement entries, newer IO and out-of-order refresh results', async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => {

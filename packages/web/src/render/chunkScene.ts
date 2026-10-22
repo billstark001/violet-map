@@ -25,12 +25,8 @@ interface FullSectionRender {
 }
 
 interface ChunkSceneEntry extends TerrainChunk, ChunkDisplayState {
-  surfaceY: number;
   group: THREE.Object3D | null;
   fullSections: FullSectionRender[];
-  meshBytes: number;
-  fullReady: boolean;
-  lodReadyStep: number;
 }
 
 const SECTION_VISIBILITY_DIRS = ['down', 'up', 'north', 'south', 'west', 'east'] as const;
@@ -111,8 +107,6 @@ export class ChunkScene implements ChunkDisplay {
       displayed: entry.displayed,
       displayedVersion: entry.displayedVersion,
       displayedLodStep: entry.displayedLodStep,
-      fullReady: entry.fullReady,
-      lodReadyStep: entry.lodReadyStep,
       meshBytes: entry.meshBytes,
     };
   }
@@ -356,7 +350,6 @@ export class ChunkScene implements ChunkDisplay {
     e.displayed = 'full';
     e.displayedVersion = version;
     e.displayedLodStep = 0;
-    e.fullReady = meshBytes > 0;
     this.invalidateDisplayedChunkKeys();
   }
 
@@ -379,7 +372,6 @@ export class ChunkScene implements ChunkDisplay {
     e.displayed = 'lod';
     e.displayedVersion = version;
     e.displayedLodStep = step;
-    e.lodReadyStep = e.meshBytes > 0 ? step : 0;
     this.invalidateDisplayedChunkKeys();
   }
 
@@ -439,8 +431,6 @@ export class ChunkScene implements ChunkDisplay {
     e.group = null;
     e.displayed = 'none';
     e.displayedLodStep = 0;
-    e.lodReadyStep = 0;
-    e.fullReady = false;
     if (hadSections) {
       this.visibilityRevision++;
       this.sectionVisibilityRevision++;

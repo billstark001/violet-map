@@ -83,8 +83,6 @@ test('the scene owns mesh replacement, clip visibility and geometry disposal but
     group: null as THREE.Object3D | null,
     fullSections: [],
     meshBytes: 0,
-    fullReady: false,
-    lodReadyStep: 0,
   };
   const scene = new THREE.Scene();
   const material = new THREE.MeshBasicMaterial();

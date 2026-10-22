@@ -295,6 +295,10 @@ const assertSettled = (value, viewMode = 'perspective') => {
   assertFullDetailCoverage(chunks, values.world, sourceCoverage);
   assert.equal(chunks.chunks.filter((c) => c.state === 'error').length, 0, 'unrecovered error chunks');
   assert.equal(chunks.chunks.filter((c) => c.dirty).length, 0, 'terrain invalidation never settled');
+  assert.ok(
+    chunks.chunks.every((chunk) => chunk.workerPins === 0 && !chunk.pendingFull && !chunk.pendingLod),
+    'settled terrain retained pending work or dependency pins',
+  );
   assert.equal(chunks.stats.retryingChunks, 0, 'retries never settled');
   assert.deepEqual(
     [
