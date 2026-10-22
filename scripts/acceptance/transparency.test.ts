@@ -150,7 +150,13 @@ test(
     assert.match(nested.failure, /nested render failure/);
     assert.equal(nested.restored, true);
     const staticCulling = await page.evaluate(() => window.transparencyHarness.staticCulling());
-    for (const frame of [staticCulling.original, staticCulling.moved, staticCulling.recovered]) {
+    for (const frame of [
+      staticCulling.original,
+      staticCulling.moved,
+      staticCulling.recovered,
+      staticCulling.reshaped,
+      staticCulling.manualWorldMatrix,
+    ]) {
       assert.equal(frame.difference, 0, 'frame culling changed the rendered pixels');
       assert.equal(frame.stableIntersections, 2000, 'static bounds must be tested once per frame');
       assert.equal(frame.generalIntersections, 6000, 'general meshes retain per-pass culling');

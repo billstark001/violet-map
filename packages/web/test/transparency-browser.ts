@@ -208,10 +208,10 @@ const harness = {
     const general = make(false),
       stable = make(true);
     let intersections = 0;
-    const intersect = THREE.Frustum.prototype.intersectsObject;
-    THREE.Frustum.prototype.intersectsObject = function (object) {
-      if (object instanceof THREE.Mesh && object.geometry === geometry) intersections++;
-      return intersect.call(this, object);
+    const intersect = THREE.Frustum.prototype.intersectsSphere;
+    THREE.Frustum.prototype.intersectsSphere = function (sphere) {
+      intersections++;
+      return intersect.call(this, sphere);
     };
     const compare = () => {
       scene.clear();
@@ -271,6 +271,14 @@ const harness = {
         stable.objects.every((mesh) => mesh.frustumCulled && mesh.parent === stable.group) &&
         object.material === source;
       const recovered = compare();
+      geometry.translate(0.2, 0, 0);
+      geometry.computeBoundingSphere();
+      const reshaped = compare();
+      for (const fixture of [general, stable]) {
+        fixture.objects[9].matrixWorldAutoUpdate = false;
+        fixture.objects[9].matrixWorld.makeTranslation(0.7, 0.5, 0);
+      }
+      const manualWorldMatrix = compare();
       scene.clear();
       const parent = new StaticMesh(geometry, material);
       const child = new StaticMesh(geometry, material);
@@ -287,6 +295,8 @@ const harness = {
         original,
         moved,
         recovered,
+        reshaped,
+        manualWorldMatrix,
         failure,
         restored,
         rounds,
@@ -295,7 +305,7 @@ const harness = {
         hierarchyRestored: parent.parent === scene && child.parent === parent && parent.children[0] === child,
       };
     } finally {
-      THREE.Frustum.prototype.intersectsObject = intersect;
+      THREE.Frustum.prototype.intersectsSphere = intersect;
     }
   },
   memory() {

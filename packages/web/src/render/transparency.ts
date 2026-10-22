@@ -293,7 +293,7 @@ export class TransparencyRenderer {
       const order = object instanceof THREE.Group ? object.renderOrder : groupOrder;
       if (isDrawable(object)) {
         const stableBounds = object instanceof StaticMesh && object.frustumCulled;
-        if (!stableBounds || (object.layers.test(camera.layers) && this.frustum.intersectsObject(object))) {
+        if (!stableBounds || (object.layers.test(camera.layers) && object.intersectsFrustum(this.frustum))) {
           if (stableBounds) frameCulled.push(object);
           const entry = this.drawEntry(object, order);
           entries.push(entry);
