@@ -1,17 +1,14 @@
 import { isWorldName } from './worldName.js';
 import { isDimensionId } from './dimensionId.js';
-import type { ArtifactRef, ResourceErrorCode, ResourceKind, ResourceRef, ResourceViewHead } from './resources.js';
-
-const kinds: readonly ResourceKind[] = [
-  'chunk',
-  'texture',
-  'atlas-image',
-  'atlas-manifest',
-  'asset-bundle',
-  'game-data',
-  'top-map-tile',
-  'overlay-media',
-];
+import {
+  RESOURCE_ERROR_CODES,
+  RESOURCE_KINDS,
+  type ArtifactRef,
+  type ResourceErrorCode,
+  type ResourceKind,
+  type ResourceRef,
+  type ResourceViewHead,
+} from './resourceTypes.js';
 
 function record(value: unknown, keys: readonly string[]): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('invalid resource document');
@@ -44,7 +41,7 @@ export function parseArtifactRef(value: unknown): ArtifactRef {
 
 export function parseResourceRef(value: unknown): ResourceRef {
   const item = record(value, ['schemaVersion', 'kind', 'artifact', 'url']);
-  if (item.schemaVersion !== 1 || !kinds.includes(item.kind as ResourceKind))
+  if (item.schemaVersion !== 1 || !RESOURCE_KINDS.includes(item.kind as ResourceKind))
     throw new TypeError('unsupported resource reference');
   const url = text(item.url);
   if (url.startsWith('/') && !url.startsWith('//')) {
@@ -90,6 +87,13 @@ export class ResourceError extends Error {
     super(message);
     this.name = 'ResourceError';
   }
+}
+
+export function parseResourceError(value: unknown): ResourceError {
+  const item = record(value, ['code', 'message', 'retryable']);
+  if (!RESOURCE_ERROR_CODES.some((code) => code === item.code) || typeof item.retryable !== 'boolean')
+    throw new TypeError('invalid resource error document');
+  return new ResourceError(item.code as ResourceErrorCode, text(item.message), item.retryable);
 }
 
 export function parseResourceSelector(value: unknown): import('./resources.js').ResourceSelector {

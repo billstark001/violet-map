@@ -6,15 +6,18 @@ export interface ChunkContentIdentity {
   contentDigest: Sha256;
 }
 
-export type ResourceKind =
-  | 'chunk'
-  | 'texture'
-  | 'atlas-image'
-  | 'atlas-manifest'
-  | 'asset-bundle'
-  | 'game-data'
-  | 'top-map-tile'
-  | 'overlay-media';
+export const RESOURCE_KINDS = [
+  'chunk',
+  'texture',
+  'atlas-image',
+  'atlas-manifest',
+  'asset-bundle',
+  'game-data',
+  'top-map-tile',
+  'overlay-media',
+] as const;
+
+export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 
 export interface ArtifactRef {
   digest: Sha256;
@@ -45,17 +48,20 @@ export interface SourceRevision {
   strength: 'immutable' | 'conditional' | 'weak';
 }
 
-export type ResourceErrorCode =
-  | 'RESOURCE_VIEW_EXPIRED'
-  | 'RESOURCE_NOT_PUBLISHED'
-  | 'RESOURCE_BUSY'
-  | 'SOURCE_SNAPSHOT_CHANGED'
-  | 'SOURCE_REVISION_UNAVAILABLE'
-  | 'RESOURCE_BACKEND_UNAVAILABLE'
-  | 'TOPMAP_REBAKE_REQUIRED'
-  | 'RESOURCE_INTEGRITY_FAILED'
-  | 'UNSUPPORTED_RESOURCE_FORMAT'
-  | 'PUBLICATION_CONFLICT';
+export const RESOURCE_ERROR_CODES = [
+  'RESOURCE_VIEW_EXPIRED',
+  'RESOURCE_NOT_PUBLISHED',
+  'RESOURCE_BUSY',
+  'SOURCE_SNAPSHOT_CHANGED',
+  'SOURCE_REVISION_UNAVAILABLE',
+  'RESOURCE_BACKEND_UNAVAILABLE',
+  'TOPMAP_REBAKE_REQUIRED',
+  'RESOURCE_INTEGRITY_FAILED',
+  'UNSUPPORTED_RESOURCE_FORMAT',
+  'PUBLICATION_CONFLICT',
+] as const;
+
+export type ResourceErrorCode = (typeof RESOURCE_ERROR_CODES)[number];
 
 export type ResourceSelector =
   | { kind: 'chunk'; world: string; dimension: string; cx: number; cz: number }

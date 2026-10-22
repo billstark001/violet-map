@@ -3,7 +3,13 @@ import type { ArtifactRef, PublicationEntry } from './resourceTypes.js';
 export { canonicalJson } from './resourceCanonical.js';
 export type * from './resourceTypes.js';
 
-export { parseArtifactRef, parseResourceRef, parseResourceViewHead, ResourceError } from './resourceContracts.js';
+export {
+  parseArtifactRef,
+  parseResourceRef,
+  parseResourceViewHead,
+  parseResourceError,
+  ResourceError,
+} from './resourceContracts.js';
 
 export interface PublicationManifest {
   schemaVersion: 1;

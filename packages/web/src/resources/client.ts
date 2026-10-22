@@ -3,6 +3,7 @@ import {
   parseResolvedResource,
   parseResourceSelector,
   parseResourceViewHead,
+  parseResourceError,
   ResourceError,
   type ResolvedResource,
   type ResourceResolveBatch,
@@ -194,21 +195,15 @@ export class ResourceClient {
       throw new ResourceError('RESOURCE_VIEW_EXPIRED', 'world and render root belong to different generations', true);
   }
   private async error(response: Response) {
-    let body: { code?: string; message?: string; retryable?: boolean };
     try {
-      body = await response.json();
+      return parseResourceError(await response.json());
     } catch {
-      throw new ResourceError(
+      return new ResourceError(
         'RESOURCE_BACKEND_UNAVAILABLE',
         `resource API HTTP ${response.status}: invalid error document`,
         response.status >= 500,
       );
     }
-    return new ResourceError(
-      (body.code ?? 'RESOURCE_BACKEND_UNAVAILABLE') as import('@violet-map/core/resources').ResourceErrorCode,
-      body.message ?? `resource API HTTP ${response.status}`,
-      body.retryable === true,
-    );
   }
   async resolve(
     selectors: ResourceSelector[],

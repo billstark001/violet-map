@@ -18,6 +18,8 @@ The viewer remains one package. Directory boundaries express ownership and are c
 
 Optional cache misses, transient transport retries, source lease renewal, absent source cells and Worker restart are explicit supported recovery operations. They preserve the selected source identity and current requested quality; they never switch delivery targets, render roots or old APIs.
 
+Resource kinds and error codes each have one shared runtime/type definition in core. Browser clients validate complete error documents instead of casting arbitrary strings or inferring missing retry flags. Invalid error documents are reported explicitly as HTTP transport failures; they never select another resource or delivery target.
+
 ## Ownership
 
 | Owner | Responsibilities |

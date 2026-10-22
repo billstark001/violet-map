@@ -101,3 +101,21 @@ test('initial world reads reject a mixed generation in both delivery modes', asy
     client.assertCurrent(client.current('world')!, 'world');
   }
 });
+
+test('malformed HTTP error documents cannot inject arbitrary resource codes or retry policy', async (t) => {
+  const documents = [
+    { code: 'OLD_RESOURCE_ERROR', message: 'old', retryable: true },
+    { code: 'RESOURCE_BUSY', message: 'busy', retryable: 'true' },
+    { code: 'RESOURCE_BUSY' },
+    null,
+  ];
+  for (const document of documents) {
+    t.mock.method(globalThis, 'fetch', async () => Response.json(document, { status: 503 }));
+    await assert.rejects(new ResourceClient().head(), (error: unknown) => {
+      assert.equal((error as { code: string }).code, 'RESOURCE_BACKEND_UNAVAILABLE');
+      assert.match((error as Error).message, /HTTP 503: invalid error document/);
+      assert.equal((error as { retryable: boolean }).retryable, true);
+      return true;
+    });
+  }
+});
