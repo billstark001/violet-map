@@ -4,6 +4,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { chromium } from 'playwright';
 import { chromiumExecutablePath } from '../helpers/browser.mjs';
+import { assertFullDetailCoverage } from './loading-assertions.mjs';
 
 const { values } = parseArgs({
   options: {
@@ -135,7 +136,27 @@ page.on('console', (message) => {
   if (message.type() === 'error') report.consoleErrors.push(message.text());
 });
 
+// Coverage is observed from the viewer's own leased response. Ungenerated
+// source cells are valid holes, but a generated cell cannot silently stay coarse.
+const sourceCoverage = new Map();
+
 page.on('response', async (response) => {
+  const coveragePath = new URL(response.url()).pathname.match(/\/api\/worlds\/([^/]+)\/([^/]+)\/chunk-coverage$/);
+  if (response.ok() && coveragePath) {
+    const coverage = await response.json().catch(() => undefined);
+    if (coverage) {
+      const key = `${decodeURIComponent(coveragePath[1])}\0${decodeURIComponent(coveragePath[2])}`;
+      sourceCoverage.set(key, {
+        chunks: new Set(coverage.chunks.map(({ cx, cz }) => `${cx},${cz}`)),
+        regions: new Map(
+          coverage.regions.map(({ x, z, mask }) => [
+            `${x},${z}`,
+            typeof mask === 'string' ? Buffer.from(mask, 'base64') : undefined,
+          ]),
+        ),
+      });
+    }
+  }
   if (response.status() >= 400)
     report.responses.push({
       url: response.url(),
@@ -257,16 +278,18 @@ const snapshot = async (label) => {
 const assertSettled = (value) => {
   assert.equal(value.camera.viewMode, 'perspective');
   const manager = value.chunkManager;
-  assert.ok(manager.world.endsWith(':' + values.world));
   assert.ok(
     manager.chunks.some((c) => c.displayed !== 'none'),
     'terrain never appeared',
   );
+  assertFullDetailCoverage(manager, values.world, sourceCoverage);
   assert.equal(manager.chunks.filter((c) => c.state === 'error').length, 0, 'unrecovered error chunks');
   assert.equal(manager.chunks.filter((c) => c.dirty).length, 0, 'terrain invalidation never settled');
   assert.equal(manager.stats.retryingChunks, 0, 'retries never settled');
   assert.deepEqual(
     [
+      manager.workers.checking,
+      manager.workers.fetching,
       manager.stats.hashQueued,
       manager.stats.fetchQueued,
       manager.stats.meshQueued,
@@ -274,7 +297,7 @@ const assertSettled = (value) => {
       manager.workers.cacheLookups,
       manager.workers.waitingMeshes,
     ],
-    [0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0],
     'loading did not settle',
   );
   assert.ok(
@@ -287,6 +310,7 @@ const waitSettled = async (label) => {
   let previous,
     stableSince = Date.now();
   const started = Date.now();
+  let lastFailure;
   while (Date.now() - started < 150000) {
     await page.waitForTimeout(5000);
     const row = await sample(label);
@@ -297,12 +321,18 @@ const waitSettled = async (label) => {
     }
     if (Date.now() - stableSince >= 15000 && row.active === 0 && /Queue H0 F0 M0/.test(row.text)) {
       const value = await snapshot(label);
-      assertSettled(value);
-      return value;
+      try {
+        assertSettled(value);
+        return value;
+      } catch (error) {
+        if (!(error instanceof assert.AssertionError)) throw error;
+        lastFailure = error;
+        stableSince = Date.now();
+      }
     }
   }
   await snapshot(label + '-timeout');
-  throw Error(label + ' never settled');
+  throw Error(label + ' never settled', { cause: lastFailure });
 };
 
 const move = async (next) => {
